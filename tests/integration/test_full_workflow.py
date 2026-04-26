@@ -20,7 +20,7 @@ from xmpd.daemon import XMPDaemon
 from xmpd.mpd_client import MPDClient
 from xmpd.stream_resolver import StreamResolver
 from xmpd.sync_engine import SyncEngine
-from xmpd.ytmusic import Playlist, Track, YTMusicClient
+from xmpd.providers.ytmusic import Playlist, Track, YTMusicClient
 
 
 class TestFullSyncWorkflow:

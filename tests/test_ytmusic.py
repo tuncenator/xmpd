@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from xmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
-from xmpd.ytmusic import Playlist, Track, YTMusicClient
+from xmpd.providers.ytmusic import Playlist, Track, YTMusicClient
 
 
 class TestYTMusicClient:
@@ -37,7 +37,7 @@ class TestYTMusicClient:
     @pytest.fixture
     def client(self, mock_oauth_file: Path, mock_ytmusic: Mock) -> YTMusicClient:
         """Create a YTMusicClient instance with mocked dependencies."""
-        with patch("xmpd.ytmusic.YTMusic", return_value=mock_ytmusic):
+        with patch("xmpd.providers.ytmusic.YTMusic", return_value=mock_ytmusic):
             client = YTMusicClient(auth_file=mock_oauth_file)
         return client
 
@@ -45,7 +45,7 @@ class TestYTMusicClient:
         self, mock_oauth_file: Path, mock_ytmusic: Mock
     ) -> None:
         """Test that client initializes successfully with valid OAuth file."""
-        with patch("xmpd.ytmusic.YTMusic", return_value=mock_ytmusic) as mock_ytmusic_cls:
+        with patch("xmpd.providers.ytmusic.YTMusic", return_value=mock_ytmusic) as mock_ytmusic_cls:
             client = YTMusicClient(auth_file=mock_oauth_file)
 
             assert client._client is not None
@@ -62,13 +62,13 @@ class TestYTMusicClient:
 
     def test_init_uses_default_oauth_path_if_none_provided(self, mock_ytmusic: Mock) -> None:
         """Test that client uses default browser auth path when none is provided."""
-        with patch("xmpd.ytmusic.get_config_dir") as mock_get_config_dir:
+        with patch("xmpd.providers.ytmusic.get_config_dir") as mock_get_config_dir:
             mock_config_dir = Path("/mock/config/dir")
             mock_get_config_dir.return_value = mock_config_dir
 
             # Create the browser.json file in the mock location
             with patch("pathlib.Path.exists", return_value=True):
-                with patch("xmpd.ytmusic.YTMusic", return_value=mock_ytmusic):
+                with patch("xmpd.providers.ytmusic.YTMusic", return_value=mock_ytmusic):
                     client = YTMusicClient()
 
                     expected_path = mock_config_dir / "browser.json"
@@ -295,7 +295,7 @@ class TestYTMusicClient:
         browser_file = tmp_path / "browser.json"
         mock_headers = "mock-header: value\nother-header: value2"
 
-        with patch("xmpd.ytmusic.get_config_dir", return_value=tmp_path):
+        with patch("xmpd.providers.ytmusic.get_config_dir", return_value=tmp_path):
             # Mock the input() function to simulate user input
             with patch("builtins.input", side_effect=["mock-header: value", "other-header: value2", EOFError()]):
                 # Mock ytmusicapi.setup to avoid actual API call
@@ -375,7 +375,7 @@ class TestPlaylistFetching:
     @pytest.fixture
     def client(self, mock_oauth_file: Path, mock_ytmusic: Mock) -> YTMusicClient:
         """Create a YTMusicClient instance with mocked dependencies."""
-        with patch("xmpd.ytmusic.YTMusic", return_value=mock_ytmusic):
+        with patch("xmpd.providers.ytmusic.YTMusic", return_value=mock_ytmusic):
             client = YTMusicClient(auth_file=mock_oauth_file)
         return client
 
