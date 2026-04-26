@@ -47,7 +47,7 @@
 
 - **Conductor Mode**: enabled
 - **Total Batches**: 9
-- **Current Batch**: 0 (not started)
+- **Current Batch**: 2
 - **Pacing**: auto-refresh
 - **Batches Per Session**: 5
 - **Execution Plan**: docs/agent/tidal-init/EXECUTION_PLAN.md
@@ -55,16 +55,16 @@
 ---
 
 **Last Updated:** 2026-04-27
-**Current Phase:** 1 of 13
-**Phase Name:** Provider abstraction foundation
-**Progress:** 0% (0/13 phases complete)
+**Current Phase:** 2 of 13
+**Phase Name:** YT module relocation + YTMusicProvider scaffold
+**Progress:** 8% (1/13 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[--------------------] 0% (0/13)
+[#------------] 8% (1/13)
 ```
 
 ---
@@ -73,8 +73,8 @@
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 1 | Provider abstraction foundation (packages, dataclasses, Protocol, registry skeleton) | `[Current]` |
-| 2 | YT module relocation + YTMusicProvider scaffold | `[Pending]` |
+| 1 | Provider abstraction foundation (packages, dataclasses, Protocol, registry skeleton) | `[Complete]` |
+| 2 | YT module relocation + YTMusicProvider scaffold | `[Current]` |
 | 3 | YTMusicProvider methods (full Protocol coverage wrapping YTMusicClient) | `[Pending]` |
 | 4 | Stream proxy rename + provider-aware routing + URL builder | `[Pending]` |
 | 5 | Track store schema migration (compound key, new columns) | `[Pending]` |
@@ -91,14 +91,14 @@
 
 ## Instructions for Agents
 
-1. Read `phase_plans/PHASE_01.md` for detailed requirements for Phase 1
-2. This is the first phase - no previous summaries to read
+1. Read `phase_plans/PHASE_02.md` for detailed requirements for Phase 2
+2. Read most recent phase summary (`summaries/PHASE_01_SUMMARY.md`)
 3. Complete the phase following the build-verify-commit cycle
-4. Create `summaries/PHASE_01_SUMMARY.md`
+4. Create `summaries/PHASE_02_SUMMARY.md`
 5. Update this file:
-   - Mark Phase 1 as `[Complete]`
-   - Set Phase 2 as `[Current]`
-   - Update "Current Phase" to "2 of 13"
+   - Mark Phase 2 as `[Complete]`
+   - Set Phase 3 as `[Current]`
+   - Update "Current Phase" to "3 of 13"
    - Update "Progress" percentage and count
    - Update progress bar (each `#` = completed phase, each `-` = remaining phase)
 
