@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Setup (Phase 0), 2026-04-27
+> Last updated by: Checkpoint 1 (Phase 1), 2026-04-27
 
 ---
 
@@ -33,6 +33,9 @@ External AirPlay surface lives in `extras/airplay-bridge/`, a separate sub-proje
 | `xmpd/__main__.py` | CLI entry | `python -m xmpd` runs the daemon. |
 | `xmpd/daemon.py` | XMPDaemon orchestrator | Builds every component in `__init__`, runs main control-socket loop, hosts background sync/history/proxy threads. **Phase 8 rewires this to use a provider registry.** |
 | `xmpd/config.py` | Config loader | `load_config()` deep-merges YAML at `~/.config/xmpd/config.yaml` with hardcoded defaults; `get_config_dir()` returns `~/.config/xmpd/`. **Phase 11 must accept the new nested `yt:` / `tidal:` shape and reject the legacy top-level `auto_auth:` shape with a clear error.** |
+| `xmpd/providers/__init__.py` | Provider registry | `get_enabled_provider_names(config)` + `build_registry(config)` skeleton. Returns `{}` in Phase 1; Phase 2 fills `yt`, Phase 9 fills `tidal`. Re-exports all shared types via `__all__`. |
+| `xmpd/providers/base.py` | Shared provider types | `TrackMetadata`, `Track`, `Playlist` frozen dataclasses + 14-method `@runtime_checkable Provider` Protocol. Cross-provider exchange shape. |
+| `xmpd/auth/__init__.py` | Auth package marker | Package marker; Phase 2 adds `ytmusic_cookie.py`, Phase 9 adds `tidal_oauth.py`. |
 | `xmpd/ytmusic.py` | YTMusicClient | Wraps `ytmusicapi`. **Phase 2 moves this to `xmpd/providers/ytmusic.py`; Phase 3 prepends a `YTMusicProvider` Protocol-conformant wrapper.** |
 | `xmpd/sync_engine.py` | SyncEngine | Currently single-source (YT only). **Phase 6 makes it iterate the provider registry and write `(provider, track_id)` rows.** |
 | `xmpd/track_store.py` | TrackStore (SQLite) | Single-key `video_id` schema today. **Phase 5 migrates to compound `(provider, track_id)` + adds nullable `album`, `duration_seconds`, `art_url` columns.** |
@@ -282,9 +285,9 @@ CREATE UNIQUE INDEX tracks_pk_idx ON tracks(provider, track_id);
 
 `PRAGMA user_version` tracks schema version; Phase 5 owns the version constant and migration logic.
 
-### New shared dataclasses (Phase 1)
+### New shared dataclasses (Phase 1) -- LIVE
 
-`xmpd/providers/base.py`:
+`xmpd/providers/base.py` (committed in Phase 1, verified via `mypy xmpd/providers/` and 8 tests):
 
 ```python
 @dataclass(frozen=True)
@@ -314,6 +317,14 @@ class Playlist:
 ```
 
 The pre-existing `Track` / `Playlist` dataclasses inside `xmpd/ytmusic.py` are local to that module today; Phase 3 stops returning them across provider boundaries (they get converted to the new shared `Track`).
+
+### Coverage baseline
+
+78% total as of Phase 1. `xmpd/providers/base.py` and `xmpd/providers/__init__.py` both at 100%.
+
+### Logging notes
+
+`rating.py` and `track_store.py` have no logging at all (no `import logging`, no `getLogger`). Pre-existing; 12 `getLogger` hits total (11 `__name__`, 1 root-logger at `__main__.py:33`). No hardcoded names found.
 
 ---
 
