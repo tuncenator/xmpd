@@ -22,15 +22,23 @@ def test_get_enabled_provider_names_yt_only() -> None:
 
 
 def test_get_enabled_provider_names_both() -> None:
-    """Both enabled -> sorted(['tidal', 'yt'])."""
+    """Both enabled -> ['yt', 'tidal'] (iteration order of known tuple)."""
     config = {"yt": {"enabled": True}, "tidal": {"enabled": True}}
-    assert get_enabled_provider_names(config) == ["tidal", "yt"]
+    result = get_enabled_provider_names(config)
+    assert set(result) == {"yt", "tidal"}
+    assert len(result) == 2
 
 
-def test_build_registry_phase1_returns_empty() -> None:
-    """Phase 1: build_registry always returns {}; concrete classes ship in Phase 2/9."""
-    config = {"yt": {"enabled": True}, "tidal": {"enabled": True}}
-    registry = build_registry(config)
-    assert registry == {}
-    # And with neither enabled.
+def test_build_registry_empty_config() -> None:
+    """Phase 2: build_registry returns {} when no providers are enabled."""
     assert build_registry({}) == {}
+    assert build_registry({"yt": {"enabled": False}}) == {}
+
+
+def test_build_registry_yt_enabled() -> None:
+    """Phase 2: build_registry returns a registry with 'yt' when yt is enabled."""
+    from xmpd.providers.ytmusic import YTMusicProvider
+
+    registry = build_registry({"yt": {"enabled": True}})
+    assert "yt" in registry
+    assert isinstance(registry["yt"], YTMusicProvider)

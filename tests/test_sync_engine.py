@@ -11,7 +11,7 @@ from xmpd.exceptions import (
 )
 from xmpd.mpd_client import TrackWithMetadata
 from xmpd.sync_engine import SyncEngine, SyncPreview, SyncResult
-from xmpd.ytmusic import Playlist, Track
+from xmpd.providers.ytmusic import Playlist, Track
 
 
 class TestSyncEngineInit:

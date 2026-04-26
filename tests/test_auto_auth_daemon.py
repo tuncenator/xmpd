@@ -15,10 +15,10 @@ from xmpd.exceptions import CookieExtractionError
 class TestRefreshAuth:
     """Tests for YTMusicClient.refresh_auth()."""
 
-    @patch("xmpd.ytmusic.YTMusic")
+    @patch("xmpd.providers.ytmusic.YTMusic")
     def test_refresh_auth_success(self, mock_ytmusic_cls, tmp_path):
         """refresh_auth reinitializes the client and resets cache."""
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         auth_file = tmp_path / "browser.json"
         auth_file.write_text("{}")
@@ -35,10 +35,10 @@ class TestRefreshAuth:
         # _init_client was called again (YTMusic instantiated twice: init + refresh)
         assert mock_ytmusic_cls.call_count == 2
 
-    @patch("xmpd.ytmusic.YTMusic")
+    @patch("xmpd.providers.ytmusic.YTMusic")
     def test_refresh_auth_with_new_path(self, mock_ytmusic_cls, tmp_path):
         """refresh_auth updates auth_file when a new path is provided."""
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         old_auth = tmp_path / "old.json"
         old_auth.write_text("{}")
@@ -51,10 +51,10 @@ class TestRefreshAuth:
         assert result is True
         assert client.auth_file == new_auth
 
-    @patch("xmpd.ytmusic.YTMusic")
+    @patch("xmpd.providers.ytmusic.YTMusic")
     def test_refresh_auth_failure(self, mock_ytmusic_cls, tmp_path):
         """refresh_auth returns False when _init_client raises."""
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         auth_file = tmp_path / "browser.json"
         auth_file.write_text("{}")

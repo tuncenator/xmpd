@@ -15,7 +15,7 @@ import yaml
 from xmpd.config import _validate_config, load_config
 from xmpd.mpd_client import MPDClient, TrackWithMetadata
 from xmpd.sync_engine import SyncEngine
-from xmpd.ytmusic import Playlist, Track
+from xmpd.providers.ytmusic import Playlist, Track
 
 # ---------------------------------------------------------------------------
 # Helpers

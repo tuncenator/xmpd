@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from xmpd.config import get_config_dir, load_config
-from xmpd.cookie_extract import FirefoxCookieExtractor
+from xmpd.auth.ytmusic_cookie import FirefoxCookieExtractor
 from xmpd.exceptions import CookieExtractionError, MPDConnectionError
 from xmpd.history_reporter import HistoryReporter
 from xmpd.icy_proxy import ICYProxyServer
@@ -24,7 +24,7 @@ from xmpd.notify import send_notification
 from xmpd.stream_resolver import StreamResolver
 from xmpd.sync_engine import SyncEngine
 from xmpd.track_store import TrackStore
-from xmpd.ytmusic import YTMusicClient
+from xmpd.providers.ytmusic import YTMusicClient
 
 logger = logging.getLogger(__name__)
 

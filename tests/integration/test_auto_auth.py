@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from xmpd.cookie_extract import FirefoxCookieExtractor
+from xmpd.auth.ytmusic_cookie import FirefoxCookieExtractor
 from xmpd.exceptions import CookieExtractionError
 
 # ---------------------------------------------------------------------------

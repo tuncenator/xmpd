@@ -14,7 +14,7 @@ from typing import Optional
 from xmpd.exceptions import MPDConnectionError, MPDPlaylistError, YTMusicAPIError
 from xmpd.mpd_client import MPDClient, TrackWithMetadata
 from xmpd.stream_resolver import StreamResolver
-from xmpd.ytmusic import Playlist, YTMusicClient
+from xmpd.providers.ytmusic import Playlist, YTMusicClient
 
 logger = logging.getLogger(__name__)
 
