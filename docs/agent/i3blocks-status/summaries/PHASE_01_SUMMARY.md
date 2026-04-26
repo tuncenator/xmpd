@@ -28,7 +28,7 @@ Replace the socket-based daemon connection with MPD client and implement basic s
 
 ### Files Modified
 
-- `bin/ytmpd-status` - Complete rewrite replacing socket-based communication with MPD client
+- `bin/xmpd-status` - Complete rewrite replacing socket-based communication with MPD client
 
 ### Key Design Decisions
 
@@ -36,7 +36,7 @@ Replace the socket-based daemon connection with MPD client and implement basic s
 
 2. **Track Classification Strategy**: Implemented a two-tier detection approach:
    - **Primary**: Check if file path starts with `http://localhost:6602/proxy/` (YouTube proxy pattern)
-   - **Secondary**: Query ytmpd database at `~/.config/ytmpd/track_mapping.db` to identify YouTube tracks in XSPF playlists
+   - **Secondary**: Query ytmpd database at `~/.config/xmpd/track_mapping.db` to identify YouTube tracks in XSPF playlists
    - **Fallback**: Classify as 'local' if not a proxy URL and not in database
 
 3. **Color Scheme Design**: Differentiated YouTube vs local tracks with distinct colors:
@@ -159,7 +159,7 @@ Tested with live MPD instance on port 6601:
 
 **Test 1: YouTube Track Playing**
 ```bash
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ▶ Natascha Polké - Heavens Will Fall [4:15/5:52]
 ▶ Natascha Polké - Heavens Will Fall [4:15/5:52]
 #FF6B35
@@ -182,7 +182,7 @@ http://localhost:6602/proxy/zBxK9EQs5hg
 ## Challenges & Solutions
 
 ### Challenge 1: Test module import for bin/ script
-**Solution:** Used `importlib.machinery.SourceFileLoader` to import the `bin/ytmpd-status` script (which lacks a .py extension) into tests. This allows pytest to test the script directly without requiring it to be a .py module.
+**Solution:** Used `importlib.machinery.SourceFileLoader` to import the `bin/xmpd-status` script (which lacks a .py extension) into tests. This allows pytest to test the script directly without requiring it to be a .py module.
 
 ### Challenge 2: Database path handling in tests
 **Solution:** Used `tmp_path` pytest fixture and `unittest.mock.patch` to mock `Path.home()`, allowing tests to create isolated test databases without affecting the user's actual ytmpd database.
@@ -239,7 +239,7 @@ Code follows project standards:
 ## Integration Points
 
 - **MPD Server**: Connects to MPD on localhost:6601 (matches ytmpd default port)
-- **ytmpd Database**: Queries `~/.config/ytmpd/track_mapping.db` for track classification
+- **ytmpd Database**: Queries `~/.config/xmpd/track_mapping.db` for track classification
 - **i3blocks**: Outputs 3-line format (full text, short text, color) as expected by i3blocks
 - **Environment**: Reads `YTMPD_STATUS_MAX_LENGTH` for backward compatibility
 
@@ -295,19 +295,19 @@ All completion criteria met. Tests passing. Manual verification successful. Read
 
 ```bash
 # Basic usage (i3blocks will call this)
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ▶ Artist - Title [0:45/3:30]
 ▶ Artist - Title [0:45/3:30]
 #FF6B35
 
 # With custom max length
-$ YTMPD_STATUS_MAX_LENGTH=30 bin/ytmpd-status
+$ YTMPD_STATUS_MAX_LENGTH=30 bin/xmpd-status
 ▶ Very Long Artist Name -...
 ▶ Very Long Artist Name -...
 #00FF00
 
 # When MPD is stopped
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ⏹ Stopped
 ⏹ Stopped
 #808080
@@ -317,7 +317,7 @@ $ bin/ytmpd-status
 
 ```ini
 [ytmpd]
-command=/path/to/ytmpd/bin/ytmpd-status
+command=/path/to/ytmpd/bin/xmpd-status
 interval=2
 markup=none
 ```

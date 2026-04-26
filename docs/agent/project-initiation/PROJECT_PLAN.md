@@ -19,7 +19,7 @@ The project solves the problem of controlling YouTube Music in a keyboard-driven
 
 **In Scope**:
 - Daemon process that manages YouTube Music playback state
-- Command-line client (ytmpctl) for sending commands to daemon
+- Command-line client (xmpctl) for sending commands to daemon
 - Unix socket-based communication (MPD-style)
 - Core playback controls: play, pause, stop, next, previous
 - Status querying: current song info, playback state, position/duration
@@ -41,7 +41,7 @@ The project solves the problem of controlling YouTube Music in a keyboard-driven
 
 - [ ] Daemon runs in background and manages YouTube Music connection
 - [ ] Client can send commands and receive responses via Unix socket
-- [ ] Can control playback through i3 hotkeys using ytmpctl
+- [ ] Can control playback through i3 hotkeys using xmpctl
 - [ ] Current song info displays correctly in i3blocks
 - [ ] System works reliably with proper error handling
 - [ ] Documentation enables users to set up and use the system
@@ -56,15 +56,15 @@ The project solves the problem of controlling YouTube Music in a keyboard-driven
 2. **Socket server**: Unix socket listener that receives commands from clients
 3. **Player state manager**: Tracks current song, queue, playback state, position
 4. **YouTube Music wrapper**: Abstraction over ytmusicapi for search, playback control
-5. **ytmpctl client**: Command-line client that communicates with daemon
+5. **xmpctl client**: Command-line client that communicates with daemon
 6. **i3blocks script**: Status formatter for i3blocks display
 
 ### Data Flow
 
 ```
-i3 hotkey → ytmpctl (client) → Unix socket → ytmpd daemon → ytmusicapi → YouTube Music
+i3 hotkey → xmpctl (client) → Unix socket → ytmpd daemon → ytmusicapi → YouTube Music
 
-YouTube Music → ytmusicapi → ytmpd daemon → Unix socket → ytmpctl/i3blocks script → User
+YouTube Music → ytmusicapi → ytmpd daemon → Unix socket → xmpctl/i3blocks script → User
 ```
 
 ### Technology Stack
@@ -110,8 +110,8 @@ ytmpd/
 │   ├── config.py       # Configuration management
 │   └── __main__.py     # Entry point for daemon
 ├── bin/
-│   ├── ytmpctl         # Client executable
-│   └── ytmpd-status    # i3blocks script
+│   ├── xmpctl         # Client executable
+│   └── xmpd-status    # i3blocks script
 ├── tests/
 │   └── __init__.py
 ├── docs/
@@ -122,12 +122,12 @@ ytmpd/
 ```
 
 **Configuration System (`ytmpd/config.py`)**:
-- Load config from `~/.config/ytmpd/config.yaml` (create if missing)
+- Load config from `~/.config/xmpd/config.yaml` (create if missing)
 - Default config values:
-  - `socket_path: ~/.config/ytmpd/socket`
-  - `state_file: ~/.config/ytmpd/state.json`
+  - `socket_path: ~/.config/xmpd/socket`
+  - `state_file: ~/.config/xmpd/state.json`
   - `log_level: INFO`
-  - `log_file: ~/.config/ytmpd/ytmpd.log`
+  - `log_file: ~/.config/xmpd/xmpd.log`
 - Function: `load_config() -> dict`
 - Function: `get_config_dir() -> Path`
 - Create config directory if it doesn't exist
@@ -165,7 +165,7 @@ ytmpd/
 
 - Use uv for all dependency management
 - Keep config simple - YAML for human readability
-- Ensure XDG compliance (~/.config/ytmpd/)
+- Ensure XDG compliance (~/.config/xmpd/)
 
 ---
 
@@ -205,7 +205,7 @@ ytmpd/
 
 **Notes**:
 - ytmusicapi handles most of the heavy lifting
-- Store OAuth credentials in `~/.config/ytmpd/oauth.json`
+- Store OAuth credentials in `~/.config/xmpd/oauth.json`
 - Make authentication user-friendly (provide clear setup instructions)
 
 #### Dependencies
@@ -273,7 +273,7 @@ ytmpd/
 - `get_status() -> dict`: Return current state (state, song, position, queue length)
 
 **State Persistence**:
-- `save_state() -> None`: Serialize state to JSON file (~/.config/ytmpd/state.json)
+- `save_state() -> None`: Serialize state to JSON file (~/.config/xmpd/state.json)
 - `load_state() -> None`: Restore state from disk on daemon start
 - Auto-save on state changes
 
@@ -491,7 +491,7 @@ if __name__ == "__main__":
 
 ---
 
-### Phase 6: Client CLI (ytmpctl)
+### Phase 6: Client CLI (xmpctl)
 
 **Objective**: Implement the command-line client that users interact with to control the daemon.
 
@@ -499,25 +499,25 @@ if __name__ == "__main__":
 
 #### Deliverables
 
-1. `bin/ytmpctl` - Client executable script
+1. `bin/xmpctl` - Client executable script
 2. Command implementations
 3. Output formatting
 4. Error handling
 
 #### Detailed Requirements
 
-**Create `bin/ytmpctl`** (Python script with shebang):
+**Create `bin/xmpctl`** (Python script with shebang):
 
 **Commands**:
-- `ytmpctl play <query>`: Search for song and play first result
-- `ytmpctl pause`: Pause playback
-- `ytmpctl resume`: Resume playback
-- `ytmpctl stop`: Stop playback
-- `ytmpctl next`: Next song
-- `ytmpctl prev`: Previous song
-- `ytmpctl status`: Display current status (human-readable)
-- `ytmpctl search <query>`: Search and display results
-- `ytmpctl queue`: Display current queue
+- `xmpctl play <query>`: Search for song and play first result
+- `xmpctl pause`: Pause playback
+- `xmpctl resume`: Resume playback
+- `xmpctl stop`: Stop playback
+- `xmpctl next`: Next song
+- `xmpctl prev`: Previous song
+- `xmpctl status`: Display current status (human-readable)
+- `xmpctl search <query>`: Search and display results
+- `xmpctl queue`: Display current queue
 
 **Socket Communication**:
 - Connect to Unix socket (from config)
@@ -538,25 +538,25 @@ if __name__ == "__main__":
 
 **Usage Help**:
 ```
-ytmpctl - Control ytmpd daemon
+xmpctl - Control ytmpd daemon
 
 Usage:
-  ytmpctl play <query>     Search and play a song
-  ytmpctl pause            Pause playback
-  ytmpctl resume           Resume playback
-  ytmpctl stop             Stop playback
-  ytmpctl next             Next song
-  ytmpctl prev             Previous song
-  ytmpctl status           Show current status
-  ytmpctl search <query>   Search for songs
-  ytmpctl queue            Show queue
+  xmpctl play <query>     Search and play a song
+  xmpctl pause            Pause playback
+  xmpctl resume           Resume playback
+  xmpctl stop             Stop playback
+  xmpctl next             Next song
+  xmpctl prev             Previous song
+  xmpctl status           Show current status
+  xmpctl search <query>   Search for songs
+  xmpctl queue            Show queue
 ```
 
 #### Dependencies
 
 **Requires**: Phase 5 (daemon running)
 
-**Enables**: Phase 7 (i3 integration uses ytmpctl)
+**Enables**: Phase 7 (i3 integration uses xmpctl)
 
 #### Completion Criteria
 
@@ -590,17 +590,17 @@ Usage:
 
 #### Deliverables
 
-1. `bin/ytmpd-status` - i3blocks script
+1. `bin/xmpd-status` - i3blocks script
 2. Formatted output for i3blocks
 3. Error handling for daemon not running
 4. Configuration options
 
 #### Detailed Requirements
 
-**Create `bin/ytmpd-status`** (bash or Python script):
+**Create `bin/xmpd-status`** (bash or Python script):
 
 **Functionality**:
-- Query daemon status using ytmpctl or direct socket connection
+- Query daemon status using xmpctl or direct socket connection
 - Format output for i3blocks display
 - Handle daemon not running gracefully
 
@@ -631,13 +631,13 @@ Usage:
 **Example i3blocks config**:
 ```ini
 [ytmpd]
-command=~/path/to/ytmpd-status
+command=~/path/to/xmpd-status
 interval=5
 ```
 
 #### Dependencies
 
-**Requires**: Phase 6 (ytmpctl)
+**Requires**: Phase 6 (xmpctl)
 
 **Enables**: Full user workflow
 
@@ -699,7 +699,7 @@ Sections:
    - Setup OAuth: `python -m ytmpd.ytmusic setup-oauth`
 5. Usage
    - Start daemon: `python -m ytmpd &`
-   - Control with ytmpctl
+   - Control with xmpctl
    - Examples of common commands
 6. i3 Integration
    - i3 config examples (hotkeys)
@@ -885,12 +885,12 @@ Phase 1 (Setup)
 - Use Python's `logging` module
 - Log level configurable via config (default: INFO)
 - Format: `[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s`
-- Log to file: `~/.config/ytmpd/ytmpd.log`
+- Log to file: `~/.config/xmpd/xmpd.log`
 - Also log to console when running in foreground
 
 ### Configuration
 
-- All config in `~/.config/ytmpd/config.yaml`
+- All config in `~/.config/xmpd/config.yaml`
 - Loaded via `ytmpd/config.py`
 - Create default config if missing
 - Validate config on load
@@ -956,10 +956,10 @@ Phase 1 (Setup)
 
 ### Config File
 ```yaml
-socket_path: ~/.config/ytmpd/socket
-state_file: ~/.config/ytmpd/state.json
+socket_path: ~/.config/xmpd/socket
+state_file: ~/.config/xmpd/state.json
 log_level: INFO
-log_file: ~/.config/ytmpd/ytmpd.log
+log_file: ~/.config/xmpd/xmpd.log
 ```
 
 ---
@@ -967,7 +967,7 @@ log_file: ~/.config/ytmpd/ytmpd.log
 ## Glossary
 
 **Daemon**: Background service that runs continuously
-**ytmpctl**: Command-line client for controlling ytmpd
+**xmpctl**: Command-line client for controlling ytmpd
 **ytmusicapi**: Python library for YouTube Music API
 **Unix socket**: IPC mechanism for local process communication
 **MPD**: Music Player Daemon (inspiration for this project)

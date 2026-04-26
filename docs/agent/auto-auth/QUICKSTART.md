@@ -236,8 +236,8 @@ mypy ytmpd/
 python -m ytmpd
 
 # CLI client
-bin/ytmpctl status
-bin/ytmpctl auth
+bin/xmpctl status
+bin/xmpctl auth
 ```
 
 ---

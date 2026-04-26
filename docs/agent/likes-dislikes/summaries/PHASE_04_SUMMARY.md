@@ -1,4 +1,4 @@
-# Phase 4: ytmpctl Command Implementation - Summary
+# Phase 4: xmpctl Command Implementation - Summary
 
 **Date Completed:** 2025-10-21
 **Completed By:** Agent Session (likes-dislikes Phase 4)
@@ -8,7 +8,7 @@
 
 ## Objective
 
-Add `like` and `dislike` commands to ytmpctl CLI, integrate with MPD for current track detection, implement rating logic, and trigger immediate sync.
+Add `like` and `dislike` commands to xmpctl CLI, integrate with MPD for current track detection, implement rating logic, and trigger immediate sync.
 
 ---
 
@@ -18,8 +18,8 @@ Add `like` and `dislike` commands to ytmpctl CLI, integrate with MPD for current
 
 This phase implemented user-facing CLI commands for rating tracks, completing the end-to-end workflow for likes and dislikes:
 
-1. **ytmpctl like** - Toggle like status for current track
-2. **ytmpctl dislike** - Toggle dislike status for current track
+1. **xmpctl like** - Toggle like status for current track
+2. **xmpctl dislike** - Toggle dislike status for current track
 
 Both commands:
 - Detect the currently playing track from MPD
@@ -38,11 +38,11 @@ Deliverables:
 
 ### Files Created
 
-No new files created - all implementation in existing `bin/ytmpctl`.
+No new files created - all implementation in existing `bin/xmpctl`.
 
 ### Files Modified
 
-- `bin/ytmpctl` - Extended CLI with like/dislike commands (+229 lines, -19 lines)
+- `bin/xmpctl` - Extended CLI with like/dislike commands (+229 lines, -19 lines)
   - Added `import re` for video_id extraction
   - Added `get_mpd_connection_info()` helper (30 lines)
   - Added `get_current_track_from_mpd()` helper (54 lines)
@@ -96,7 +96,7 @@ No new files created - all implementation in existing `bin/ytmpctl`.
    - Reused `send_command()` for daemon communication
    - Reused `has_unicode_support()` and `colorize()` for output formatting
    - Followed existing command patterns from `cmd_sync()`, `cmd_status()`, etc.
-   - Lazy imports to avoid slowing down other ytmpctl commands
+   - Lazy imports to avoid slowing down other xmpctl commands
 
 7. **Pre-existing Bug Fixes**:
    - Fixed unused `mpd_host` variables in `cmd_search()` and `cmd_radio()`
@@ -107,8 +107,8 @@ No new files created - all implementation in existing `bin/ytmpctl`.
 
 ## Completion Criteria Status
 
-- [x] `ytmpctl like` command implemented and working
-- [x] `ytmpctl dislike` command implemented and working
+- [x] `xmpctl like` command implemented and working
+- [x] `xmpctl dislike` command implemented and working
 - [x] Current track detection from MPD works correctly
 - [x] Rating logic integrated (RatingManager + YTMusicClient)
 - [x] Immediate sync triggered after liking a song
@@ -141,30 +141,30 @@ No new test files created. This phase focused on CLI integration - comprehensive
 **Manual Testing:**
 
 ```
-$ bin/ytmpctl like
+$ bin/xmpctl like
 ✓ ✓ Liked: The Mystery Lights - It's Alright
 
 Triggering sync to update playlists...
 Sync started in background
 
-$ bin/ytmpctl like
+$ bin/xmpctl like
 Removed like: The Mystery Lights - It's Alright
 
-$ bin/ytmpctl dislike
+$ bin/xmpctl dislike
 ✗ ✗ Disliked: The Mystery Lights - It's Alright
 
-$ bin/ytmpctl like
+$ bin/xmpctl like
 ✓ ✓ Liked: The Mystery Lights - It's Alright
 
 Triggering sync to update playlists...
 Sync started in background
 
-$ bin/ytmpctl dislike
+$ bin/xmpctl dislike
 ✗ ✗ Disliked: The Mystery Lights - It's Alright
 
-$ bin/ytmpctl help | grep -A2 like
-  ytmpctl like              Toggle like for current track
-  ytmpctl dislike           Toggle dislike for current track
+$ bin/xmpctl help | grep -A2 like
+  xmpctl like              Toggle like for current track
+  xmpctl dislike           Toggle dislike for current track
 ```
 
 **All test scenarios passed:**
@@ -200,7 +200,7 @@ These error paths have proper error handling implemented and will work correctly
 3. Toggled like off → confirmed rating removed
 4. Disliked track → confirmed rating changed
 5. Switched from dislike to like → confirmed switch worked
-6. Verified sync triggered when liking (checked ytmpctl status)
+6. Verified sync triggered when liking (checked xmpctl status)
 7. Verified sync NOT triggered when disliking
 
 **All workflows functioned correctly.**
@@ -252,7 +252,7 @@ These error paths have proper error handling implemented and will work correctly
 ## Code Quality
 
 ### Formatting
-- [x] Code follows existing ytmpctl style
+- [x] Code follows existing xmpctl style
 - [x] Type hints for all functions
 - [x] Docstrings for all new functions
 - [x] Imports organized (added `re` to imports)
@@ -287,7 +287,7 @@ All code quality checks passed.
 ### Required by This Phase
 - **Phase 2: Core Toggle Logic & Rating Manager** - Provides `RatingManager`, `RatingAction`, `RatingState`
 - **Phase 3: YouTube Music API Integration** - Provides `get_track_rating()` and `set_track_rating()` methods
-- **Existing ytmpctl infrastructure** - Uses `send_command()`, `colorize()`, `has_unicode_support()`
+- **Existing xmpctl infrastructure** - Uses `send_command()`, `colorize()`, `has_unicode_support()`
 - **MPD + mpc** - Required for current track detection
 
 ### Unblocked Phases
@@ -306,11 +306,11 @@ The like/dislike commands are ready for comprehensive E2E testing:
 ```bash
 # Test workflow
 1. Start MPD with YouTube Music track
-2. ytmpctl like
+2. xmpctl like
 3. Verify track appears in "Liked Songs" on YouTube Music web UI
-4. ytmpctl like  # Toggle off
+4. xmpctl like  # Toggle off
 5. Verify track removed from "Liked Songs"
-6. ytmpctl dislike
+6. xmpctl dislike
 7. Verify track marked as disliked (won't show in liked songs)
 ```
 
@@ -319,28 +319,28 @@ The like/dislike commands are ready for comprehensive E2E testing:
 ```bash
 # No track playing
 mpc stop
-ytmpctl like  # Should error: "No track currently playing"
+xmpctl like  # Should error: "No track currently playing"
 
 # Non-YouTube track
 mpc add /path/to/local.mp3
 mpc play
-ytmpctl like  # Should error: "Not a YouTube Music track"
+xmpctl like  # Should error: "Not a YouTube Music track"
 
 # Auth error (rename browser.json temporarily)
-mv ~/.config/ytmpd/browser.json ~/.config/ytmpd/browser.json.bak
-ytmpctl like  # Should error: "Not authenticated with YouTube Music"
+mv ~/.config/xmpd/browser.json ~/.config/xmpd/browser.json.bak
+xmpctl like  # Should error: "Not authenticated with YouTube Music"
 ```
 
 **Sync Integration Testing:**
 
 ```bash
 # Verify sync triggered on like
-ytmpctl like
-ytmpctl status  # Should show sync in progress or recently completed
+xmpctl like
+xmpctl status  # Should show sync in progress or recently completed
 
 # Verify sync NOT triggered on dislike
-ytmpctl dislike
-ytmpctl status  # Should show no new sync
+xmpctl dislike
+xmpctl status  # Should show no new sync
 ```
 
 ### Integration Points
@@ -348,7 +348,7 @@ ytmpctl status  # Should show no new sync
 - **ytmpd daemon:** Commands communicate via Unix socket for sync trigger
 - **MPD:** Commands use `mpc` to get current track information
 - **YouTube Music API:** Commands call YTMusicClient methods
-- **Config system:** Reads `~/.config/ytmpd/config.yaml` for MPD connection info
+- **Config system:** Reads `~/.config/xmpd/config.yaml` for MPD connection info
 
 ---
 
@@ -364,8 +364,8 @@ ytmpctl status  # Should show no new sync
 This is acceptable for user-triggered commands. The sync runs in background and doesn't block the command.
 
 **Network Calls:**
-- `ytmpctl like`: 2 API calls (get rating + set rating)
-- `ytmpctl dislike`: 2 API calls (get rating + set rating)
+- `xmpctl like`: 2 API calls (get rating + set rating)
+- `xmpctl dislike`: 2 API calls (get rating + set rating)
 
 Rate limiting enforced by YTMusicClient (100ms minimum between calls).
 
@@ -425,45 +425,45 @@ All objectives achieved. Commands implemented, tested manually, and working corr
 
 ```bash
 # Like current track
-$ ytmpctl like
+$ xmpctl like
 ✓ ✓ Liked: Miles Davis - So What
 
 Triggering sync to update playlists...
 Sync started in background
 
 # Toggle like off
-$ ytmpctl like
+$ xmpctl like
 Removed like: Miles Davis - So What
 
 # Dislike current track
-$ ytmpctl dislike
+$ xmpctl dislike
 ✗ ✗ Disliked: John Coltrane - Giant Steps
 
 # Switch from dislike to like
-$ ytmpctl like
+$ xmpctl like
 ✓ ✓ Liked: John Coltrane - Giant Steps
 
 Triggering sync to update playlists...
 Sync started in background
 
 # View help
-$ ytmpctl help
-ytmpctl - YouTube Music to MPD sync control
+$ xmpctl help
+xmpctl - YouTube Music to MPD sync control
 
 Usage:
-  ytmpctl sync              Trigger immediate sync
-  ytmpctl status            Show sync status and statistics
-  ytmpctl list-playlists    List YouTube Music playlists
-  ytmpctl radio [--apply]   Generate radio playlist from current track
-  ytmpctl search            Interactive search for YouTube Music tracks
-  ytmpctl like              Toggle like for current track
-  ytmpctl dislike           Toggle dislike for current track
-  ytmpctl help              Show this help message
+  xmpctl sync              Trigger immediate sync
+  xmpctl status            Show sync status and statistics
+  xmpctl list-playlists    List YouTube Music playlists
+  xmpctl radio [--apply]   Generate radio playlist from current track
+  xmpctl search            Interactive search for YouTube Music tracks
+  xmpctl like              Toggle like for current track
+  xmpctl dislike           Toggle dislike for current track
+  xmpctl help              Show this help message
 ```
 
 ### Code Statistics
 
-**Lines added to bin/ytmpctl:**
+**Lines added to bin/xmpctl:**
 - `get_mpd_connection_info()`: 30 lines
 - `get_current_track_from_mpd()`: 54 lines
 - `cmd_like()`: 58 lines

@@ -32,7 +32,7 @@ Implement efficient MPD idle mode for minimal CPU usage, add i3blocks click hand
 
 ### Files Modified
 
-- `bin/ytmpd-status` - Added 400+ lines:
+- `bin/xmpd-status` - Added 400+ lines:
   - Imported `signal` and `time` modules
   - Added `--idle` and `--handle-clicks` CLI arguments
   - Implemented `signal_handler_refresh()` and `signal_handler_exit()`
@@ -140,7 +140,7 @@ All 396 tests passing (370 existing + 26 new idle mode tests).
 
 **Basic functionality**:
 ```bash
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ▶ Eugene Becker & Rediit - All Night …▰▰▱▱▱ 3:46]
 ▶ Eugene Becker & Rediit - All Night …▰▰▱▱▱ 3:46]
 #FF6B35
@@ -148,7 +148,7 @@ $ bin/ytmpd-status
 
 **Click handler (skip to next track)**:
 ```bash
-$ BLOCK_BUTTON=4 bin/ytmpd-status --handle-clicks
+$ BLOCK_BUTTON=4 bin/xmpd-status --handle-clicks
 ▶ MaMan - Solitude [0:00 ▱▱▱▱▱▱▱▱▱▱ 3:58]
 ▶ MaMan - Solitude [0:00 ▱▱▱▱▱▱▱▱▱▱ 3:58]
 #FF6B35
@@ -157,7 +157,7 @@ $ BLOCK_BUTTON=4 bin/ytmpd-status --handle-clicks
 
 **Help output**:
 ```bash
-$ bin/ytmpd-status --help | grep -A 5 "i3blocks"
+$ bin/xmpd-status --help | grep -A 5 "i3blocks"
 i3blocks Integration Options:
   --idle                Run in idle mode (monitor MPD for changes, minimal CPU
                         usage)
@@ -178,7 +178,7 @@ i3blocks Integration Options:
 
 ### Challenge 1: Module Import in Tests
 
-**Problem**: The test file initially failed to import `bin/ytmpd-status` because the spec was returning None.
+**Problem**: The test file initially failed to import `bin/xmpd-status` because the spec was returning None.
 
 **Solution**: Explicitly specified the loader using `importlib.machinery.SourceFileLoader`, matching the pattern used in other test files (`test_ytmpd_status.py`).
 
@@ -314,7 +314,7 @@ All completion criteria met. All 396 tests passing (26 new + 370 existing). Manu
 - **Tests Created**: 26 new idle mode tests
 - **Total Test Count**: 396 tests (370 existing + 26 new)
 - **Test Pass Rate**: 100% (396/396 passing)
-- **Files Modified**: 1 (bin/ytmpd-status)
+- **Files Modified**: 1 (bin/xmpd-status)
 - **Files Created**: 3 (examples/i3blocks.conf, docs/i3blocks-integration.md, tests/test_ytmpd_status_idle.py)
 - **Lines of Code Added**: ~650 lines (400 in script, 150 in tests, 100 in examples/docs)
 - **New Functions**: 5 (signal_handler_refresh, signal_handler_exit, handle_click, display_status, run_idle_mode)

@@ -24,7 +24,7 @@
 | 3 | Player State Management | ✅ Complete |
 | 4 | Unix Socket Server | ✅ Complete |
 | 5 | Daemon Core | ✅ Complete |
-| 6 | Client CLI (ytmpctl) | ✅ Complete |
+| 6 | Client CLI (xmpctl) | ✅ Complete |
 | 7 | i3blocks Integration | ✅ Complete |
 | 8 | Testing & Documentation | ✅ Complete |
 | 9 | Polish & Packaging | ✅ Complete |

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ytmpd.track_store import TrackStore
+from xmpd.track_store import TrackStore
 
 
 @pytest.fixture

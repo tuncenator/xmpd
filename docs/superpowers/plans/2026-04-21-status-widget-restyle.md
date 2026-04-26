@@ -1,13 +1,13 @@
-# i3blocks `ytmpd-status` widget restyle — Implementation Plan
+# i3blocks `xmpd-status` widget restyle — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Reskin the `bin/ytmpd-status` i3blocks widget with a Tokyonight-adjacent cyan/pink palette and unify the progress bar glyph to `█░` for both YouTube and local tracks.
+**Goal:** Reskin the `bin/xmpd-status` i3blocks widget with a Tokyonight-adjacent cyan/pink palette and unify the progress bar glyph to `█░` for both YouTube and local tracks.
 
 **Architecture:** Pure default-value change — no new features, flags, or logic branches. Updates argparse defaults (palette), hardcoded hex strings in auth-error branches, the docstring's "Color Codes" section, and the auto-bar-style branch (three sites) to always return `"blocks"`. Existing tests that hardcode the old defaults are updated to match; no new test files.
 
 **Tech Stack:** Python 3, pytest. Worktree uses the main checkout's venv:
-`/home/tunc/Sync/Programs/ytmpd/.venv/bin/pytest`. Tests load `bin/ytmpd-status` by path from the worktree root — so running pytest from the worktree picks up the correct script.
+`/home/tunc/Sync/Programs/ytmpd/.venv/bin/pytest`. Tests load `bin/xmpd-status` by path from the worktree root — so running pytest from the worktree picks up the correct script.
 
 **Worktree:** `~/.config/superpowers/worktrees/ytmpd/status-widget-restyle/`
 **Branch:** `feature/status-widget-restyle`
@@ -31,14 +31,14 @@
 ### Task 1: Commit the design spec and preview tooling
 
 The worktree currently has two new untracked files produced during brainstorming:
-- `bin/ytmpd-status-preview` — standalone 256-color ANSI preview for palette/bar iteration
+- `bin/xmpd-status-preview` — standalone 256-color ANSI preview for palette/bar iteration
 - `docs/superpowers/specs/2026-04-21-status-widget-restyle-design.md` — the approved design spec
 - `docs/superpowers/plans/2026-04-21-status-widget-restyle.md` — this plan
 
 Commit them first so the repo has a clean "design in place, implementation pending" checkpoint.
 
 **Files:**
-- Add: `bin/ytmpd-status-preview`
+- Add: `bin/xmpd-status-preview`
 - Add: `docs/superpowers/specs/2026-04-21-status-widget-restyle-design.md`
 - Add: `docs/superpowers/plans/2026-04-21-status-widget-restyle.md`
 
@@ -52,7 +52,7 @@ git status --short
 
 Expected output (order may differ):
 ```
-?? bin/ytmpd-status-preview
+?? bin/xmpd-status-preview
 ?? docs/superpowers/plans/2026-04-21-status-widget-restyle.md
 ?? docs/superpowers/specs/2026-04-21-status-widget-restyle-design.md
 ```
@@ -63,7 +63,7 @@ If additional files appear, stop and investigate.
 
 Run:
 ```bash
-./bin/ytmpd-status-preview --only palettes --bar blocks | head -30
+./bin/xmpd-status-preview --only palettes --bar blocks | head -30
 ```
 
 Expected: printed output with ANSI escape sequences, no Python traceback. Confirms the script is syntactically valid and imports cleanly.
@@ -71,10 +71,10 @@ Expected: printed output with ANSI escape sequences, no Python traceback. Confir
 - [ ] **Step 3: Commit**
 
 ```bash
-git add bin/ytmpd-status-preview docs/superpowers/specs/2026-04-21-status-widget-restyle-design.md docs/superpowers/plans/2026-04-21-status-widget-restyle.md
+git add bin/xmpd-status-preview docs/superpowers/specs/2026-04-21-status-widget-restyle-design.md docs/superpowers/plans/2026-04-21-status-widget-restyle.md
 git commit -m "chore: add status-widget-restyle design spec, plan, and preview tool
 
-bin/ytmpd-status-preview is a standalone palette/bar-glyph preview renderer
+bin/xmpd-status-preview is a standalone palette/bar-glyph preview renderer
 used to validate the design before touching the live widget. It uses 24-bit
 ANSI and has zero dependencies beyond stdlib.
 
@@ -247,16 +247,16 @@ If you see failures matching this pattern, the red stage is correctly set up. Do
 
 ### Task 3: Update widget palette defaults (green stage)
 
-Update `bin/ytmpd-status` so the new defaults match the tests.
+Update `bin/xmpd-status` so the new defaults match the tests.
 
 **Files:**
-- Modify: `bin/ytmpd-status:22-27` (docstring color-codes section)
-- Modify: `bin/ytmpd-status:819-845` (five argparse color defaults)
-- Modify: `bin/ytmpd-status:1366`, `:1370`, `:1400`, `:1404`, `:1449`, `:1451` (six hardcoded auth-error hex values)
+- Modify: `bin/xmpd-status:22-27` (docstring color-codes section)
+- Modify: `bin/xmpd-status:819-845` (five argparse color defaults)
+- Modify: `bin/xmpd-status:1366`, `:1370`, `:1400`, `:1404`, `:1449`, `:1451` (six hardcoded auth-error hex values)
 
 - [ ] **Step 1: Update docstring color table**
 
-In `bin/ytmpd-status`, replace the block at lines 22-27:
+In `bin/xmpd-status`, replace the block at lines 22-27:
 
 ```python
 Color Codes (for i3blocks):
@@ -286,7 +286,7 @@ Color Codes (for i3blocks):
 
 - [ ] **Step 2: Update the five argparse color defaults**
 
-In `bin/ytmpd-status`, update the `color_group` arguments in `parse_arguments()`.
+In `bin/xmpd-status`, update the `color_group` arguments in `parse_arguments()`.
 
 At line 819:
 ```python
@@ -382,12 +382,12 @@ Line numbers are approximate; use the exact text matches above to locate each ed
 
 - [ ] **Step 3: Update hardcoded auth-error hex strings**
 
-In `bin/ytmpd-status`, there are three pairs of hardcoded `#FF0000` / `#FFA500` strings — at approximately lines 1366/1370, 1400/1404, and 1449/1451. Replace every occurrence of `#FF0000` in these auth-handling branches with `#ff5577`, and every occurrence of `#FFA500` with `#e0af68`.
+In `bin/xmpd-status`, there are three pairs of hardcoded `#FF0000` / `#FFA500` strings — at approximately lines 1366/1370, 1400/1404, and 1449/1451. Replace every occurrence of `#FF0000` in these auth-handling branches with `#ff5577`, and every occurrence of `#FFA500` with `#e0af68`.
 
 Use `Edit` with `replace_all=true` for each — both strings are only used in the auth-color branches, so global replace is safe. Spot-check by running:
 
 ```bash
-grep -n "#FF0000\|#FFA500\|#ff5577\|#e0af68" bin/ytmpd-status
+grep -n "#FF0000\|#FFA500\|#ff5577\|#e0af68" bin/xmpd-status
 ```
 
 Expected after replacement: three occurrences of `#ff5577`, three of `#e0af68`, zero of the old values. The existing comments beside each site (`# Red color for auth error`, `# Orange for refresh failures`, etc.) can be updated in passing but are not required to change for correctness.
@@ -407,7 +407,7 @@ If any test still fails, inspect the failure — most likely either a missed hex
 - [ ] **Step 5: Commit**
 
 ```bash
-git add bin/ytmpd-status tests/test_ytmpd_status_cli.py tests/test_ytmpd_status.py tests/test_ytmpd_status_idle.py
+git add bin/xmpd-status tests/test_ytmpd_status_cli.py tests/test_ytmpd_status.py tests/test_ytmpd_status_idle.py
 git commit -m "refactor(status): restyle i3blocks widget with Tokyonight cyan/pink palette
 
 Replaces the harsh RGB-primary defaults with a refined Tokyonight-adjacent
@@ -435,13 +435,13 @@ updated to match."
 Replace the three `"smooth" if track_type == "youtube" else "blocks"` auto-detect branches with a plain `"blocks"`. The `--bar-style` CLI flag and `YTMPD_STATUS_BAR_STYLE` env var still accept `smooth`, `simple`, `blocks`, `auto` — only the `auto` fallback changes.
 
 **Files:**
-- Modify: `bin/ytmpd-status:1125` (inside `display_status()`, custom-format branch)
-- Modify: `bin/ytmpd-status:1471` (inside `main()`, custom-format branch)
-- Modify: `bin/ytmpd-status:1525` (inside `main()`, default-format branch)
+- Modify: `bin/xmpd-status:1125` (inside `display_status()`, custom-format branch)
+- Modify: `bin/xmpd-status:1471` (inside `main()`, custom-format branch)
+- Modify: `bin/xmpd-status:1525` (inside `main()`, default-format branch)
 
 - [ ] **Step 1: Update the three auto-select sites**
 
-In `bin/ytmpd-status`, locate each of the three sites. Each currently reads:
+In `bin/xmpd-status`, locate each of the three sites. Each currently reads:
 
 ```python
                                 style = "smooth" if track_type == "youtube" else "blocks"
@@ -493,14 +493,14 @@ At line ~1525 (inside `main`, default-format branch):
 
 Spot-check after:
 ```bash
-grep -n 'track_type == "youtube"' bin/ytmpd-status
+grep -n 'track_type == "youtube"' bin/xmpd-status
 ```
 
 Expected: only matches inside the color-selection if/else blocks (at lines ~1038, ~1044, ~1432, ~1438 — the palette lookup uses `track_type` and must remain intact). Zero matches referring to bar style.
 
 - [ ] **Step 2: Update the docstring "Progress Bar Styles" section**
 
-In `bin/ytmpd-status`, lines 17-20 currently read:
+In `bin/xmpd-status`, lines 17-20 currently read:
 
 ```python
 Progress Bar Styles:
@@ -533,7 +533,7 @@ Expected: same green result as end of Task 3 (no test covers the auto-style bran
 Run the script against the running ytmpd/MPD instance (if available):
 
 ```bash
-./bin/ytmpd-status --bar-length 12 --fixed-bar-length --max-length 65 --show-position
+./bin/xmpd-status --bar-length 12 --fixed-bar-length --max-length 65 --show-position
 ```
 
 Expected output shape (three lines, last is the colour):
@@ -548,7 +548,7 @@ Confirm:
 - Middle bracketed portion uses `█`/`░` glyphs regardless of whether the current track is YT-proxied or a local file.
 - `--bar-style smooth` still produces `▰▱` glyphs (quick one-shot CLI verification of the override path):
   ```bash
-  ./bin/ytmpd-status --bar-style smooth --bar-length 12 --fixed-bar-length
+  ./bin/xmpd-status --bar-style smooth --bar-length 12 --fixed-bar-length
   ```
 
 If MPD is stopped, you'll see `⏹ Stopped` on line 1 and `#565f89` on line 3 — also valid confirmation of the restyle.
@@ -556,7 +556,7 @@ If MPD is stopped, you'll see `⏹ Stopped` on line 1 and `#565f89` on line 3 �
 - [ ] **Step 5: Commit**
 
 ```bash
-git add bin/ytmpd-status
+git add bin/xmpd-status
 git commit -m "refactor(status): unify progress-bar glyph to blocks for all tracks
 
 The auto-detect branch previously picked 'smooth' (▰▱) for YouTube tracks

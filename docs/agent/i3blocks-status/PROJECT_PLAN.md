@@ -14,7 +14,7 @@
 - **Project Root**: `/home/tunc/Sync/Programs/ytmpd`
 - **Verify with**: `pwd` → should output `/home/tunc/Sync/Programs/ytmpd`
 
-When you see a path like `bin/ytmpd-status`, it means `/home/tunc/Sync/Programs/ytmpd/bin/ytmpd-status`
+When you see a path like `bin/xmpd-status`, it means `/home/tunc/Sync/Programs/ytmpd/bin/xmpd-status`
 
 ---
 
@@ -22,7 +22,7 @@ When you see a path like `bin/ytmpd-status`, it means `/home/tunc/Sync/Programs/
 
 ### Purpose
 
-The `i3blocks-status` feature enhances the existing `bin/ytmpd-status` script to provide a modern, performant, and feature-rich status display for i3blocks. This replaces three old bash scripts (`mpc.sh`, `mpc-bar.sh`, `mpc-surround.sh`) with a single Python-based solution that leverages ytmpd's unique capabilities to distinguish between YouTube-streamed and local music files.
+The `i3blocks-status` feature enhances the existing `bin/xmpd-status` script to provide a modern, performant, and feature-rich status display for i3blocks. This replaces three old bash scripts (`mpc.sh`, `mpc-bar.sh`, `mpc-surround.sh`) with a single Python-based solution that leverages ytmpd's unique capabilities to distinguish between YouTube-streamed and local music files.
 
 **Key Goals:**
 - Replace inefficient bash scripts with performant Python implementation
@@ -35,7 +35,7 @@ The `i3blocks-status` feature enhances the existing `bin/ytmpd-status` script to
 ### Scope
 
 **In Scope**:
-- Enhanced `bin/ytmpd-status` script with MPD client integration
+- Enhanced `bin/xmpd-status` script with MPD client integration
 - Current track display with play/pause/stop indicators
 - Progress bar with customizable length and styles
 - YouTube vs local track detection via database lookup
@@ -89,7 +89,7 @@ MPD Server (port 6601)
     ↓ (python-mpd2 connection)
 MPD Client Module
     ↓ (current track info)
-Track Classifier ←→ ytmpd Database (~/.config/ytmpd/track_mapping.db)
+Track Classifier ←→ ytmpd Database (~/.config/xmpd/track_mapping.db)
     ↓ (track type: youtube/local, sync status)
 Status Formatter + Progress Renderer + Playlist Context
     ↓ (formatted output)
@@ -105,7 +105,7 @@ i3blocks Display
   - `sqlite3` - Database queries (stdlib)
   - Standard library: `socket`, `argparse`, `pathlib`
 - **Testing**: pytest (existing)
-- **Database**: ytmpd's SQLite database at `~/.config/ytmpd/track_mapping.db`
+- **Database**: ytmpd's SQLite database at `~/.config/xmpd/track_mapping.db`
 - **MPD**: Connect to existing MPD server on port 6601
 
 ---
@@ -124,7 +124,7 @@ i3blocks Display
 
 #### Deliverables
 
-1. `bin/ytmpd-status` - Enhanced with MPD client connection
+1. `bin/xmpd-status` - Enhanced with MPD client connection
 2. MPD connection helper functions
 3. Track classification function (YouTube vs local via database)
 4. Status icon rendering (play/pause/stop)
@@ -133,7 +133,7 @@ i3blocks Display
 
 #### Detailed Requirements
 
-**Modify** `bin/ytmpd-status`:
+**Modify** `bin/xmpd-status`:
 
 1. **Add python-mpd2 dependency**:
    - Add `python-mpd2>=3.1.0` to `pyproject.toml` dependencies
@@ -147,7 +147,7 @@ i3blocks Display
 
 3. **Implement track classification**:
    - Add `get_track_type(file_path: str) -> str` function
-   - Query ytmpd database at `~/.config/ytmpd/track_mapping.db`
+   - Query ytmpd database at `~/.config/xmpd/track_mapping.db`
    - Check if file path starts with `http://localhost:6602/proxy/` (YouTube)
    - Return `'youtube'`, `'local'`, or `'unknown'`
    - Handle database not existing (return 'unknown')
@@ -240,7 +240,7 @@ Create `tests/test_ytmpd_status.py`:
 
 #### Detailed Requirements
 
-**Enhance** `bin/ytmpd-status`:
+**Enhance** `bin/xmpd-status`:
 
 1. **Add progress bar functions**:
    - `calculate_progress(elapsed: int, duration: int, bar_length: int) -> int`
@@ -350,7 +350,7 @@ Create `tests/test_ytmpd_status.py`:
 
 #### Detailed Requirements
 
-**Enhance** `bin/ytmpd-status`:
+**Enhance** `bin/xmpd-status`:
 
 1. **Playlist context functions**:
    - `get_playlist_context() -> dict`
@@ -601,7 +601,7 @@ Create `tests/test_ytmpd_status.py`:
 
 #### Detailed Requirements
 
-**Enhance** `bin/ytmpd-status`:
+**Enhance** `bin/xmpd-status`:
 
 1. **Replace environment variables with argparse**:
 
@@ -683,7 +683,7 @@ Create `tests/test_ytmpd_status.py`:
 
 5. **Help documentation**:
    ```
-   usage: ytmpd-status [options]
+   usage: xmpd-status [options]
 
    Display ytmpd/MPD status for i3blocks with YouTube track detection
 
@@ -705,10 +705,10 @@ Create `tests/test_ytmpd_status.py`:
      [... etc ...]
 
    Examples:
-     ytmpd-status
-     ytmpd-status --compact --no-show-bar
-     ytmpd-status --format "{icon} {title} ({elapsed}/{duration})"
-     ytmpd-status --bar-length 15 --show-next
+     xmpd-status
+     xmpd-status --compact --no-show-bar
+     xmpd-status --format "{icon} {title} ({elapsed}/{duration})"
+     xmpd-status --bar-length 15 --show-next
    ```
 
 #### Dependencies
@@ -777,7 +777,7 @@ Create `tests/test_ytmpd_status.py`:
 
 #### Detailed Requirements
 
-**Enhance** `bin/ytmpd-status`:
+**Enhance** `bin/xmpd-status`:
 
 1. **Add idle mode support**:
 
@@ -790,7 +790,7 @@ Create `tests/test_ytmpd_status.py`:
 
    Example behavior:
    ```bash
-   ytmpd-status --idle
+   xmpd-status --idle
    # Waits for MPD changes, outputs new status on each change
    # Uses minimal CPU while waiting
    ```
@@ -801,7 +801,7 @@ Create `tests/test_ytmpd_status.py`:
    - Catch SIGUSR1 signal
    - Trigger immediate status update
    - Continue idle mode after update
-   - Example i3blocks usage: `pkill -RTMIN+10 ytmpd-status`
+   - Example i3blocks usage: `pkill -RTMIN+10 xmpd-status`
 
 3. **Click handler support**:
 
@@ -822,8 +822,8 @@ Create `tests/test_ytmpd_status.py`:
 
    Create `examples/i3blocks.conf`:
    ```ini
-   [ytmpd-status]
-   command=/path/to/ytmpd-status --idle --bar-length 12
+   [xmpd-status]
+   command=/path/to/xmpd-status --idle --bar-length 12
    interval=persist
    signal=10
    markup=none
@@ -844,8 +844,8 @@ Create `tests/test_ytmpd_status.py`:
 
    Example:
    ```ini
-   [ytmpd-status]
-   command=/path/to/ytmpd-status --bar-length 12
+   [xmpd-status]
+   command=/path/to/xmpd-status --bar-length 12
    interval=2
    ```
 
@@ -854,7 +854,7 @@ Create `tests/test_ytmpd_status.py`:
    Create `scripts/install-i3blocks.sh`:
    ```bash
    #!/bin/bash
-   # Install ytmpd-status for i3blocks
+   # Install xmpd-status for i3blocks
    # - Check dependencies (python-mpd2, i3blocks)
    # - Copy example config
    # - Show setup instructions
@@ -903,7 +903,7 @@ Create `tests/test_ytmpd_status.py`:
 **Manual Testing**:
 - Run in idle mode with i3blocks
 - Test click handlers: left click play/pause, scroll to skip
-- Test signal refresh: `pkill -RTMIN+10 ytmpd-status`
+- Test signal refresh: `pkill -RTMIN+10 xmpd-status`
 - Kill MPD, verify graceful handling, restart MPD, verify reconnect
 - Measure CPU usage in idle mode (should be near 0%)
 - Test polling mode as alternative
@@ -942,7 +942,7 @@ Create `tests/test_ytmpd_status.py`:
    - Add missing unit tests
    - Add edge case tests
    - Add error condition tests
-   - Run `pytest --cov=bin/ytmpd-status --cov-report=html`
+   - Run `pytest --cov=bin/xmpd-status --cov-report=html`
 
 2. **Optional scrolling animation**:
 
@@ -981,7 +981,7 @@ Create `tests/test_ytmpd_status.py`:
 4. **Performance benchmarking**:
 
    Compare with old bash scripts:
-   - Measure execution time: ytmpd-status vs mpc.sh
+   - Measure execution time: xmpd-status vs mpc.sh
    - Measure CPU usage: idle mode vs bash `while true` loop
    - Memory footprint comparison
    - Document results in README
@@ -1010,9 +1010,9 @@ Create `tests/test_ytmpd_status.py`:
    - Type hints everywhere
 
 6. **Final code review**:
-   - Run linters: `pylint bin/ytmpd-status`
-   - Run type checker: `mypy bin/ytmpd-status`
-   - Format code: `black bin/ytmpd-status`
+   - Run linters: `pylint bin/xmpd-status`
+   - Run type checker: `mypy bin/xmpd-status`
+   - Format code: `black bin/xmpd-status`
    - Security review: no injection vulnerabilities
    - Review error handling completeness
 
@@ -1184,23 +1184,23 @@ All phases are sequential - each builds on the previous.
 
 ## Integration Points
 
-### bin/ytmpd-status ↔ MPD Server
+### bin/xmpd-status ↔ MPD Server
 
 - Connection: TCP socket to localhost:6601
 - Protocol: MPD protocol via python-mpd2
 - Commands: `currentsong()`, `status()`, `playlistinfo()`, `idle()`
 - Error handling: Graceful degradation if MPD not running
 
-### bin/ytmpd-status ↔ ytmpd Database
+### bin/xmpd-status ↔ ytmpd Database
 
-- Database: SQLite at `~/.config/ytmpd/track_mapping.db`
+- Database: SQLite at `~/.config/xmpd/track_mapping.db`
 - Tables: `tracks` (video_id, title, artist, stream_url, etc.)
 - Queries:
   - Check if track is YouTube: `SELECT video_id FROM tracks WHERE ...`
   - Check sync status: `SELECT stream_url FROM tracks WHERE video_id = ?`
 - Error handling: Database not existing is not an error (just means local tracks only)
 
-### bin/ytmpd-status ↔ i3blocks
+### bin/xmpd-status ↔ i3blocks
 
 - Output format: 3 lines (full text, short text, color)
 - Input: Environment variable `$BLOCK_BUTTON` for click events
@@ -1276,7 +1276,7 @@ Line 3: Color code (e.g., #FF6B35)
 
 (Out of scope for current project, but valuable for future)
 
-- [ ] Configuration file support (`~/.config/ytmpd/status.conf`)
+- [ ] Configuration file support (`~/.config/xmpd/status.conf`)
 - [ ] Support for other status bars (waybar, polybar)
 - [ ] Album art display (requires image support in status bar)
 - [ ] Volume control click handlers

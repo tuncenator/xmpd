@@ -153,7 +153,7 @@ Mostly style issues (line length, unused imports, type annotation syntax). Pre-e
 
 1. ✅ **Radio from current track**:
    ```bash
-   $ bin/ytmpctl radio
+   $ bin/xmpctl radio
    Generating radio playlist from current track...
    ✓ Radio playlist created: 50 tracks
 
@@ -179,7 +179,7 @@ Mostly style issues (line length, unused imports, type annotation syntax). Pre-e
 
 1. ✅ **Search with cancel action**:
    ```bash
-   $ echo -e "coltrane\n1\n4" | bin/ytmpctl search
+   $ echo -e "coltrane\n1\n4" | bin/xmpctl search
    Search YouTube Music:
    >
    Searching for: coltrane...
@@ -302,7 +302,7 @@ Mostly style issues (line length, unused imports, type annotation syntax). Pre-e
 - Phase 2: Daemon Socket Protocol Extension (Complete) - Provides command routing
 - Phase 3: Radio Feature Implementation (Complete) - Radio command and playlist generation
 - Phase 4: Search Backend Implementation (Complete) - Search, play, queue handlers
-- Phase 5: Interactive Search CLI (Complete) - ytmpctl search command
+- Phase 5: Interactive Search CLI (Complete) - xmpctl search command
 
 ### Unblocked Phases
 
@@ -459,13 +459,13 @@ All deliverables met, features working correctly, documentation comprehensive. P
 **examples/i3-config - New Keybindings (lines 53-63):**
 ```
 # Generate radio playlist from currently playing track
-bindsym $mod+Shift+r exec --no-startup-id /path/to/ytmpd/bin/ytmpctl radio
+bindsym $mod+Shift+r exec --no-startup-id /path/to/ytmpd/bin/xmpctl radio
 
 # Generate radio and auto-apply (clear queue, load radio, play)
-bindsym $mod+Shift+Alt+r exec --no-startup-id /path/to/ytmpd/bin/ytmpctl radio --apply
+bindsym $mod+Shift+Alt+r exec --no-startup-id /path/to/ytmpd/bin/xmpctl radio --apply
 
 # Open interactive search in terminal
-bindsym $mod+Shift+f exec --no-startup-id alacritty -e /path/to/ytmpd/bin/ytmpctl search
+bindsym $mod+Shift+f exec --no-startup-id alacritty -e /path/to/ytmpd/bin/xmpctl search
 ```
 
 ### Manual Testing Checklist

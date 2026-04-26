@@ -84,7 +84,7 @@ Full suite: 505 passed, 7 failed (pre-existing), 4 skipped.
 
 ### Challenge: Mocking `get_config_dir()` for atomic file operations
 
-`_attempt_auto_refresh()` calls `get_config_dir()` at runtime to determine the browser.json path, but this returns the real `~/.config/ytmpd/` during tests. The atomic temp-file-then-rename pattern also requires the temp file to actually exist.
+`_attempt_auto_refresh()` calls `get_config_dir()` at runtime to determine the browser.json path, but this returns the real `~/.config/xmpd/` during tests. The atomic temp-file-then-rename pattern also requires the temp file to actually exist.
 
 **Solution:** Created `_patch_auto_refresh()` helper that patches `get_config_dir()` to return the test's `tmp_path` and sets `build_browser_json` side_effect to create the expected temp file.
 
@@ -114,7 +114,7 @@ Full suite: 505 passed, 7 failed (pre-existing), 4 skipped.
 - `_attempt_auto_refresh()` returns bool -- Phase 3 should call `send_notification()` when it returns False
 - The reactive refresh in `_perform_sync()` has a comment placeholder for notification (Phase 3 will add actual `send_notification()` calls)
 - Rate-limiting notifications (max 1/hour) should be implemented in Phase 3's notification trigger, not in the daemon's refresh logic
-- `_cmd_status()` now returns `auto_auth_enabled`, `last_auto_refresh`, `auto_refresh_failures` -- Phase 3's `ytmpctl status` and `ytmpd-status` should display these
+- `_cmd_status()` now returns `auto_auth_enabled`, `last_auto_refresh`, `auto_refresh_failures` -- Phase 3's `xmpctl status` and `xmpd-status` should display these
 
 ---
 
@@ -134,6 +134,6 @@ Full suite: 505 passed, 7 failed (pre-existing), 4 skipped.
 **Recommended Actions:**
 1. Create `ytmpd/notify.py` with `send_notification()` using `notify-send`
 2. Add notification calls in `_perform_sync()` (after reactive refresh fails) and `_auto_auth_loop()` (after proactive refresh fails)
-3. Add `ytmpctl auth --auto` command that calls `FirefoxCookieExtractor.build_browser_json()` directly
-4. Update `ytmpctl status` to display auto-auth fields
-5. Update `bin/ytmpd-status` color coding for auth failure states
+3. Add `xmpctl auth --auto` command that calls `FirefoxCookieExtractor.build_browser_json()` directly
+4. Update `xmpctl status` to display auto-auth fields
+5. Update `bin/xmpd-status` color coding for auth failure states

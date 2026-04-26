@@ -17,9 +17,9 @@ Add user-facing notifications and commands for auto-auth status and manual trigg
 - `ytmpd/notify.py` with `send_notification()` using `notify-send` subprocess call
 - Module-level rate limiting (max 1 notification per hour) to prevent spam
 - Notification triggers in daemon: proactive refresh failure (normal urgency) and reactive refresh failure (critical urgency)
-- `ytmpctl auth --auto` command that invokes `FirefoxCookieExtractor.build_browser_json()` directly from CLI
-- Updated `ytmpctl status` to display auto-auth enabled/disabled, last refresh time, and failure count
-- Updated `bin/ytmpd-status` i3blocks widget with auth-aware color coding:
+- `xmpctl auth --auto` command that invokes `FirefoxCookieExtractor.build_browser_json()` directly from CLI
+- Updated `xmpctl status` to display auto-auth enabled/disabled, last refresh time, and failure count
+- Updated `bin/xmpd-status` i3blocks widget with auth-aware color coding:
   - Red (#FF0000) when auth is invalid
   - Orange (#FFA500) when auto_refresh_failures > 0
   - Applied in all states: playing, paused, stopped, MPD unavailable
@@ -35,8 +35,8 @@ Add user-facing notifications and commands for auto-auth status and manual trigg
 ### Files Modified
 
 - `ytmpd/daemon.py` - Added `send_notification` import and notification calls after proactive/reactive refresh failures
-- `bin/ytmpctl` - Added `auth --auto` command, updated status display with auto-auth info, updated help text, updated dispatch
-- `bin/ytmpd-status` - Updated `get_auth_status()` to return 3-tuple with `auto_refresh_failures`, added orange/red color overrides in all output paths
+- `bin/xmpctl` - Added `auth --auto` command, updated status display with auto-auth info, updated help text, updated dispatch
+- `bin/xmpd-status` - Updated `get_auth_status()` to return 3-tuple with `auto_refresh_failures`, added orange/red color overrides in all output paths
 
 ### Key Design Decisions
 
@@ -51,8 +51,8 @@ Add user-facing notifications and commands for auto-auth status and manual trigg
 
 - [x] `notify-send` fires on unrecoverable auth failure
 - [x] Notifications are rate-limited (max 1 per hour)
-- [x] `ytmpctl auth --auto` extracts cookies and updates browser.json
-- [x] `ytmpctl status` shows auto-auth information
+- [x] `xmpctl auth --auto` extracts cookies and updates browser.json
+- [x] `xmpctl status` shows auto-auth information
 - [x] i3blocks widget changes color on auth failure
 - [x] Help text updated
 - [x] Graceful handling when notify-send is not installed
@@ -111,17 +111,17 @@ Initial mock time values (1000.0) were too close to the initial `_last_notificat
 
 - `send_notification()` is a standalone function -- import and call from anywhere
 - The rate limit is shared across all callers via module globals; reset it in tests using the `reset_rate_limit` fixture pattern
-- The `get_auth_status()` function in `bin/ytmpd-status` now returns a 3-tuple `(bool, str, int)` -- any new callers must unpack all three values
-- The `ytmpctl auth --auto` command works independently of the daemon -- it reads config and writes browser.json directly
+- The `get_auth_status()` function in `bin/xmpd-status` now returns a 3-tuple `(bool, str, int)` -- any new callers must unpack all three values
+- The `xmpctl auth --auto` command works independently of the daemon -- it reads config and writes browser.json directly
 
 ---
 
 ## Integration Points
 
 - `send_notification()` is called by `_auto_auth_loop()` and `_perform_sync()` in `daemon.py`
-- `ytmpctl auth --auto` creates `FirefoxCookieExtractor` directly from config, bypassing the daemon
-- `bin/ytmpd-status` queries daemon status via Unix socket to get `auto_refresh_failures`
-- `ytmpctl status` displays `auto_auth_enabled`, `last_auto_refresh`, `auto_refresh_failures` from daemon status response
+- `xmpctl auth --auto` creates `FirefoxCookieExtractor` directly from config, bypassing the daemon
+- `bin/xmpd-status` queries daemon status via Unix socket to get `auto_refresh_failures`
+- `xmpctl status` displays `auto_auth_enabled`, `last_auto_refresh`, `auto_refresh_failures` from daemon status response
 
 ---
 

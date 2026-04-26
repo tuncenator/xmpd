@@ -1,6 +1,6 @@
-"""Sync daemon for ytmpd - periodically syncs YouTube Music playlists to MPD.
+"""Sync daemon for xmpd - periodically syncs YouTube Music playlists to MPD.
 
-This module implements the YTMPDaemon class which coordinates YouTube Music
+This module implements the XMPDaemon class which coordinates YouTube Music
 playlist syncing to MPD, with support for periodic auto-sync and manual triggers.
 """
 
@@ -14,22 +14,22 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from ytmpd.config import get_config_dir, load_config
-from ytmpd.cookie_extract import FirefoxCookieExtractor
-from ytmpd.exceptions import CookieExtractionError, MPDConnectionError
-from ytmpd.history_reporter import HistoryReporter
-from ytmpd.icy_proxy import ICYProxyServer
-from ytmpd.mpd_client import MPDClient
-from ytmpd.notify import send_notification
-from ytmpd.stream_resolver import StreamResolver
-from ytmpd.sync_engine import SyncEngine
-from ytmpd.track_store import TrackStore
-from ytmpd.ytmusic import YTMusicClient
+from xmpd.config import get_config_dir, load_config
+from xmpd.cookie_extract import FirefoxCookieExtractor
+from xmpd.exceptions import CookieExtractionError, MPDConnectionError
+from xmpd.history_reporter import HistoryReporter
+from xmpd.icy_proxy import ICYProxyServer
+from xmpd.mpd_client import MPDClient
+from xmpd.notify import send_notification
+from xmpd.stream_resolver import StreamResolver
+from xmpd.sync_engine import SyncEngine
+from xmpd.track_store import TrackStore
+from xmpd.ytmusic import YTMusicClient
 
 logger = logging.getLogger(__name__)
 
 
-class YTMPDaemon:
+class XMPDaemon:
     """Sync daemon that periodically syncs YouTube Music playlists to MPD.
 
     The daemon:
@@ -42,7 +42,7 @@ class YTMPDaemon:
 
     def __init__(self):
         """Initialize the daemon with all sync components."""
-        logger.info("Initializing ytmpd sync daemon...")
+        logger.info("Initializing xmpd sync daemon...")
 
         # Load configuration
         self.config = load_config()
@@ -186,7 +186,7 @@ class YTMPDaemon:
 
     def run(self) -> None:
         """Main daemon loop - starts all background tasks and blocks until shutdown."""
-        logger.info("Starting ytmpd sync daemon...")
+        logger.info("Starting xmpd sync daemon...")
 
         # Connect to MPD
         try:
@@ -234,7 +234,7 @@ class YTMPDaemon:
             self._history_thread.start()
             logger.info("History reporting thread started")
 
-        logger.info("ytmpd daemon started successfully")
+        logger.info("xmpd daemon started successfully")
 
         # Perform initial sync immediately
         if self.config.get("enable_auto_sync", True):
@@ -265,7 +265,7 @@ class YTMPDaemon:
             logger.debug("Stop called but daemon is already stopped")
             return
 
-        logger.info("Stopping ytmpd daemon...")
+        logger.info("Stopping xmpd daemon...")
         self._running = False
 
         # Signal history reporter to stop
@@ -360,7 +360,7 @@ class YTMPDaemon:
         else:
             logger.info("All threads stopped cleanly")
 
-        logger.info("ytmpd daemon stopped")
+        logger.info("xmpd daemon stopped")
 
     def _sync_loop(self) -> None:
         """Background thread for periodic sync."""
@@ -459,7 +459,7 @@ class YTMPDaemon:
                 else:
                     logger.warning("Proactive auto-auth refresh failed")
                     send_notification(
-                        "ytmpd: Auth Refresh Failed",
+                        "xmpd: Auth Refresh Failed",
                         "Proactive cookie refresh failed. "
                         "Open YouTube Music in Firefox to refresh cookies.",
                         urgency="normal",
@@ -612,7 +612,7 @@ class YTMPDaemon:
                         else:
                             logger.error("Reactive auto-auth refresh failed")
                             send_notification(
-                                "ytmpd: Authentication Failed",
+                                "xmpd: Authentication Failed",
                                 "Auto-refresh failed. "
                                 "Open YouTube Music in Firefox to refresh cookies.",
                                 urgency="critical",
@@ -924,7 +924,7 @@ class YTMPDaemon:
             logger.info(f"Fetched {len(video_ids)} tracks from radio playlist")
 
             # Build TrackWithMetadata objects for playlist creation
-            from ytmpd.mpd_client import TrackWithMetadata
+            from xmpd.mpd_client import TrackWithMetadata
 
             track_objects = []
 

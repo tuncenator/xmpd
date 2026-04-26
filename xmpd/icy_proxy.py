@@ -11,7 +11,7 @@ This approach provides:
 - No timeouts: MPD streams directly from YouTube, avoiding proxy bottlenecks
 
 Example:
-    >>> store = TrackStore("~/.config/ytmpd/track_mapping.db")
+    >>> store = TrackStore("~/.config/xmpd/track_mapping.db")
     >>> proxy = ICYProxyServer(store, host="localhost", port=8080)
     >>> await proxy.start()
     # MPD requests: http://localhost:8080/proxy/dQw4w9WgXcQ
@@ -27,8 +27,8 @@ from typing import Any, Optional
 
 from aiohttp import web
 
-from ytmpd.exceptions import URLRefreshError
-from ytmpd.track_store import TrackStore
+from xmpd.exceptions import URLRefreshError
+from xmpd.track_store import TrackStore
 
 logger = logging.getLogger(__name__)
 

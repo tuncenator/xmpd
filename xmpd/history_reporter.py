@@ -1,4 +1,4 @@
-"""History reporting module for ytmpd.
+"""History reporting module for xmpd.
 
 Monitors MPD playback and reports completed plays to YouTube Music
 via ytmusicapi's add_history_item(), keeping the recommendation engine
@@ -13,9 +13,9 @@ from typing import Any
 
 from mpd import MPDClient as MPDClientBase
 
-from ytmpd.exceptions import MPDConnectionError
-from ytmpd.track_store import TrackStore
-from ytmpd.ytmusic import YTMusicClient
+from xmpd.exceptions import MPDConnectionError
+from xmpd.track_store import TrackStore
+from xmpd.ytmusic import YTMusicClient
 
 logger = logging.getLogger(__name__)
 

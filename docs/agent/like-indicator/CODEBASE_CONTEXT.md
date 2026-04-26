@@ -215,8 +215,8 @@ CREATE TABLE tracks (
 
 - **Python**: 3.11+
 - **Package manager**: uv
-- **Config file**: `~/.config/ytmpd/config.yaml`
-- **Auth file**: `~/.config/ytmpd/browser.json`
+- **Config file**: `~/.config/xmpd/config.yaml`
+- **Auth file**: `~/.config/xmpd/browser.json`
 - **Run tests**: `uv run pytest tests/ -v`
 - **Run daemon**: `uv run python -m ytmpd`
 - **Lint**: `uv run ruff check ytmpd/`

@@ -205,9 +205,9 @@ ruff format ytmpd/
 # Run ytmpd daemon (for manual testing)
 python -m ytmpd
 
-# Use ytmpctl commands
-bin/ytmpctl status
-bin/ytmpctl sync
+# Use xmpctl commands
+bin/xmpctl status
+bin/xmpctl sync
 ```
 
 ### Dependencies

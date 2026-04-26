@@ -5,7 +5,7 @@ Tests the RatingManager state machine and all state transitions.
 
 import pytest
 
-from ytmpd.rating import RatingAction, RatingManager, RatingState, RatingTransition
+from xmpd.rating import RatingAction, RatingManager, RatingState, RatingTransition
 
 
 class TestRatingStateEnum:

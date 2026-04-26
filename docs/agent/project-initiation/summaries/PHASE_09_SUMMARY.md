@@ -210,7 +210,7 @@ This is the final phase of the initial release. Future enhancements to consider:
    - Add screenshots to README showing i3blocks integration
    - Create animated GIF demo of workflow
    - Add FAQ section based on user feedback
-   - Consider man pages for ytmpctl and ytmpd-status
+   - Consider man pages for xmpctl and xmpd-status
 
 ---
 

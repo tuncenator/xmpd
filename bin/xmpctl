@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ytmpctl - Command-line client for ytmpd sync daemon."""
+"""xmpctl - Command-line client for xmpd sync daemon."""
 
 # Auto-detect and use venv if available
 import os
@@ -21,17 +21,17 @@ from typing import Any, NoReturn  # noqa: E402
 
 
 def get_sync_socket_path() -> Path:
-    """Get the Unix socket path for ytmpd sync daemon.
+    """Get the Unix socket path for xmpd sync daemon.
 
     Returns:
         Path to the sync socket file.
     """
-    config_dir = Path.home() / ".config" / "ytmpd"
+    config_dir = Path.home() / ".config" / "xmpd"
     return config_dir / "sync_socket"
 
 
 def send_command(command: str) -> dict[str, Any]:
-    """Send a command to the ytmpd daemon and return the JSON response.
+    """Send a command to the xmpd daemon and return the JSON response.
 
     Args:
         command: Command string to send to daemon
@@ -46,8 +46,8 @@ def send_command(command: str) -> dict[str, Any]:
 
     # Check if socket exists
     if not socket_path.exists():
-        print("Error: ytmpd daemon is not running", file=sys.stderr)
-        print("Start the daemon with: python -m ytmpd &", file=sys.stderr)
+        print("Error: xmpd daemon is not running", file=sys.stderr)
+        print("Start the daemon with: python -m xmpd &", file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -78,11 +78,11 @@ def send_command(command: str) -> dict[str, Any]:
 
     except ConnectionRefusedError:
         print("Error: Failed to connect to daemon", file=sys.stderr)
-        print("Make sure ytmpd is running: python -m ytmpd &", file=sys.stderr)
+        print("Make sure xmpd is running: python -m xmpd &", file=sys.stderr)
         sys.exit(1)
     except FileNotFoundError:
-        print("Error: ytmpd daemon socket not found", file=sys.stderr)
-        print("Start the daemon with: python -m ytmpd &", file=sys.stderr)
+        print("Error: xmpd daemon socket not found", file=sys.stderr)
+        print("Start the daemon with: python -m xmpd &", file=sys.stderr)
         sys.exit(1)
     except json.JSONDecodeError as e:
         print(f"Error: Invalid response from daemon: {e}", file=sys.stderr)
@@ -170,7 +170,7 @@ def cmd_sync() -> None:
         check = "✓" if has_unicode_support() else "OK"
         msg = result.get("message", "Sync triggered")
         print(colorize(f"{check} {msg}", "green"))
-        print("Sync running in background. Use 'ytmpctl status' to check progress.")
+        print("Sync running in background. Use 'xmpctl status' to check progress.")
     else:
         cross = "✗" if has_unicode_support() else "ERROR"
         error = result.get("error", "Unknown error")
@@ -187,7 +187,7 @@ def cmd_status() -> None:
         sys.exit(1)
 
     # Header
-    print(colorize("=== ytmpd Sync Status ===", "bold"))
+    print(colorize("=== xmpd Sync Status ===", "bold"))
     print()
 
     # Last sync time
@@ -207,7 +207,7 @@ def cmd_status() -> None:
         print(f"Authentication: {colorize('INVALID', 'red')}")
         if auth_error:
             print(f"  Error: {auth_error}")
-            print(f"  Run: {colorize('ytmpctl auth', 'blue')} to re-authenticate")
+            print(f"  Run: {colorize('xmpctl auth', 'blue')} to re-authenticate")
 
     # Auto-auth status
     auto_auth_enabled = result.get("auto_auth_enabled", False)
@@ -416,7 +416,7 @@ def cmd_search() -> None:
                 # Load config to get MPD connection info
                 import yaml
 
-                config_path = Path.home() / ".config" / "ytmpd" / "config.yaml"
+                config_path = Path.home() / ".config" / "xmpd" / "config.yaml"
                 mpd_socket = None
                 mpd_port = 6600
 
@@ -512,7 +512,7 @@ def cmd_radio(apply: bool = False) -> None:
             # Load config to get MPD connection info
             import yaml
 
-            config_path = Path.home() / ".config" / "ytmpd" / "config.yaml"
+            config_path = Path.home() / ".config" / "xmpd" / "config.yaml"
             mpd_socket = None
             mpd_port = 6600
 
@@ -569,7 +569,7 @@ def cmd_radio(apply: bool = False) -> None:
             print(colorize("  mpc play", "blue"))
             print()
             print("Or use:")
-            print(colorize("  ytmpctl radio --apply", "blue"))
+            print(colorize("  xmpctl radio --apply", "blue"))
     else:
         cross = "✗" if has_unicode_support() else "ERROR"
         error = result.get("error", "Unknown error")
@@ -585,7 +585,7 @@ def get_mpd_connection_info() -> tuple[str | None, int]:
     """
     import yaml
 
-    config_path = Path.home() / ".config" / "ytmpd" / "config.yaml"
+    config_path = Path.home() / ".config" / "xmpd" / "config.yaml"
     mpd_socket = None
     mpd_port = 6600
 
@@ -670,9 +670,9 @@ def cmd_like() -> None:
     """Toggle like for current track."""
     try:
         # Import here to avoid startup delay
-        from ytmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
-        from ytmpd.rating import RatingAction, RatingManager, RatingState
-        from ytmpd.ytmusic import YTMusicClient
+        from xmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
+        from xmpd.rating import RatingAction, RatingManager, RatingState
+        from xmpd.ytmusic import YTMusicClient
 
         # Get current track from MPD
         video_id, title, artist = get_current_track_from_mpd()
@@ -714,7 +714,7 @@ def cmd_like() -> None:
     except YTMusicAuthError:
         cross = "✗" if has_unicode_support() else "ERROR"
         print(colorize(f"{cross} Not authenticated with YouTube Music", "red"), file=sys.stderr)
-        print("Run: python -m ytmpd.ytmusic setup-browser", file=sys.stderr)
+        print("Run: python -m xmpd.ytmusic setup-browser", file=sys.stderr)
         sys.exit(1)
     except YTMusicAPIError as e:
         cross = "✗" if has_unicode_support() else "ERROR"
@@ -730,9 +730,9 @@ def cmd_dislike() -> None:
     """Toggle dislike for current track."""
     try:
         # Import here to avoid startup delay
-        from ytmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
-        from ytmpd.rating import RatingAction, RatingManager, RatingState
-        from ytmpd.ytmusic import YTMusicClient
+        from xmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
+        from xmpd.rating import RatingAction, RatingManager, RatingState
+        from xmpd.ytmusic import YTMusicClient
 
         # Get current track from MPD
         video_id, title, artist = get_current_track_from_mpd()
@@ -774,7 +774,7 @@ def cmd_dislike() -> None:
     except YTMusicAuthError:
         cross = "✗" if has_unicode_support() else "ERROR"
         print(colorize(f"{cross} Not authenticated with YouTube Music", "red"), file=sys.stderr)
-        print("Run: python -m ytmpd.ytmusic setup-browser", file=sys.stderr)
+        print("Run: python -m xmpd.ytmusic setup-browser", file=sys.stderr)
         sys.exit(1)
     except YTMusicAPIError as e:
         cross = "✗" if has_unicode_support() else "ERROR"
@@ -793,9 +793,9 @@ def cmd_auth(auto: bool = False) -> None:
         auto: If True, extract cookies from Firefox instead of manual setup.
     """
     if auto:
-        from ytmpd.config import get_config_dir, load_config
-        from ytmpd.cookie_extract import FirefoxCookieExtractor
-        from ytmpd.exceptions import CookieExtractionError
+        from xmpd.config import get_config_dir, load_config
+        from xmpd.cookie_extract import FirefoxCookieExtractor
+        from xmpd.exceptions import CookieExtractionError
 
         try:
             config = load_config()
@@ -824,7 +824,7 @@ def cmd_auth(auto: bool = False) -> None:
             print(colorize(f"{cross} Auto-auth failed: {e}", "red"), file=sys.stderr)
             sys.exit(1)
     else:
-        from ytmpd.ytmusic import YTMusicClient
+        from xmpd.ytmusic import YTMusicClient
 
         try:
             YTMusicClient.setup_browser()
@@ -838,20 +838,20 @@ def cmd_auth(auto: bool = False) -> None:
 
 def show_help() -> None:
     """Display help message."""
-    help_text = f"""{colorize("ytmpctl", "bold")} - YouTube Music to MPD sync control
+    help_text = f"""{colorize("xmpctl", "bold")} - YouTube Music to MPD sync control
 
 {colorize("Usage:", "bold")}
-  ytmpctl sync              Trigger immediate sync
-  ytmpctl status            Show sync status and statistics
-  ytmpctl list-playlists    List YouTube Music playlists
-  ytmpctl radio [--apply]   Generate radio playlist from current track
+  xmpctl sync              Trigger immediate sync
+  xmpctl status            Show sync status and statistics
+  xmpctl list-playlists    List YouTube Music playlists
+  xmpctl radio [--apply]   Generate radio playlist from current track
                             --apply: Automatically load and play the radio
-  ytmpctl search            Interactive search for YouTube Music tracks
-  ytmpctl like              Toggle like for current track
-  ytmpctl dislike           Toggle dislike for current track
-  ytmpctl auth              Set up or refresh YouTube Music authentication
-  ytmpctl auth --auto       Auto-refresh browser.json from Firefox cookies
-  ytmpctl help              Show this help message
+  xmpctl search            Interactive search for YouTube Music tracks
+  xmpctl like              Toggle like for current track
+  xmpctl dislike           Toggle dislike for current track
+  xmpctl auth              Set up or refresh YouTube Music authentication
+  xmpctl auth --auto       Auto-refresh browser.json from Firefox cookies
+  xmpctl help              Show this help message
 
 {colorize("Playback Control:", "bold")}
   Use mpc for playback control of synced playlists:
@@ -864,32 +864,32 @@ def show_help() -> None:
     mpc current                  Show current track
 
 {colorize("Configuration:", "bold")}
-  Config file: ~/.config/ytmpd/config.yaml
-  Auth file:   ~/.config/ytmpd/browser.json (or oauth.json)
-  State file:  ~/.config/ytmpd/sync_state.json
+  Config file: ~/.config/xmpd/config.yaml
+  Auth file:   ~/.config/xmpd/browser.json (or oauth.json)
+  State file:  ~/.config/xmpd/sync_state.json
 
 {colorize("Logs:", "bold")}
-  Log file: ~/.config/ytmpd/ytmpd.log
+  Log file: ~/.config/xmpd/xmpd.log
 
 {colorize("Examples:", "bold")}
   # Start daemon in background
-  python -m ytmpd &
+  python -m xmpd &
 
   # Trigger sync manually
-  ytmpctl sync
+  xmpctl sync
 
   # Check sync status
-  ytmpctl status
+  xmpctl status
 
   # List available playlists
-  ytmpctl list-playlists
+  xmpctl list-playlists
 
   # Load and play a YouTube playlist
   mpc load "YT: Workout"
   mpc play
 
 {colorize("Note:", "bold")}
-  ytmpd syncs YouTube Music playlists to MPD with "YT: " prefix.
+  xmpd syncs YouTube Music playlists to MPD with "YT: " prefix.
   Playback is controlled through MPD using mpc commands.
   The daemon automatically syncs playlists periodically (default: 30 minutes).
 """
@@ -897,7 +897,7 @@ def show_help() -> None:
 
 
 def main() -> NoReturn:
-    """Main entry point for ytmpctl client."""
+    """Main entry point for xmpctl client."""
     if len(sys.argv) < 2:
         show_help()
         sys.exit(0)
@@ -929,7 +929,7 @@ def main() -> NoReturn:
         show_help()
     else:
         print(f"Error: Unknown command: {command}", file=sys.stderr)
-        print("Run 'ytmpctl help' for usage information", file=sys.stderr)
+        print("Run 'xmpctl help' for usage information", file=sys.stderr)
         sys.exit(1)
 
     sys.exit(0)

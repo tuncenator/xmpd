@@ -29,8 +29,8 @@ Create the project foundation with proper Python packaging, directory structure,
 - `ytmpd/ytmpd/__init__.py` - Package initialization with version
 - `ytmpd/ytmpd/config.py` - Configuration management (load_config, get_config_dir)
 - `ytmpd/ytmpd/__main__.py` - Daemon entry point with logging setup
-- `ytmpd/bin/ytmpctl` - Client executable placeholder (Phase 6)
-- `ytmpd/bin/ytmpd-status` - i3blocks script placeholder (Phase 7)
+- `ytmpd/bin/xmpctl` - Client executable placeholder (Phase 6)
+- `ytmpd/bin/xmpd-status` - i3blocks script placeholder (Phase 7)
 - `ytmpd/tests/__init__.py` - Tests package initialization
 - `ytmpd/tests/test_config.py` - Comprehensive config module tests (7 tests)
 - `ytmpd/pyproject.toml` - Project metadata, dependencies, and tool configuration
@@ -43,7 +43,7 @@ None (first phase, all new files).
 
 ### Key Design Decisions
 
-1. **Configuration System**: Used YAML for config files (human-readable) stored in `~/.config/ytmpd/` for XDG compliance
+1. **Configuration System**: Used YAML for config files (human-readable) stored in `~/.config/xmpd/` for XDG compliance
 2. **Default Config**: Auto-creates config directory and config file with sensible defaults on first run
 3. **Config Merging**: User config values override defaults, missing keys use defaults (flexible configuration)
 4. **Logging Setup**: Dual output (file + console) with configurable log level
@@ -110,7 +110,7 @@ tests/test_config.py::TestLoadConfig::test_load_config_handles_corrupted_file_gr
 - Successfully installed package with `uv pip install -e ".[dev]"`
 - Verified all 21 packages installed correctly (including ytmusicapi, pyyaml, pytest, mypy, ruff)
 - Ran `python -m ytmpd` to verify daemon entry point works
-- Confirmed config directory and config file auto-created in `~/.config/ytmpd/`
+- Confirmed config directory and config file auto-created in `~/.config/xmpd/`
 - Verified executable permissions on bin scripts
 
 ---
@@ -163,16 +163,16 @@ None (first phase)
 
 1. **Config System**: The config module is fully functional and tested. Future phases should use `load_config()` to get configuration values.
 
-2. **Config Path**: All ytmpd files should be stored in `~/.config/ytmpd/`:
+2. **Config Path**: All ytmpd files should be stored in `~/.config/xmpd/`:
    - `config.yaml` - user configuration
    - `oauth.json` - YouTube Music credentials (Phase 2)
    - `state.json` - player state persistence (Phase 3)
    - `socket` - Unix socket file (Phase 4)
-   - `ytmpd.log` - log file
+   - `xmpd.log` - log file
 
 3. **Entry Point**: The `__main__.py` currently just loads config and prints info. Phase 5 (Daemon Core) will replace this with actual daemon implementation.
 
-4. **Placeholder Scripts**: `bin/ytmpctl` and `bin/ytmpd-status` are placeholders. They print usage info but don't implement functionality yet.
+4. **Placeholder Scripts**: `bin/xmpctl` and `bin/xmpd-status` are placeholders. They print usage info but don't implement functionality yet.
 
 5. **Testing Pattern**: The test_config.py file demonstrates the testing pattern for this project:
    - Use temporary directories for file operations
@@ -208,7 +208,7 @@ None at this time. All planned functionality implemented and tested.
 
 ## Security Considerations
 
-- Config files are stored in user's home directory (`~/.config/ytmpd/`)
+- Config files are stored in user's home directory (`~/.config/xmpd/`)
 - Default file permissions follow system umask
 - No sensitive data in config.yaml itself (OAuth credentials will be separate in Phase 2)
 - YAML safe_load used to prevent code injection
@@ -224,7 +224,7 @@ None at this time. All planned functionality implemented and tested.
 1. Proceed to Phase 2: YouTube Music Integration
 2. Review ytmusicapi documentation: https://ytmusicapi.readthedocs.io/
 3. Understand OAuth authentication flow for YouTube Music
-4. Plan for storing OAuth credentials securely in `~/.config/ytmpd/oauth.json`
+4. Plan for storing OAuth credentials securely in `~/.config/xmpd/oauth.json`
 
 **Notes for Phase 2:**
 - Use the existing config system (`load_config()` already available)
@@ -252,7 +252,7 @@ from ytmpd.config import load_config, get_config_dir
 
 # Load configuration
 config = load_config()
-print(config["socket_path"])  # /home/user/.config/ytmpd/socket
+print(config["socket_path"])  # /home/user/.config/xmpd/socket
 
 # Get config directory
 config_dir = get_config_dir()
@@ -265,7 +265,7 @@ $ source .venv/bin/activate
 $ python -m ytmpd
 [2025-10-17 06:07:02,236] [INFO] [__main__] Starting ytmpd daemon...
 ytmpd daemon initialized (Phase 1 - structure only)
-Configuration loaded from: ~/.config/ytmpd/
+Configuration loaded from: ~/.config/xmpd/
 ```
 
 **Directory Structure:**
@@ -276,8 +276,8 @@ ytmpd/
 │   ├── config.py       # Configuration management ✅
 │   └── __main__.py     # Entry point ✅
 ├── bin/
-│   ├── ytmpctl         # Client (placeholder)
-│   └── ytmpd-status    # i3blocks script (placeholder)
+│   ├── xmpctl         # Client (placeholder)
+│   └── xmpd-status    # i3blocks script (placeholder)
 ├── tests/
 │   ├── __init__.py
 │   └── test_config.py  # Config tests (7 tests) ✅

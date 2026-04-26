@@ -178,8 +178,8 @@ All code was linted in previous phases. Project follows:
 - Phase 3: Player State Management (player.py)
 - Phase 4: Unix Socket Server (server.py)
 - Phase 5: Daemon Core (daemon.py)
-- Phase 6: Client CLI (ytmpctl)
-- Phase 7: i3blocks Integration (ytmpd-status)
+- Phase 6: Client CLI (xmpctl)
+- Phase 7: i3blocks Integration (xmpd-status)
 
 All phases complete - this is the integration and documentation phase.
 
@@ -229,13 +229,13 @@ None for this phase. Documentation is complete and accurate.
 - Add screenshots to README for i3blocks display (optional, nice-to-have)
 - Consider adding animated GIF demo of full workflow (optional)
 - Add FAQ section if common questions emerge from users
-- Consider adding man pages for ytmpctl (for Phase 9)
+- Consider adding man pages for xmpctl (for Phase 9)
 
 ---
 
 ## Security Considerations
 
-- **Documentation**: Clearly documents that browser.json contains authentication credentials and should be kept secure (lives in ~/.config/ytmpd/ with user-only permissions)
+- **Documentation**: Clearly documents that browser.json contains authentication credentials and should be kept secure (lives in ~/.config/xmpd/ with user-only permissions)
 - **Troubleshooting**: Doesn't suggest unsafe operations (no chmod 777, no running as root)
 - **Examples**: All example configs use safe default paths in user's home directory
 

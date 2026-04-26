@@ -186,13 +186,13 @@ mypy ytmpd
 python -m ytmpd
 
 # Trigger manual sync
-bin/ytmpctl sync
+bin/xmpctl sync
 
 # Check sync status
-bin/ytmpctl status
+bin/xmpctl status
 
 # View help
-bin/ytmpctl help
+bin/xmpctl help
 ```
 
 **ytmusicapi Authentication:**
@@ -210,7 +210,7 @@ python -m ytmpd.ytmusic setup-browser
   - `daemon.py` - Background daemon
   - `config.py` - Configuration management
 - `tests/` - Test suite
-- `bin/` - CLI scripts (ytmpctl)
+- `bin/` - CLI scripts (xmpctl)
 - `docs/agent/` - Agent workflow documentation
 
 ---

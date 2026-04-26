@@ -7,7 +7,7 @@
 set -e
 
 PYPROJECT_VERSION=$(grep -E '^version = ' pyproject.toml | cut -d'"' -f2)
-INIT_VERSION=$(grep -E '__version__ = ' ytmpd/__init__.py | cut -d'"' -f2)
+INIT_VERSION=$(grep -E '__version__ = ' xmpd/__init__.py | cut -d'"' -f2)
 
 echo "pyproject.toml: $PYPROJECT_VERSION"
 echo "__init__.py:    $INIT_VERSION"

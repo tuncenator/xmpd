@@ -32,8 +32,8 @@ These features keep users in their ncmpcpp workflow - they can trigger commands 
 ### Scope
 
 **In Scope**:
-- `ytmpctl radio --current` command to generate radio from current track
-- `ytmpctl search` interactive CLI for searching YouTube Music
+- `xmpctl radio --current` command to generate radio from current track
+- `xmpctl search` interactive CLI for searching YouTube Music
 - Search result actions: play now, add to queue, start radio from selected track
 - New daemon socket commands: radio, search, play, queue
 - Configuration option for radio playlist size
@@ -70,14 +70,14 @@ These features keep users in their ncmpcpp workflow - they can trigger commands 
 1. **Daemon Socket Protocol Extension**: New commands (radio, search, play, queue) handled by daemon
 2. **Radio Generator**: Uses YouTube Music API's `get_watch_playlist()` with `radio=True`
 3. **Search Handler**: Uses existing `YTMusicClient.search()` for YouTube Music search
-4. **Interactive CLI**: Terminal UI in ytmpctl for search workflow
+4. **Interactive CLI**: Terminal UI in xmpctl for search workflow
 5. **Action Handlers**: MPD operations for play/queue/radio actions
 
 ### Data Flow
 
 #### Radio Feature
 ```
-ytmpctl radio --current
+xmpctl radio --current
          ↓
 Daemon socket: "radio current"
          ↓
@@ -94,7 +94,7 @@ User loads "YT: Radio" in ncmpcpp
 
 #### Search Feature
 ```
-ytmpctl search
+xmpctl search
          ↓
 [Interactive] User enters query
          ↓
@@ -226,7 +226,7 @@ Extend the command handler in the daemon to recognize new commands:
 
 ```python
 async def handle_socket_command(self, command: str) -> dict:
-    """Handle commands from ytmpctl client."""
+    """Handle commands from xmpctl client."""
     parts = command.strip().split(maxsplit=1)
     cmd = parts[0].lower()
     arg = parts[1] if len(parts) > 1 else None
@@ -311,7 +311,7 @@ Add tests:
 2. Add video ID extraction from MPD current track (proxy URL parsing)
 3. Integrate with YouTube Music API's `get_watch_playlist()`
 4. Create "YT: Radio" playlist in MPD
-5. Implement `ytmpctl radio --current` CLI command
+5. Implement `xmpctl radio --current` CLI command
 6. Error handling for all edge cases
 7. Add comprehensive tests
 
@@ -395,7 +395,7 @@ def _extract_video_id_from_url(self, url: str) -> str | None:
     return match.group(1) if match else None
 ```
 
-**File: `bin/ytmpctl`**
+**File: `bin/xmpctl`**
 
 Add radio command:
 
@@ -405,7 +405,7 @@ if [ "$1" = "radio" ]; then
     if [ "$2" = "--current" ] || [ -z "$2" ]; then
         send_command "radio"
     else
-        echo "Usage: ytmpctl radio --current"
+        echo "Usage: xmpctl radio --current"
         echo "Generate radio playlist from currently playing track"
         exit 1
     fi
@@ -438,7 +438,7 @@ Update help message to include radio command.
 - [ ] YouTube Music API integration working (get_watch_playlist with radio=True)
 - [ ] Stream URL resolution working for batch of video IDs
 - [ ] "YT: Radio" playlist created in MPD successfully
-- [ ] `ytmpctl radio --current` command works end-to-end
+- [ ] `xmpctl radio --current` command works end-to-end
 - [ ] All error cases handled with clear messages
 - [ ] Tests written and passing
 - [ ] Manual testing successful with live MPD/YouTube Music
@@ -461,7 +461,7 @@ Add test:
 
 **Integration test** (manual or scripted):
 - Start MPD with a YouTube track playing
-- Run `ytmpctl radio --current`
+- Run `xmpctl radio --current`
 - Verify "YT: Radio" playlist appears in MPD
 - Verify playlist contains ~25 tracks
 
@@ -714,13 +714,13 @@ Add tests (if new methods added):
 
 ### Phase 5: Search Feature - Interactive CLI
 
-**Objective**: Implement interactive terminal UI in ytmpctl for search workflow
+**Objective**: Implement interactive terminal UI in xmpctl for search workflow
 
 **Estimated Context Budget**: ~70k tokens
 
 #### Deliverables
 
-1. Implement `ytmpctl search` command with interactive flow
+1. Implement `xmpctl search` command with interactive flow
 2. Search input prompt
 3. Results display (numbered list with title, artist, duration)
 4. Track selection prompt
@@ -732,7 +732,7 @@ Add tests (if new methods added):
 
 #### Detailed Requirements
 
-**File: `bin/ytmpctl`**
+**File: `bin/xmpctl`**
 
 Add search command handler:
 
@@ -746,7 +746,7 @@ import sys
 import os
 
 # Configuration
-SOCKET_PATH = os.path.expanduser("~/.config/ytmpd/sync_socket")
+SOCKET_PATH = os.path.expanduser("~/.config/xmpd/sync_socket")
 
 def send_daemon_command(cmd):
     """Send command to daemon and return response."""
@@ -875,7 +875,7 @@ Update help message to include search command:
 
 ```bash
 if [ "$1" = "help" ] || [ "$1" = "--help" ] || [ -z "$1" ]; then
-    echo "ytmpctl - Control ytmpd daemon"
+    echo "xmpctl - Control ytmpd daemon"
     echo ""
     echo "Commands:"
     echo "  sync              Trigger immediate playlist sync"
@@ -913,7 +913,7 @@ All error cases must be handled gracefully:
 
 #### Completion Criteria
 
-- [ ] `ytmpctl search` command implemented
+- [ ] `xmpctl search` command implemented
 - [ ] Interactive flow works end-to-end
 - [ ] Search query prompt works
 - [ ] Results display formatted correctly
@@ -941,7 +941,7 @@ Add tests (using mock input/output):
 
 **Manual Testing Checklist**:
 - [ ] Start daemon
-- [ ] Run `ytmpctl search`
+- [ ] Run `xmpctl search`
 - [ ] Enter query "miles davis"
 - [ ] Verify results display correctly
 - [ ] Select a track (e.g., "2")
@@ -1044,7 +1044,7 @@ Add new section after "Usage" section:
 Generate a personalized radio playlist based on the currently playing song:
 
 ```bash
-ytmpctl radio --current
+xmpctl radio --current
 ```
 
 The daemon will:
@@ -1067,7 +1067,7 @@ mpc play
 Search YouTube Music and take actions on results:
 
 ```bash
-ytmpctl search
+xmpctl search
 ```
 
 **Workflow:**
@@ -1082,7 +1082,7 @@ ytmpctl search
 
 **Example:**
 ```bash
-$ ytmpctl search
+$ xmpctl search
 Search YouTube Music:
 miles davis kind of blue
 
@@ -1117,8 +1117,8 @@ Add new keybindings section:
 
 ```
 # Radio and Search features
-bindsym $mod+Shift+r exec --no-startup-id ytmpctl radio --current  # Generate radio from current
-bindsym $mod+Shift+f exec --no-startup-id alacritty -e ytmpctl search  # Open search in terminal
+bindsym $mod+Shift+r exec --no-startup-id xmpctl radio --current  # Generate radio from current
+bindsym $mod+Shift+f exec --no-startup-id alacritty -e xmpctl search  # Open search in terminal
 ```
 
 **File: `examples/config.yaml`**
@@ -1138,7 +1138,7 @@ Create comprehensive manual test checklist:
 **Radio Feature:**
 - [ ] Start MPD and load a YouTube Music playlist
 - [ ] Play a track
-- [ ] Run `ytmpctl radio --current`
+- [ ] Run `xmpctl radio --current`
 - [ ] Verify success message with track count
 - [ ] Check `mpc lsplaylists | grep "YT: Radio"` shows the playlist
 - [ ] Load and play "YT: Radio" playlist
@@ -1147,7 +1147,7 @@ Create comprehensive manual test checklist:
 - [ ] Test error: play a local file (not YouTube), try radio
 
 **Search Feature - Play Now:**
-- [ ] Run `ytmpctl search`
+- [ ] Run `xmpctl search`
 - [ ] Enter a query (e.g., "beatles")
 - [ ] Select a track
 - [ ] Choose action 1 (Play now)
@@ -1261,7 +1261,7 @@ Phase 6 (Integration & Docs)
 
 ### Configuration
 
-- All new config in `~/.config/ytmpd/config.yaml`
+- All new config in `~/.config/xmpd/config.yaml`
 - Provide sensible defaults
 - Validate all config values
 - Document all options in examples/config.yaml
@@ -1342,8 +1342,8 @@ queue <video_id>       # add to queue
 **Proxy URL**: Format used by ytmpd ICY proxy: `http://localhost:PORT/proxy/VIDEO_ID`
 **MPD**: Music Player Daemon
 **ncmpcpp**: Terminal-based MPD client
-**ytmpctl**: CLI tool for controlling ytmpd daemon
-**Socket protocol**: Unix socket communication between ytmpctl and ytmpd daemon
+**xmpctl**: CLI tool for controlling ytmpd daemon
+**Socket protocol**: Unix socket communication between xmpctl and ytmpd daemon
 
 ---
 

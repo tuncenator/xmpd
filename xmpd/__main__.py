@@ -1,10 +1,10 @@
-"""Entry point for ytmpd daemon."""
+"""Entry point for xmpd daemon."""
 
 import logging
 import sys
 
-from ytmpd.config import load_config
-from ytmpd.daemon import YTMPDaemon
+from xmpd.config import load_config
+from xmpd.daemon import XMPDaemon
 
 
 def setup_logging(log_level: str, log_file: str) -> None:
@@ -41,7 +41,7 @@ def setup_logging(log_level: str, log_file: str) -> None:
 
 
 def main() -> None:
-    """Main entry point for ytmpd daemon."""
+    """Main entry point for xmpd daemon."""
     # Load configuration
     config = load_config()
 
@@ -49,11 +49,11 @@ def main() -> None:
     setup_logging(config["log_level"], config["log_file"])
 
     logger = logging.getLogger(__name__)
-    logger.info("Starting ytmpd sync daemon...")
+    logger.info("Starting xmpd sync daemon...")
 
     try:
         # Create and start daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
         daemon.run()
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt, shutting down...")

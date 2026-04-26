@@ -170,7 +170,7 @@ All tests pass. Code follows ruff configuration from pyproject.toml. Type hints 
 
 - **Statistics for Monitoring**: The SyncResult contains detailed statistics perfect for monitoring dashboards or status displays. Phase 7 (CLI) should use these for user feedback.
 
-- **Preview Mode**: The get_sync_preview() method is useful for dry-run operations. Consider exposing this via ytmpctl status or a separate command.
+- **Preview Mode**: The get_sync_preview() method is useful for dry-run operations. Consider exposing this via xmpctl status or a separate command.
 
 - **Graceful Degradation Philosophy**: Sync continues even when individual playlists or tracks fail. This is intentional - better to sync 9 out of 10 playlists successfully than fail the entire sync due to one broken playlist.
 
@@ -252,7 +252,7 @@ from ytmpd.stream_resolver import StreamResolver
 from ytmpd.sync_engine import SyncEngine
 
 # Initialize components
-ytmusic = YTMusicClient(auth_file=Path("~/.config/ytmpd/browser.json"))
+ytmusic = YTMusicClient(auth_file=Path("~/.config/xmpd/browser.json"))
 mpd = MPDClient("~/.config/mpd/socket")
 resolver = StreamResolver(cache_hours=5)
 

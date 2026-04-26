@@ -29,7 +29,7 @@ None - all changes were additions to existing files.
 
 ### Files Modified
 
-- `bin/ytmpd-status` - Added progress bar functions and integrated into main output
+- `bin/xmpd-status` - Added progress bar functions and integrated into main output
   - Added `calculate_progress()` function for progress calculation
   - Added `render_progress_bar()` function with three style options
   - Updated `main()` to read bar-related environment variables
@@ -151,7 +151,7 @@ Tested with live MPD instance on port 6601:
 
 **Test 1: YouTube Track with Default Bar**
 ```bash
-$ YTMPD_STATUS_MAX_LENGTH=100 bin/ytmpd-status
+$ YTMPD_STATUS_MAX_LENGTH=100 bin/xmpd-status
 ▶ Braxton - Wilderness [0:43 ▰▱▱▱▱▱▱▱▱▱ 4:58]
 ▶ Braxton - Wilderness [0:43 ▰▱▱▱▱▱▱▱▱▱ 4:58]
 #FF6B35
@@ -162,7 +162,7 @@ $ YTMPD_STATUS_MAX_LENGTH=100 bin/ytmpd-status
 
 **Test 2: Progress Bar Updates**
 ```bash
-$ sleep 2 && bin/ytmpd-status | head -1
+$ sleep 2 && bin/xmpd-status | head -1
 ▶ Braxton - Wilderness [1:28 ▰▰▱▱▱▱▱▱▱▱ 4:58]
 ```
 ✅ Bar advances from 1 to 2 filled blocks as playback progresses
@@ -170,7 +170,7 @@ $ sleep 2 && bin/ytmpd-status | head -1
 
 **Test 3: Custom Bar Length**
 ```bash
-$ YTMPD_STATUS_BAR_LENGTH=20 bin/ytmpd-status | head -1
+$ YTMPD_STATUS_BAR_LENGTH=20 bin/xmpd-status | head -1
 ▶ Braxton - Wilderness [1:03 ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ 4:58]
 ```
 ✅ Bar length increases to 20 characters as configured
@@ -178,7 +178,7 @@ $ YTMPD_STATUS_BAR_LENGTH=20 bin/ytmpd-status | head -1
 
 **Test 4: Disable Progress Bar**
 ```bash
-$ YTMPD_STATUS_SHOW_BAR=false bin/ytmpd-status | head -1
+$ YTMPD_STATUS_SHOW_BAR=false bin/xmpd-status | head -1
 ▶ Braxton - Wilderness [1:10 4:58]
 ```
 ✅ Bar completely hidden when disabled
@@ -186,7 +186,7 @@ $ YTMPD_STATUS_SHOW_BAR=false bin/ytmpd-status | head -1
 
 **Test 5: Force Simple Style**
 ```bash
-$ YTMPD_STATUS_BAR_STYLE=simple bin/ytmpd-status | head -1
+$ YTMPD_STATUS_BAR_STYLE=simple bin/xmpd-status | head -1
 ▶ Braxton - Wilderness [1:16 ##-------- 4:58]
 ```
 ✅ Simple ASCII style (#-) renders correctly
@@ -335,31 +335,31 @@ All completion criteria met. All 54 tests passing (26 from Phase 1, 28 new). Man
 
 ```bash
 # Basic usage (default 10-character bar)
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ▶ Artist - Title [1:23 ▰▰▰▱▱▱▱▱▱▱ 4:56]
 ▶ Artist - Title [1:23 ▰▰▰▱▱▱▱▱▱▱ 4:56]
 #FF6B35
 
 # Custom bar length
-$ YTMPD_STATUS_BAR_LENGTH=5 bin/ytmpd-status
+$ YTMPD_STATUS_BAR_LENGTH=5 bin/xmpd-status
 ▶ Artist - Title [1:23 ▰▱▱▱▱ 4:56]
 ▶ Artist - Title [1:23 ▰▱▱▱▱ 4:56]
 #FF6B35
 
 # Disable progress bar
-$ YTMPD_STATUS_SHOW_BAR=false bin/ytmpd-status
+$ YTMPD_STATUS_SHOW_BAR=false bin/xmpd-status
 ▶ Artist - Title [1:23 4:56]
 ▶ Artist - Title [1:23 4:56]
 #FF6B35
 
 # Force specific style
-$ YTMPD_STATUS_BAR_STYLE=blocks bin/ytmpd-status
+$ YTMPD_STATUS_BAR_STYLE=blocks bin/xmpd-status
 ▶ Artist - Title [1:23 ██░░░░░░░░ 4:56]
 ▶ Artist - Title [1:23 ██░░░░░░░░ 4:56]
 #00FF00
 
 # Simple ASCII style
-$ YTMPD_STATUS_BAR_STYLE=simple bin/ytmpd-status
+$ YTMPD_STATUS_BAR_STYLE=simple bin/xmpd-status
 ▶ Artist - Title [1:23 ##-------- 4:56]
 ▶ Artist - Title [1:23 ##-------- 4:56]
 #00FF00

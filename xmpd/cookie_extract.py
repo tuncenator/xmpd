@@ -14,7 +14,7 @@ import time
 from configparser import ConfigParser
 from pathlib import Path
 
-from ytmpd.exceptions import CookieExtractionError
+from xmpd.exceptions import CookieExtractionError
 
 logger = logging.getLogger(__name__)
 

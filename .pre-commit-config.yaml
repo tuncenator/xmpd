@@ -11,7 +11,7 @@ repos:
         entry: scripts/check_version_sync.sh
         language: system
         pass_filenames: false
-        files: ^(pyproject\.toml|ytmpd/__init__\.py)$
+        files: ^(pyproject\.toml|xmpd/__init__\.py)$
 
   # Python code formatting
   - repo: https://github.com/astral-sh/ruff-pre-commit

@@ -3637,12 +3637,12 @@ In `install.sh`, before the systemd unit installation, add:
 ```bash
 # --- Migrate config dir from old ytmpd location, if applicable ---
 if [ ! -d "$HOME/.config/xmpd" ] && [ -d "$HOME/.config/ytmpd" ]; then
-    echo "Found old ~/.config/ytmpd/. Copying to ~/.config/xmpd/..."
+    echo "Found old ~/.config/xmpd/. Copying to ~/.config/xmpd/..."
     cp -r "$HOME/.config/ytmpd" "$HOME/.config/xmpd"
-    if [ -f "$HOME/.config/xmpd/ytmpd.log" ]; then
-        mv "$HOME/.config/xmpd/ytmpd.log" "$HOME/.config/xmpd/xmpd.log"
+    if [ -f "$HOME/.config/xmpd/xmpd.log" ]; then
+        mv "$HOME/.config/xmpd/xmpd.log" "$HOME/.config/xmpd/xmpd.log"
     fi
-    echo "Config dir copied. (Old ~/.config/ytmpd/ left in place; delete manually when confident.)"
+    echo "Config dir copied. (Old ~/.config/xmpd/ left in place; delete manually when confident.)"
 fi
 ```
 
@@ -3743,12 +3743,12 @@ auto_auth:
   browser: firefox-dev
 playlist_format: m3u
 EOF
-echo "test log" > /tmp/fake-old-config/ytmpd/ytmpd.log
+echo "test log" > /tmp/fake-old-config/ytmpd/xmpd.log
 
 # Run a copy of install.sh's migration logic against this fake env
 HOME=/tmp/fake-old-config bash -c 'set -e; \
     [ ! -d "$HOME/.config/xmpd" ] && [ -d "$HOME/.config/ytmpd" ] && cp -r "$HOME/.config/ytmpd" "$HOME/.config/xmpd"; \
-    [ -f "$HOME/.config/xmpd/ytmpd.log" ] && mv "$HOME/.config/xmpd/ytmpd.log" "$HOME/.config/xmpd/xmpd.log"; \
+    [ -f "$HOME/.config/xmpd/xmpd.log" ] && mv "$HOME/.config/xmpd/xmpd.log" "$HOME/.config/xmpd/xmpd.log"; \
     ls -la $HOME/.config/xmpd/'
 
 # Verify
@@ -3756,7 +3756,7 @@ ls /tmp/fake-old-config/.config/xmpd/
 cat /tmp/fake-old-config/.config/xmpd/config.yaml
 ```
 
-Expected: `xmpd.log` exists, `config.yaml` exists, no `ytmpd.log`.
+Expected: `xmpd.log` exists, `config.yaml` exists, no `xmpd.log`.
 
 - [ ] **Step 7: Commit**
 
@@ -3784,7 +3784,7 @@ Make `uninstall.sh` operate on `xmpd.service`, `xmpctl`, etc. Preserve `~/.confi
 sed -i \
   -e 's/\bytmpd\b/xmpd/g' \
   -e 's/\bytmpctl\b/xmpctl/g' \
-  -e 's/ytmpd-status/xmpd-status/g' \
+  -e 's/xmpd-status/xmpd-status/g' \
   uninstall.sh
 ```
 
@@ -3818,7 +3818,7 @@ Key changes:
 - Quick start: `xmpctl auth yt` and `xmpctl auth tidal`
 - New section: "Tidal" — auth flow, quality, parity gaps documented in spec
 - Update all command examples to `xmpctl ...`
-- Update all `~/.config/ytmpd/` references to `~/.config/xmpd/`
+- Update all `~/.config/xmpd/` references to `~/.config/xmpd/`
 
 The full rewrite is too long to inline here. Reference the spec at `docs/superpowers/specs/2026-04-26-xmpd-tidal-design.md` for the canonical user-facing description.
 
@@ -3860,15 +3860,15 @@ cd ~/Sync/Programs/xmpd
 
 `install.sh` does:
 
-1. If `~/.config/xmpd/` doesn't exist and `~/.config/ytmpd/` does, copies
+1. If `~/.config/xmpd/` doesn't exist and `~/.config/xmpd/` does, copies
    the latter to the former (preserving config, browser.json, track DB).
-2. Renames `ytmpd.log` to `xmpd.log` inside the new dir.
+2. Renames `xmpd.log` to `xmpd.log` inside the new dir.
 3. Rewrites `config.yaml` shape: nests top-level `auto_auth:` under a
    new `yt:` section, adds a `tidal:` stub with default values.
 4. Disables and removes the old `ytmpd.service`, installs `xmpd.service`,
    reloads systemd.
 
-The original `~/.config/ytmpd/` is left in place. After confirming xmpd
+The original `~/.config/xmpd/` is left in place. After confirming xmpd
 works, delete it manually with `rm -rf ~/.config/ytmpd`.
 
 ## Manual migration
@@ -3879,7 +3879,7 @@ equivalent steps manually:
 ```bash
 systemctl --user stop ytmpd 2>/dev/null
 cp -r ~/.config/ytmpd ~/.config/xmpd
-mv ~/.config/xmpd/ytmpd.log ~/.config/xmpd/xmpd.log
+mv ~/.config/xmpd/xmpd.log ~/.config/xmpd/xmpd.log
 
 # Edit ~/.config/xmpd/config.yaml to nest auto_auth under yt:
 # Before:
@@ -3903,7 +3903,7 @@ cp xmpd.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 
 # Update i3 keybindings:
-sed -i 's/\bytmpctl\b/xmpctl/g; s/ytmpd-status/xmpd-status/g' ~/.i3/config
+sed -i 's/\bytmpctl\b/xmpctl/g; s/xmpd-status/xmpd-status/g' ~/.i3/config
 i3-msg reload
 
 systemctl --user enable --now xmpd
@@ -3984,7 +3984,7 @@ Plan 1 added an "Unreleased" entry for the rename. Now extend it (or replace `##
 
 ### Deprecated / Removed
 
-- `ytmpctl` CLI name dropped (no compatibility alias). Use `xmpctl`.
+- `xmpctl` CLI name dropped (no compatibility alias). Use `xmpctl`.
 - `ytmpd.service` replaced by `xmpd.service`. `install.sh` handles the
   swap.
 - `docs/ICY_PROXY.md` removed; `docs/STREAM_PROXY.md` describes the
@@ -4032,7 +4032,7 @@ The user runs:
 ```bash
 # In ~/Sync/Programs/xmpd
 ./install.sh                   # migrates config, swaps service unit
-sed -i 's/\bytmpctl\b/xmpctl/g; s/ytmpd-status/xmpd-status/g' ~/.i3/config
+sed -i 's/\bytmpctl\b/xmpctl/g; s/xmpd-status/xmpd-status/g' ~/.i3/config
 i3-msg reload
 systemctl --user status xmpd
 
@@ -4068,8 +4068,8 @@ If all of these succeed, plan 2 is complete.
 - Tidal playlists sync into MPD as `TD: ...`. Tidal tracks play. Search, radio, like/dislike, history all work.
 - Existing YouTube Music functionality is preserved end-to-end.
 - AirPlay receivers display Tidal album art for Tidal-served tracks.
-- `~/.config/ytmpd/` migrated by `install.sh` to `~/.config/xmpd/`; user's existing data preserved.
+- `~/.config/xmpd/` migrated by `install.sh` to `~/.config/xmpd/`; user's existing data preserved.
 - Old `ytmpd.service` disabled and replaced by `xmpd.service`.
 - README, MIGRATION.md, CHANGELOG.md describe the new multi-source state accurately.
 
-After acceptance, the user can delete `~/Sync/Programs/ytmpd/` (the local fallback clone) and `~/.config/ytmpd/` (the original config dir) at their leisure. The next spec — out of scope — is the cross-provider liked-tracks sync layer, which builds on the `Track.liked_signature` hook reserved here.
+After acceptance, the user can delete `~/Sync/Programs/ytmpd/` (the local fallback clone) and `~/.config/xmpd/` (the original config dir) at their leisure. The next spec — out of scope — is the cross-provider liked-tracks sync layer, which builds on the `Track.liked_signature` hook reserved here.

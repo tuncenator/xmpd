@@ -192,7 +192,7 @@ Code follows ruff configuration from pyproject.toml:
 
 ### Unblocked Phases
 
-- Phase 6: Client CLI (ytmpctl) - can now connect to daemon and send commands
+- Phase 6: Client CLI (xmpctl) - can now connect to daemon and send commands
 
 ---
 
@@ -202,7 +202,7 @@ Code follows ruff configuration from pyproject.toml:
 
 2. **OAuth Setup Required**: Users must run `python -m ytmpd.ytmusic setup-oauth` before starting daemon. Daemon will fail with clear error if OAuth not configured.
 
-3. **Socket Path**: Default socket path is `~/.config/ytmpd/socket`. Client must connect to same path. Can be configured via config file.
+3. **Socket Path**: Default socket path is `~/.config/xmpd/socket`. Client must connect to same path. Can be configured via config file.
 
 4. **Command Protocol**: All commands follow format: `<command> [args...]` → response + "OK\n" or "ERR: message\n". See server.py:ytmpd/server.py:23-26 for protocol spec.
 
@@ -264,7 +264,7 @@ Future enhancements to consider:
 
 - **Command Injection**: Commands are parsed by simple string splitting. No shell execution or eval, so no injection risk.
 
-- **OAuth Credentials**: YTMusicClient loads OAuth from ~/.config/ytmpd/oauth.json. File permissions should be restricted (handled in Phase 2).
+- **OAuth Credentials**: YTMusicClient loads OAuth from ~/.config/xmpd/oauth.json. File permissions should be restricted (handled in Phase 2).
 
 - **Error Messages**: Error messages are descriptive but don't leak sensitive data (no credentials, paths, or internal details exposed).
 
@@ -274,7 +274,7 @@ Future enhancements to consider:
 
 ## Next Steps
 
-**Next Phase:** Phase 6 - Client CLI (ytmpctl)
+**Next Phase:** Phase 6 - Client CLI (xmpctl)
 
 **Recommended Actions:**
 1. Proceed to Phase 6: Client CLI
@@ -324,8 +324,8 @@ $ python -m ytmpd
 [2025-10-17 12:00:00] [INFO] [ytmpd.daemon] Initializing ytmpd daemon...
 [2025-10-17 12:00:00] [INFO] [ytmpd.daemon] Daemon components initialized
 [2025-10-17 12:00:00] [INFO] [ytmpd.daemon] Starting ytmpd daemon...
-[2025-10-17 12:00:00] [INFO] [ytmpd.player] State loaded from ~/.config/ytmpd/state.json
-[2025-10-17 12:00:00] [INFO] [ytmpd.server] Socket server started on ~/.config/ytmpd/socket
+[2025-10-17 12:00:00] [INFO] [ytmpd.player] State loaded from ~/.config/xmpd/state.json
+[2025-10-17 12:00:00] [INFO] [ytmpd.server] Socket server started on ~/.config/xmpd/socket
 [2025-10-17 12:00:00] [INFO] [ytmpd.daemon] ytmpd daemon started successfully
 ```
 

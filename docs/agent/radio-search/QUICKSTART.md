@@ -187,9 +187,9 @@ ruff format ytmpd/
 # Run ytmpd daemon (for testing)
 python -m ytmpd
 
-# Use ytmpctl CLI (for testing)
-bin/ytmpctl status
-bin/ytmpctl sync
+# Use xmpctl CLI (for testing)
+bin/xmpctl status
+bin/xmpctl sync
 ```
 
 #### Installing New Dependencies

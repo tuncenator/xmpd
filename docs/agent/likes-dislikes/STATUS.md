@@ -35,7 +35,7 @@
 | 1 | API Research & Discovery | ✅ Complete |
 | 2 | Core Toggle Logic & Rating Manager | ✅ Complete |
 | 3 | YouTube Music API Integration | ✅ Complete |
-| 4 | ytmpctl Command Implementation | ✅ Complete |
+| 4 | xmpctl Command Implementation | ✅ Complete |
 | 5 | End-to-End Testing & Validation | ✅ Complete |
 | 6 | Documentation & Polish | ✅ Complete |
 

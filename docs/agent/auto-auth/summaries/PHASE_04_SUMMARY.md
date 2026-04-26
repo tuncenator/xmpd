@@ -126,8 +126,8 @@ The retry mechanism uses `time.sleep(1.0)` which would slow tests. Used monkeypa
 - `ytmpd/ytmusic.py` - `refresh_auth()` method
 - `ytmpd/config.py` - Auto-auth config section
 - `ytmpd/exceptions.py` - `CookieExtractionError`
-- `bin/ytmpctl` - `auth --auto` command, status display
-- `bin/ytmpd-status` - Auth-aware color coding
+- `bin/xmpctl` - `auth --auto` command, status display
+- `bin/xmpd-status` - Auth-aware color coding
 - `examples/config.yaml` - Auto-auth config documentation
 - `README.md` - Auto-auth documentation section
 

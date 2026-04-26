@@ -54,7 +54,7 @@ Transform ytmpd from a standalone YouTube Music daemon into a smart sync service
 - [ ] YouTube Music playlists automatically sync to MPD with "YT: " prefix
 - [ ] User can control playback via existing mpc commands
 - [ ] Sync runs periodically in background (configurable interval)
-- [ ] Manual sync trigger available via ytmpctl
+- [ ] Manual sync trigger available via xmpctl
 - [ ] Stream URLs cached and refreshed before expiration
 - [ ] Error handling for unavailable videos, API failures
 - [ ] Existing ytmpd users can migrate smoothly
@@ -66,7 +66,7 @@ Transform ytmpd from a standalone YouTube Music daemon into a smart sync service
 
 ### Old Architecture (Pre-Migration)
 ```
-ytmpctl → Unix socket → ytmpd daemon → ytmusicapi → YouTube Music
+xmpctl → Unix socket → ytmpd daemon → ytmusicapi → YouTube Music
                               ↓
                         Player State
                               ↓
@@ -93,7 +93,7 @@ YouTube Music Playlists
 3. **Stream URL Resolver** (`ytmpd/stream_resolver.py`): Uses yt-dlp to extract audio stream URLs
 4. **Playlist Sync Engine** (`ytmpd/sync_engine.py`): Core logic for syncing YT → MPD
 5. **Sync Daemon** (`ytmpd/daemon.py`): Replaces socket server with periodic sync loop
-6. **CLI Tool** (`bin/ytmpctl`): Simplified to sync-specific commands
+6. **CLI Tool** (`bin/xmpctl`): Simplified to sync-specific commands
 
 ### Data Flow
 
@@ -180,10 +180,10 @@ Update the config loading function to:
 Create or update `examples/config.yaml` with the new fields and helpful comments:
 ```yaml
 # Existing ytmpd settings
-socket_path: ~/.config/ytmpd/socket
-state_file: ~/.config/ytmpd/state.json
+socket_path: ~/.config/xmpd/socket
+state_file: ~/.config/xmpd/state.json
 log_level: INFO
-log_file: ~/.config/ytmpd/ytmpd.log
+log_file: ~/.config/xmpd/xmpd.log
 
 # MPD integration settings
 mpd_socket_path: ~/.config/mpd/socket
@@ -492,7 +492,7 @@ def test_get_user_playlists(mock_ytmusic):
         {'playlistId': 'PL456', 'title': 'Workout', 'count': 30},
     ]
 
-    client = YTMusicClient('~/.config/ytmpd/browser.json')
+    client = YTMusicClient('~/.config/xmpd/browser.json')
     playlists = client.get_user_playlists()
 
     assert len(playlists) == 2
@@ -951,14 +951,14 @@ Keep:
 
 Simple approach - listen on Unix socket for "sync" command:
 - Keep minimal socket listener (much simpler than old server)
-- Accept connections on `~/.config/ytmpd/sync_socket`
+- Accept connections on `~/.config/xmpd/sync_socket`
 - Read command: "sync", "status", or "quit"
 - Respond with result
-- This allows ytmpctl to trigger syncs
+- This allows xmpctl to trigger syncs
 
 **5. State Persistence**
 
-Store in `~/.config/ytmpd/sync_state.json`:
+Store in `~/.config/xmpd/sync_state.json`:
 ```json
 {
     "last_sync": "2025-10-17T14:30:00Z",
@@ -1062,13 +1062,13 @@ Integration test:
 
 ### Phase 7: CLI Migration
 
-**Objective**: Simplify ytmpctl to focus on sync-specific commands (sync, status, list-playlists), removing playback commands that are now handled by mpc.
+**Objective**: Simplify xmpctl to focus on sync-specific commands (sync, status, list-playlists), removing playback commands that are now handled by mpc.
 
 **Estimated Context Budget**: ~30k tokens
 
 #### Deliverables
 
-1. Refactored `bin/ytmpctl` with new command set
+1. Refactored `bin/xmpctl` with new command set
 2. Removed playback commands
 3. Added sync-specific commands
 4. Updated help text and documentation
@@ -1079,10 +1079,10 @@ Integration test:
 **1. New Command Set**
 
 ```bash
-ytmpctl sync              # Trigger immediate sync
-ytmpctl status            # Show sync status and stats
-ytmpctl list-playlists    # List YouTube playlists available
-ytmpctl help              # Show help
+xmpctl sync              # Trigger immediate sync
+xmpctl status            # Show sync status and stats
+xmpctl list-playlists    # List YouTube playlists available
+xmpctl help              # Show help
 ```
 
 **2. Remove Old Commands**
@@ -1105,7 +1105,7 @@ import socket
 import json
 import sys
 
-SYNC_SOCKET = os.path.expanduser('~/.config/ytmpd/sync_socket')
+SYNC_SOCKET = os.path.expanduser('~/.config/xmpd/sync_socket')
 
 def send_command(command: str) -> dict:
     """Send command to daemon via socket, return response"""
@@ -1142,13 +1142,13 @@ def cmd_list_playlists():
 
 def cmd_help():
     """Show help"""
-    print("""ytmpctl - YouTube Music to MPD sync control
+    print("""xmpctl - YouTube Music to MPD sync control
 
 Usage:
-    ytmpctl sync              Trigger immediate sync
-    ytmpctl status            Show sync status
-    ytmpctl list-playlists    List YouTube Music playlists
-    ytmpctl help              Show this help
+    xmpctl sync              Trigger immediate sync
+    xmpctl status            Show sync status
+    xmpctl list-playlists    List YouTube Music playlists
+    xmpctl help              Show this help
 
 Playback Control:
     Use mpc for playback control:
@@ -1160,11 +1160,11 @@ Playback Control:
         mpc status                   Show playback status
 
 Configuration:
-    ~/.config/ytmpd/config.yaml
-    ~/.config/ytmpd/browser.json (auth)
+    ~/.config/xmpd/config.yaml
+    ~/.config/xmpd/browser.json (auth)
 
 Logs:
-    ~/.config/ytmpd/ytmpd.log
+    ~/.config/xmpd/xmpd.log
 """)
 
 if __name__ == '__main__':
@@ -1191,7 +1191,7 @@ Include:
 - Mention that playback is via mpc
 - Example workflow:
   1. Start daemon: `python -m ytmpd &`
-  2. Wait for initial sync or trigger: `ytmpctl sync`
+  2. Wait for initial sync or trigger: `xmpctl sync`
   3. Load playlist: `mpc load "YT: Favorites"`
   4. Play: `mpc play`
 
@@ -1205,7 +1205,7 @@ Include:
 
 #### Completion Criteria
 
-- [ ] `bin/ytmpctl` refactored with new commands
+- [ ] `bin/xmpctl` refactored with new commands
 - [ ] Old playback commands removed
 - [ ] `sync` command triggers immediate sync
 - [ ] `status` command shows last sync info
@@ -1245,9 +1245,9 @@ Tests to include:
 
 Integration test:
 - Start daemon
-- Run `ytmpctl sync`
+- Run `xmpctl sync`
 - Verify sync triggered
-- Run `ytmpctl status`
+- Run `xmpctl status`
 - Verify correct output
 
 #### Notes
@@ -1324,7 +1324,7 @@ YouTube Music Playlists
 python -m ytmpd &
 
 # Wait for sync or trigger manually
-ytmpctl sync
+xmpctl sync
 
 # Load YouTube playlist in MPD
 mpc load "YT: Favorites"
@@ -1336,7 +1336,7 @@ mpc next
 ```
 
 **i3 Integration section**:
-- Update keybindings to use mpc instead of ytmpctl
+- Update keybindings to use mpc instead of xmpctl
 ```
 bindsym $mod+Shift+p exec --no-startup-id mpc toggle
 bindsym $mod+Shift+n exec --no-startup-id mpc next
@@ -1354,7 +1354,7 @@ Create `docs/MIGRATION.md`:
 
 - ytmpd is now a sync daemon (not a command server)
 - Playback handled by MPD (not ytmpd)
-- Use mpc for playback control (not ytmpctl)
+- Use mpc for playback control (not xmpctl)
 - YouTube playlists appear as MPD playlists
 
 ## Migration Steps
@@ -1368,7 +1368,7 @@ Create `docs/MIGRATION.md`:
 
 ## Breaking Changes
 
-- ytmpctl play/pause/next removed (use mpc)
+- xmpctl play/pause/next removed (use mpc)
 - Socket protocol changed (now sync-focused)
 - State file format changed
 
@@ -1388,12 +1388,12 @@ Add to README troubleshooting section:
 ### Daemon won't start
 - Check MPD is running: `mpc status`
 - Check MPD socket path: `ls ~/.config/mpd/socket`
-- Check logs: `tail -f ~/.config/ytmpd/ytmpd.log`
+- Check logs: `tail -f ~/.config/xmpd/xmpd.log`
 
 ### No playlists in MPD
-- Check sync status: `ytmpctl status`
-- Trigger manual sync: `ytmpctl sync`
-- Check YouTube auth: `ls ~/.config/ytmpd/browser.json`
+- Check sync status: `xmpctl status`
+- Trigger manual sync: `xmpctl sync`
+- Check YouTube auth: `ls ~/.config/xmpd/browser.json`
 
 ### Playback not working
 - Check MPD status: `mpc status`
@@ -1403,7 +1403,7 @@ Add to README troubleshooting section:
 ### Stream URLs expired
 - URLs expire after ~6 hours
 - Daemon re-syncs periodically
-- Manual sync: `ytmpctl sync`
+- Manual sync: `xmpctl sync`
 ```
 
 **5. Example Configs**
@@ -1411,11 +1411,11 @@ Add to README troubleshooting section:
 Update `examples/config.yaml`:
 ```yaml
 # YouTube Music auth
-auth_file: ~/.config/ytmpd/browser.json
+auth_file: ~/.config/xmpd/browser.json
 
 # Logging
 log_level: INFO
-log_file: ~/.config/ytmpd/ytmpd.log
+log_file: ~/.config/xmpd/xmpd.log
 
 # MPD integration
 mpd_socket_path: ~/.config/mpd/socket
@@ -1438,8 +1438,8 @@ bindsym $mod+Shift+p exec --no-startup-id killall -SIGUSR1 i3blocks
 ```
 
 Update `examples/i3blocks-config`:
-- May need to point to MPD status instead of ytmpd-status
-- Or update bin/ytmpd-status to read MPD status
+- May need to point to MPD status instead of xmpd-status
+- Or update bin/xmpd-status to read MPD status
 
 **6. Performance Testing**
 
@@ -1560,7 +1560,7 @@ Phases 2, 3, 4 can be worked on in parallel after Phase 1 completes.
 
 ### Configuration
 
-- All config in `~/.config/ytmpd/config.yaml`
+- All config in `~/.config/xmpd/config.yaml`
 - Loaded via `ytmpd/config.py`
 - Sensible defaults for all fields
 - Validate on load (fail fast)
@@ -1609,11 +1609,11 @@ Phases 2, 3, 4 can be worked on in parallel after Phase 1 completes.
 
 ```yaml
 # YouTube Music settings
-auth_file: ~/.config/ytmpd/browser.json
+auth_file: ~/.config/xmpd/browser.json
 
 # Logging
 log_level: INFO
-log_file: ~/.config/ytmpd/ytmpd.log
+log_file: ~/.config/xmpd/xmpd.log
 
 # MPD Integration
 mpd_socket_path: ~/.config/mpd/socket

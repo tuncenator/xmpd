@@ -1,4 +1,4 @@
-# Phase 6: Client CLI (ytmpctl) - Summary
+# Phase 6: Client CLI (xmpctl) - Summary
 
 **Date Completed:** 2025-10-17
 **Completed By:** AI Agent (Sonnet 4.5)
@@ -16,7 +16,7 @@ Implement the command-line client that users interact with to control the daemon
 
 ### What Was Built
 
-- Created complete ytmpctl command-line client with full command set
+- Created complete xmpctl command-line client with full command set
 - Implemented Unix socket communication to daemon
 - Built response parsing and output formatting for all commands
 - Added comprehensive error handling for all failure scenarios
@@ -25,11 +25,11 @@ Implement the command-line client that users interact with to control the daemon
 
 ### Files Created
 
-None (ytmpctl placeholder already existed from Phase 1)
+None (xmpctl placeholder already existed from Phase 1)
 
 ### Files Modified
 
-- `bin/ytmpctl` - Complete rewrite from placeholder to full functional client (256 lines)
+- `bin/xmpctl` - Complete rewrite from placeholder to full functional client (256 lines)
 
 ### Key Design Decisions
 
@@ -50,7 +50,7 @@ None (ytmpctl placeholder already existed from Phase 1)
 
 5. **Command Dispatch**: Used simple if/elif chain in main() for command routing. Clear, straightforward, easy to debug.
 
-6. **Socket Path**: Hardcoded default path matching config.py (`~/.config/ytmpd/socket`). Keeps client simple - no need to parse config files.
+6. **Socket Path**: Hardcoded default path matching config.py (`~/.config/xmpd/socket`). Keeps client simple - no need to parse config files.
 
 7. **Help System**: Supports `help`, `--help`, and `-h` flags. Shows complete usage with examples.
 
@@ -87,8 +87,8 @@ No automated tests written for the client in this phase. The client is a simple 
 ### Manual Testing
 
 Tested functionality:
-- `bin/ytmpctl help` - ✅ Displays help text correctly
-- `bin/ytmpctl status` (daemon not running) - ✅ Shows appropriate error message
+- `bin/xmpctl help` - ✅ Displays help text correctly
+- `bin/xmpctl status` (daemon not running) - ✅ Shows appropriate error message
 - Socket path detection - ✅ Correctly identifies missing socket file
 - Error message formatting - ✅ Clear, helpful messages with instructions
 
@@ -98,23 +98,23 @@ Tested functionality:
 
 Client commands tested:
 ```bash
-$ bin/ytmpctl help
-ytmpctl - Control ytmpd daemon
+$ bin/xmpctl help
+xmpctl - Control ytmpd daemon
 
 Usage:
-  ytmpctl play <query>     Search and play a song
-  ytmpctl pause            Pause playback
-  ytmpctl resume           Resume playback
-  ytmpctl stop             Stop playback
-  ytmpctl next             Next song
-  ytmpctl prev             Previous song
-  ytmpctl status           Show current status
-  ytmpctl search <query>   Search for songs
-  ytmpctl queue            Show queue
-  ytmpctl help             Show this help message
+  xmpctl play <query>     Search and play a song
+  xmpctl pause            Pause playback
+  xmpctl resume           Resume playback
+  xmpctl stop             Stop playback
+  xmpctl next             Next song
+  xmpctl prev             Previous song
+  xmpctl status           Show current status
+  xmpctl search <query>   Search for songs
+  xmpctl queue            Show queue
+  xmpctl help             Show this help message
 ...
 
-$ bin/ytmpctl status
+$ bin/xmpctl status
 Error: ytmpd daemon is not running
 Start the daemon with: python -m ytmpd
 ```
@@ -167,15 +167,15 @@ Code follows project standards:
 
 ### Unblocked Phases
 
-- Phase 7: i3blocks Integration (can now use ytmpctl to query status)
+- Phase 7: i3blocks Integration (can now use xmpctl to query status)
 
 ---
 
 ## Notes for Future Phases
 
-1. **i3blocks Integration**: Phase 7 should use `bin/ytmpctl status` to get current playback state. The status output is already well-formatted for parsing.
+1. **i3blocks Integration**: Phase 7 should use `bin/xmpctl status` to get current playback state. The status output is already well-formatted for parsing.
 
-2. **Installation**: Phase 9 should ensure `bin/ytmpctl` is added to PATH or symlinked to `~/.local/bin/ytmpctl` for easy access.
+2. **Installation**: Phase 9 should ensure `bin/xmpctl` is added to PATH or symlinked to `~/.local/bin/xmpctl` for easy access.
 
 3. **Configuration**: Currently uses hardcoded socket path. If custom socket paths become important in Phase 9, consider adding config file reading to client (but keep it simple).
 
@@ -198,7 +198,7 @@ Code follows project standards:
 
 - **Socket Protocol**: Implements client side of protocol defined in Phase 4 (SocketServer)
 - **Command Set**: Matches exactly with commands implemented in Phase 5 (Daemon)
-- **Socket Path**: Uses same default path as config.py (`~/.config/ytmpd/socket`)
+- **Socket Path**: Uses same default path as config.py (`~/.config/xmpd/socket`)
 - **Error Messages**: Daemon errors are passed through and displayed to user
 
 ---
@@ -229,7 +229,7 @@ Future enhancements to consider:
 
 ## Security Considerations
 
-- **Socket Path**: Uses standard XDG path (~/.config/ytmpd/socket) which is user-specific
+- **Socket Path**: Uses standard XDG path (~/.config/xmpd/socket) which is user-specific
 - **No Authentication**: Client assumes socket connection = authorized (standard Unix socket security model)
 - **Error Messages**: Error messages from daemon are displayed as-is - should not contain sensitive info
 - **Input Sanitization**: All user input is passed directly to daemon as protocol strings - daemon is responsible for validation
@@ -244,10 +244,10 @@ Future enhancements to consider:
 1. Fix OAuth credentials configuration (Phase 2/5 integration issue)
 2. Test full command set with running daemon
 3. Proceed to Phase 7: i3blocks Integration
-4. Phase 7 can use `bin/ytmpctl status` to get playback information
+4. Phase 7 can use `bin/xmpctl status` to get playback information
 
 **Notes for Phase 7:**
-- ytmpctl is ready to use as the communication layer
+- xmpctl is ready to use as the communication layer
 - Status output is easy to parse (key: value format)
 - Handle daemon-not-running case gracefully in i3blocks script
 
@@ -282,13 +282,13 @@ All completion criteria met. Client CLI is fully functional with all required co
 
 **Playing a song:**
 ```bash
-$ bin/ytmpctl play oasis wonderwall
+$ bin/xmpctl play oasis wonderwall
 Playing: Wonderwall by Oasis
 ```
 
 **Checking status:**
 ```bash
-$ bin/ytmpctl status
+$ bin/xmpctl status
 State: playing
 Song: Wonderwall
 Artist: Oasis
@@ -299,7 +299,7 @@ Queue: 3 song(s)
 
 **Searching:**
 ```bash
-$ bin/ytmpctl search the beatles
+$ bin/xmpctl search the beatles
 1. Here Comes The Sun - The Beatles [3:05] (KQetemT1sWc)
 2. Let It Be - The Beatles [3:50] (QDYfEBY9NM4)
 ...
@@ -307,7 +307,7 @@ $ bin/ytmpctl search the beatles
 
 **Error handling:**
 ```bash
-$ bin/ytmpctl status
+$ bin/xmpctl status
 Error: ytmpd daemon is not running
 Start the daemon with: python -m ytmpd
 ```
@@ -359,7 +359,7 @@ Start the daemon with: python -m ytmpd
   - Simplified `__init__` and `_init_client` methods
   - Replaced `setup_oauth()` with `setup_browser()` method
   - Updated CLI entry point to use `setup-browser` command
-- Created `~/.config/ytmpd/browser.json` with browser request headers
+- Created `~/.config/xmpd/browser.json` with browser request headers
 - Tested all client commands with running daemon - all working perfectly
 
 **Reason**: ytmusicapi v1.11.1 has known issues with OAuth authentication causing HTTP 400 errors ("Server returned HTTP 400: Bad Request"). Browser-based authentication is more reliable, lasts ~2 years, and is the recommended approach per ytmusicapi documentation.
@@ -382,16 +382,16 @@ Revisited Phase 6 to enable full integration testing with running daemon. Discov
 **Test Results Summary**:
 ```bash
 # Search - Working ✓
-$ bin/ytmpctl search wonderwall oasis
+$ bin/xmpctl search wonderwall oasis
 1. Wonderwall - Oasis [4:19] (rj5wZqReXQE)
 ... (20 results)
 
 # Play by video ID - Working ✓
-$ bin/ytmpctl play rj5wZqReXQE
+$ bin/xmpctl play rj5wZqReXQE
 Playing: Wonderwall by Oasis
 
 # Status - Working ✓ (with position tracking)
-$ bin/ytmpctl status
+$ bin/xmpctl status
 State: playing
 Song: Wonderwall
 Artist: Oasis
@@ -400,13 +400,13 @@ Time: 0:12/4:19
 Queue: 0 song(s)
 
 # Pause/Resume - Working ✓
-$ bin/ytmpctl pause
+$ bin/xmpctl pause
 Paused
 
-$ bin/ytmpctl resume
+$ bin/xmpctl resume
 Resumed
 
 # Play by search query - Working ✓
-$ bin/ytmpctl play "the beatles hey jude"
+$ bin/xmpctl play "the beatles hey jude"
 Playing: Hey Jude by The Beatles
 ```

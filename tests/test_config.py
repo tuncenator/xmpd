@@ -1,4 +1,4 @@
-"""Tests for ytmpd.config module."""
+"""Tests for xmpd.config module."""
 
 import tempfile
 from pathlib import Path
@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from ytmpd.config import get_config_dir, load_config
+from xmpd.config import get_config_dir, load_config
 
 
 class TestGetConfigDir:
@@ -16,7 +16,7 @@ class TestGetConfigDir:
     def test_get_config_dir_returns_correct_path(self) -> None:
         """Test that get_config_dir returns the expected path."""
         config_dir = get_config_dir()
-        expected_path = Path.home() / ".config" / "ytmpd"
+        expected_path = Path.home() / ".config" / "xmpd"
         assert config_dir == expected_path
 
 
@@ -26,9 +26,9 @@ class TestLoadConfig:
     def test_load_config_creates_directory_if_missing(self) -> None:
         """Test that load_config creates config directory if it doesn't exist."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 # Check that directory was created
@@ -38,9 +38,9 @@ class TestLoadConfig:
     def test_load_config_returns_defaults_when_no_file_exists(self) -> None:
         """Test that load_config returns default config when file doesn't exist."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 # Check default values
@@ -53,9 +53,9 @@ class TestLoadConfig:
     def test_load_config_creates_default_config_file(self) -> None:
         """Test that load_config creates a config file with defaults."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 load_config()
 
                 config_file = mock_config_dir / "config.yaml"
@@ -70,7 +70,7 @@ class TestLoadConfig:
     def test_load_config_reads_existing_config_file(self) -> None:
         """Test that load_config reads from existing config file."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -82,7 +82,7 @@ class TestLoadConfig:
             with open(config_file, "w") as f:
                 yaml.safe_dump(custom_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 # Check that custom values are loaded
@@ -95,7 +95,7 @@ class TestLoadConfig:
     def test_load_config_merges_user_config_with_defaults(self) -> None:
         """Test that user config values override defaults but missing keys use defaults."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -107,7 +107,7 @@ class TestLoadConfig:
             with open(config_file, "w") as f:
                 yaml.safe_dump(partial_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 # Custom value should override
@@ -115,12 +115,12 @@ class TestLoadConfig:
                 # Default values should be present
                 assert config["socket_path"] == str(mock_config_dir / "socket")
                 assert config["state_file"] == str(mock_config_dir / "state.json")
-                assert config["log_file"] == str(mock_config_dir / "ytmpd.log")
+                assert config["log_file"] == str(mock_config_dir / "xmpd.log")
 
     def test_load_config_handles_corrupted_file_gracefully(self) -> None:
         """Test that load_config falls back to defaults if config file is corrupted."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -128,7 +128,7 @@ class TestLoadConfig:
             with open(config_file, "w") as f:
                 f.write("invalid: yaml: content: [unclosed")
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 # Should return defaults
@@ -142,9 +142,9 @@ class TestMPDConfigFields:
     def test_load_config_includes_mpd_defaults(self) -> None:
         """Test that load_config includes MPD field defaults."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 # Check MPD defaults are present
@@ -163,7 +163,7 @@ class TestMPDConfigFields:
     def test_mpd_socket_path_expansion(self) -> None:
         """Test that ~ is expanded in mpd_socket_path."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -174,7 +174,7 @@ class TestMPDConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(custom_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 # Check that ~ was expanded
@@ -185,7 +185,7 @@ class TestMPDConfigFields:
     def test_sync_interval_validation_positive(self) -> None:
         """Test that sync_interval_minutes must be positive."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -196,14 +196,14 @@ class TestMPDConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(invalid_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(ValueError, match="sync_interval_minutes must be a positive"):
                     load_config()
 
     def test_sync_interval_validation_zero(self) -> None:
         """Test that sync_interval_minutes cannot be zero."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -214,14 +214,14 @@ class TestMPDConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(invalid_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(ValueError, match="sync_interval_minutes must be a positive"):
                     load_config()
 
     def test_stream_cache_hours_validation_positive(self) -> None:
         """Test that stream_cache_hours must be positive."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -232,14 +232,14 @@ class TestMPDConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(invalid_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(ValueError, match="stream_cache_hours must be a positive"):
                     load_config()
 
     def test_playlist_prefix_empty_string_allowed(self) -> None:
         """Test that playlist_prefix can be an empty string."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -250,14 +250,14 @@ class TestMPDConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(custom_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
                 assert config["playlist_prefix"] == ""
 
     def test_playlist_prefix_must_be_string(self) -> None:
         """Test that playlist_prefix must be a string."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -268,14 +268,14 @@ class TestMPDConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(invalid_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(ValueError, match="playlist_prefix must be a string"):
                     load_config()
 
     def test_enable_auto_sync_must_be_boolean(self) -> None:
         """Test that enable_auto_sync must be a boolean."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -286,14 +286,14 @@ class TestMPDConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(invalid_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(ValueError, match="enable_auto_sync must be a boolean"):
                     load_config()
 
     def test_old_config_without_mpd_fields_still_loads(self) -> None:
         """Test backward compatibility: old configs without MPD fields still load."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -306,7 +306,7 @@ class TestMPDConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(old_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 # Old fields preserved
@@ -322,7 +322,7 @@ class TestMPDConfigFields:
     def test_large_sync_interval_allowed(self) -> None:
         """Test that very large sync intervals are allowed."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -333,7 +333,7 @@ class TestMPDConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(custom_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
                 assert config["sync_interval_minutes"] == 10080
 
@@ -344,9 +344,9 @@ class TestRadioConfigFields:
     def test_load_config_includes_radio_playlist_limit_default(self) -> None:
         """Test that load_config includes radio_playlist_limit default value."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 # Check default value
@@ -359,7 +359,7 @@ class TestRadioConfigFields:
 
         for value in valid_values:
             with tempfile.TemporaryDirectory() as tmpdir:
-                mock_config_dir = Path(tmpdir) / "ytmpd"
+                mock_config_dir = Path(tmpdir) / "xmpd"
                 mock_config_dir.mkdir(parents=True)
 
                 config_file = mock_config_dir / "config.yaml"
@@ -370,14 +370,14 @@ class TestRadioConfigFields:
                 with open(config_file, "w") as f:
                     yaml.safe_dump(custom_config, f)
 
-                with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+                with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                     config = load_config()
                     assert config["radio_playlist_limit"] == value
 
     def test_radio_playlist_limit_below_minimum(self) -> None:
         """Test that radio_playlist_limit below 10 raises ValueError."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -388,7 +388,7 @@ class TestRadioConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(invalid_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(
                     ValueError,
                     match="radio_playlist_limit must be an integer between 10 and 50",
@@ -398,7 +398,7 @@ class TestRadioConfigFields:
     def test_radio_playlist_limit_above_maximum(self) -> None:
         """Test that radio_playlist_limit above 50 raises ValueError."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -409,7 +409,7 @@ class TestRadioConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(invalid_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(
                     ValueError,
                     match="radio_playlist_limit must be an integer between 10 and 50",
@@ -419,7 +419,7 @@ class TestRadioConfigFields:
     def test_radio_playlist_limit_not_integer(self) -> None:
         """Test that radio_playlist_limit must be an integer."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -430,7 +430,7 @@ class TestRadioConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(invalid_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(
                     ValueError,
                     match="radio_playlist_limit must be an integer between 10 and 50",
@@ -440,7 +440,7 @@ class TestRadioConfigFields:
     def test_radio_playlist_limit_float_rejected(self) -> None:
         """Test that radio_playlist_limit rejects float values."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -451,7 +451,7 @@ class TestRadioConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(invalid_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(
                     ValueError,
                     match="radio_playlist_limit must be an integer between 10 and 50",
@@ -461,7 +461,7 @@ class TestRadioConfigFields:
     def test_old_config_without_radio_field_still_loads(self) -> None:
         """Test backward compatibility: old configs without radio_playlist_limit still load."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
 
             config_file = mock_config_dir / "config.yaml"
@@ -474,7 +474,7 @@ class TestRadioConfigFields:
             with open(config_file, "w") as f:
                 yaml.safe_dump(old_config, f)
 
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 # Old fields preserved

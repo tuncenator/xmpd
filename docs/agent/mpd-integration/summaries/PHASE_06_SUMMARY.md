@@ -46,7 +46,7 @@ Transform ytmpd from a socket-based command server to a sync daemon that periodi
 
 - **Threading vs Asyncio**: Used threading.Thread for sync loop and socket listener instead of asyncio. This simplifies the code and matches the synchronous nature of sync operations.
 
-- **State Persistence**: Stores sync state in JSON format at `~/.config/ytmpd/sync_state.json` including last sync time, results, and statistics. This allows status reporting and daemon restart recovery.
+- **State Persistence**: Stores sync state in JSON format at `~/.config/xmpd/sync_state.json` including last sync time, results, and statistics. This allows status reporting and daemon restart recovery.
 
 - **Socket Protocol**: Simple text-based protocol (commands like "sync", "status", "list") with JSON responses. Much simpler than the old protocol and sufficient for sync operations.
 
@@ -184,9 +184,9 @@ All tests pass. Code follows ruff configuration from pyproject.toml. Type hints 
 
 ## Notes for Future Phases
 
-- **Daemon Control**: Use `~/.config/ytmpd/sync_socket` for sending commands. Protocol is simple text (command name) with JSON responses.
+- **Daemon Control**: Use `~/.config/xmpd/sync_socket` for sending commands. Protocol is simple text (command name) with JSON responses.
 
-- **State File**: `~/.config/ytmpd/sync_state.json` contains sync history. Phase 7 (CLI) should read this for status display.
+- **State File**: `~/.config/xmpd/sync_state.json` contains sync history. Phase 7 (CLI) should read this for status display.
 
 - **Socket Commands**: Currently supports: sync (trigger), status (get state), list (get playlists), quit (shutdown). Phase 7 CLI will use these.
 
@@ -231,7 +231,7 @@ None identified in this phase.
 
 ## Security Considerations
 
-- Unix socket located at `~/.config/ytmpd/sync_socket` with default permissions
+- Unix socket located at `~/.config/xmpd/sync_socket` with default permissions
 - No authentication on socket (relies on file system permissions)
 - State file contains sync statistics but no sensitive data (no auth tokens)
 - Signal handlers use standard signal module (no security concerns)
@@ -244,10 +244,10 @@ None identified in this phase.
 **Next Phase:** Phase 7: CLI Migration
 
 **Recommended Actions:**
-1. Proceed to Phase 7 to refactor ytmpctl for sync-specific commands
+1. Proceed to Phase 7 to refactor xmpctl for sync-specific commands
 2. Phase 7 will use the sync_socket protocol implemented here
 3. Remove playback commands from CLI (users will use mpc instead)
-4. Add sync, status, and list-playlists commands to ytmpctl
+4. Add sync, status, and list-playlists commands to xmpctl
 
 ---
 
@@ -269,7 +269,7 @@ import json
 
 # Connect to daemon
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect("/home/user/.config/ytmpd/sync_socket")
+sock.connect("/home/user/.config/xmpd/sync_socket")
 
 # Send sync command
 sock.sendall(b"sync\n")

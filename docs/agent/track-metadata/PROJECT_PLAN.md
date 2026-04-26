@@ -112,7 +112,7 @@ YouTube Music API → ytmpd sync daemon → M3U files (with proxy URLs)
 2. **Track Mapping Storage** (`ytmpd/track_store.py`): SQLite database for `video_id → (url, artist, title)` mapping
 3. **MPD Client Modification** (`ytmpd/mpd_client.py`): Update `create_or_replace_playlist()` to generate proxy URLs
 4. **Daemon Integration** (`ytmpd/daemon.py`): Start/stop proxy server alongside sync daemon
-5. **Configuration** (`~/.config/ytmpd/config.yaml`): Proxy settings (port, host, database path)
+5. **Configuration** (`~/.config/xmpd/config.yaml`): Proxy settings (port, host, database path)
 
 ### Data Flow
 
@@ -341,7 +341,7 @@ For inline metadata updates (if supported by MPD client):
 - **ICY metadata format**: Research Icecast/Shoutcast protocol for proper header format
 - **Chunk size**: 8KB chunks balance memory usage and performance
 - **Connection handling**: Use async context managers for proper cleanup
-- **Database path**: Default to `~/.config/ytmpd/track_mapping.db`
+- **Database path**: Default to `~/.config/xmpd/track_mapping.db`
 - **Port conflicts**: Server should fail gracefully if port already in use
 - **Future phases** will integrate this with the daemon lifecycle and sync engine
 
@@ -357,7 +357,7 @@ For inline metadata updates (if supported by MPD client):
 
 1. Modified `ytmpd/mpd_client.py` - Update `create_or_replace_playlist()` to use proxy URLs
 2. Modified `ytmpd/daemon.py` - Start/stop ICY proxy alongside sync daemon
-3. Modified `~/.config/ytmpd/config.yaml` - Add proxy configuration
+3. Modified `~/.config/xmpd/config.yaml` - Add proxy configuration
 4. Integration between sync engine and TrackStore (save mappings during sync)
 
 #### Detailed Requirements
@@ -477,7 +477,7 @@ class YTMPDaemon:
         """
 ```
 
-**Modification 4: `ytmpd/config.py` and `~/.config/ytmpd/config.yaml`**
+**Modification 4: `ytmpd/config.py` and `~/.config/xmpd/config.yaml`**
 
 Add proxy configuration fields:
 
@@ -486,7 +486,7 @@ Add proxy configuration fields:
 proxy_enabled: true
 proxy_host: localhost
 proxy_port: 8080
-proxy_track_mapping_db: ~/.config/ytmpd/track_mapping.db
+proxy_track_mapping_db: ~/.config/xmpd/track_mapping.db
 ```
 
 Update Config dataclass:
@@ -499,7 +499,7 @@ class Config:
     proxy_enabled: bool = True
     proxy_host: str = "localhost"
     proxy_port: int = 8080
-    proxy_track_mapping_db: str = "~/.config/ytmpd/track_mapping.db"
+    proxy_track_mapping_db: str = "~/.config/xmpd/track_mapping.db"
 ```
 
 **Data Model Update: `Track` dataclass**
@@ -560,7 +560,7 @@ Update all places where Track objects are created to include video_id.
 
 **Manual Testing:**
 - Start ytmpd daemon
-- Run `ytmpctl sync`
+- Run `xmpctl sync`
 - Check M3U files in `~/.config/mpd/playlists/` for proxy URLs
 - Check TrackStore database contains mappings
 - Test proxy request: `curl http://localhost:8080/proxy/{video_id}`
@@ -571,7 +571,7 @@ Update all places where Track objects are created to include video_id.
 - **Backward compatibility**: If proxy_enabled=false, system should work as before (direct URLs)
 - **Configuration migration**: Existing users need to know about new proxy settings
 - **Port conflicts**: Document how to change proxy_port if 8080 is in use
-- **Database location**: Ensure ~/.config/ytmpd/ directory exists before creating database
+- **Database location**: Ensure ~/.config/xmpd/ directory exists before creating database
 
 ---
 
@@ -938,7 +938,7 @@ Environment:
 - [ ] YouTube Music authentication configured
 
 Test Cases:
-- [ ] TC1: Sync playlists (`ytmpctl sync`)
+- [ ] TC1: Sync playlists (`xmpctl sync`)
   - Expected: Sync completes successfully
   - Expected: M3U files in ~/.config/mpd/playlists/ contain proxy URLs
 
@@ -1028,14 +1028,14 @@ into the audio stream. When you load a playlist, MPD receives proxy URLs like
 
 ### Configuration
 
-The proxy is enabled by default. Configure in `~/.config/ytmpd/config.yaml`:
+The proxy is enabled by default. Configure in `~/.config/xmpd/config.yaml`:
 
 ```yaml
 # ICY Proxy Settings
 proxy_enabled: true
 proxy_host: localhost
 proxy_port: 8080
-proxy_track_mapping_db: ~/.config/ytmpd/track_mapping.db
+proxy_track_mapping_db: ~/.config/xmpd/track_mapping.db
 ```
 
 ### Troubleshooting
@@ -1048,7 +1048,7 @@ A: Change proxy_port in config to an available port (e.g., 8081).
 
 **Q: Tracks fail to play after several hours**
 A: YouTube URLs expire after 6 hours. The proxy automatically refreshes them.
-   Run `ytmpctl sync` to manually refresh all URLs.
+   Run `xmpctl sync` to manually refresh all URLs.
 
 **Q: High memory usage**
 A: The proxy streams data without caching, memory usage should be low (<50MB).
@@ -1166,7 +1166,7 @@ Linear dependency chain - each phase builds on the previous.
 
 ### Configuration
 
-- All config in `~/.config/ytmpd/config.yaml` (existing file)
+- All config in `~/.config/xmpd/config.yaml` (existing file)
 - New proxy config section (see Phase 2)
 - Use Config dataclass (existing pattern in ytmpd/config.py)
 - Validate configuration on load (check port range, paths exist)
@@ -1247,7 +1247,7 @@ CREATE INDEX idx_updated_at ON tracks(updated_at);  -- For expiry queries
 proxy_enabled: true          # Enable/disable proxy (bool)
 proxy_host: localhost        # Bind host (string)
 proxy_port: 8080             # Bind port (int, 1024-65535)
-proxy_track_mapping_db: ~/.config/ytmpd/track_mapping.db  # Database path (string)
+proxy_track_mapping_db: ~/.config/xmpd/track_mapping.db  # Database path (string)
 ```
 
 ### Track Dataclass

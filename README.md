@@ -1,4 +1,4 @@
-# ytmpd — YouTube Music → MPD sync daemon
+# xmpd — YouTube Music → MPD sync daemon
 
 A background sync daemon that pulls your YouTube Music library into MPD so you
 can drive playback with standard MPD tooling (`mpc`, `ncmpcpp`, mobile MPD
@@ -6,21 +6,21 @@ clients, i3 keybindings). Optional extras extend it with AirPlay multi-room
 routing via OwnTone.
 
 ```
-YouTube Music  →  ytmpd daemon  →  MPD  →  mpc / ncmpcpp / AirPlay (optional)
+YouTube Music  →  xmpd daemon  →  MPD  →  mpc / ncmpcpp / AirPlay (optional)
 ```
 
 ## Features
 
 - **Playlist sync** — pulls your YouTube Music playlists into MPD on a timer
-  and on demand (`ytmpctl sync`). Playlists appear as `YT: <name>`.
+  and on demand (`xmpctl sync`). Playlists appear as `YT: <name>`.
 - **XSPF playlists** — optional format that gives MPD separate artist/title
   fields and duration, for proper ncmpcpp display.
 - **Radio** — generate a personalised radio playlist seeded from the current
-  track (`ytmpctl radio`).
+  track (`xmpctl radio`).
 - **Search** — interactive search across YouTube Music with play/enqueue/radio
-  actions (`ytmpctl search`).
+  actions (`xmpctl search`).
 - **Likes / dislikes** — toggle ratings from any MPD environment; changes sync
-  back to YouTube Music (`ytmpctl like|dislike`).
+  back to YouTube Music (`xmpctl like|dislike`).
 - **Like indicator** — visually tag liked tracks inside playlists (e.g.
   `Artist - Title [+1]`).
 - **History reporting** — feed completed plays back to YouTube Music so its
@@ -55,8 +55,8 @@ mpc status  # sanity check
 ## Installation
 
 ```bash
-git clone <repo> ytmpd
-cd ytmpd
+git clone <repo> xmpd
+cd xmpd
 uv venv
 source .venv/bin/activate
 uv pip install -e ".[dev]"
@@ -64,25 +64,25 @@ uv pip install -e ".[dev]"
 
 ## Authentication
 
-ytmpd needs a YouTube Music session. Two options:
+xmpd needs a YouTube Music session. Two options:
 
 ### One-shot browser headers
 
 ```bash
-python -m ytmpd.ytmusic setup-browser
+python -m xmpd.ytmusic setup-browser
 ```
 
 Follow the prompts: log in to YouTube Music in your browser, open devtools →
 Network, copy request headers from any `music.youtube.com` call, paste in. This
-writes `~/.config/ytmpd/browser.json` and is good for ~2 years.
+writes `~/.config/xmpd/browser.json` and is good for ~2 years.
 
 ### Auto-auth (recommended)
 
-Let ytmpd rebuild `browser.json` periodically from your Firefox cookie
+Let xmpd rebuild `browser.json` periodically from your Firefox cookie
 database:
 
 ```yaml
-# ~/.config/ytmpd/config.yaml
+# ~/.config/xmpd/config.yaml
 auto_auth:
   enabled: true
   browser: firefox-dev   # or "firefox"
@@ -94,7 +94,7 @@ auto_auth:
 Trigger a one-off extraction without the daemon:
 
 ```bash
-ytmpctl auth --auto
+xmpctl auth --auto
 ```
 
 If cookies go stale (cleared data, logged out, browser long unused) you'll get
@@ -107,27 +107,27 @@ into YouTube Music in Firefox and the next refresh cycle will pick it up.
 
 ```bash
 source .venv/bin/activate
-python -m ytmpd &
+python -m xmpd &
 ```
 
-On startup ytmpd runs an initial sync, then auto-syncs every
+On startup xmpd runs an initial sync, then auto-syncs every
 `sync_interval_minutes` (default 30). Logs land in
-`~/.config/ytmpd/ytmpd.log`.
+`~/.config/xmpd/xmpd.log`.
 
-### `ytmpctl`
+### `xmpctl`
 
-`ytmpctl` drives the daemon for everything except playback:
+`xmpctl` drives the daemon for everything except playback:
 
 | Command                   | What it does |
 |---------------------------|--------------|
-| `ytmpctl sync`            | Force an immediate sync |
-| `ytmpctl status`          | Sync state + stats |
-| `ytmpctl list-playlists`  | List YouTube Music playlists |
-| `ytmpctl search`          | Interactive search (play / enqueue / radio) |
-| `ytmpctl radio [--apply]` | Radio from current track; `--apply` also loads & plays |
-| `ytmpctl like`            | Toggle like on the currently playing track |
-| `ytmpctl dislike`         | Toggle dislike on the currently playing track |
-| `ytmpctl auth --auto`     | One-off Firefox cookie extraction |
+| `xmpctl sync`            | Force an immediate sync |
+| `xmpctl status`          | Sync state + stats |
+| `xmpctl list-playlists`  | List YouTube Music playlists |
+| `xmpctl search`          | Interactive search (play / enqueue / radio) |
+| `xmpctl radio [--apply]` | Radio from current track; `--apply` also loads & plays |
+| `xmpctl like`            | Toggle like on the currently playing track |
+| `xmpctl dislike`         | Toggle dislike on the currently playing track |
+| `xmpctl auth --auto`     | One-off Firefox cookie extraction |
 
 ### Playback via `mpc`
 
@@ -137,8 +137,8 @@ mpc play
 mpc next / mpc prev / mpc toggle / mpc stop
 ```
 
-Stream URLs expire after ~6 hours; ytmpd caches them for 5 hours and refreshes
-on the next sync cycle. If a track fails to play, run `ytmpctl sync`.
+Stream URLs expire after ~6 hours; xmpd caches them for 5 hours and refreshes
+on the next sync cycle. If a track fails to play, run `xmpctl sync`.
 
 ## Radio & search
 
@@ -146,8 +146,8 @@ on the next sync cycle. If a track fails to play, run `ytmpctl sync`.
 YouTube Music track:
 
 ```bash
-ytmpctl radio            # write to ~/Music/_youtube/YT: Radio.xspf
-ytmpctl radio --apply    # write + load + play
+xmpctl radio            # write to ~/Music/_youtube/YT: Radio.xspf
+xmpctl radio --apply    # write + load + play
 ```
 
 Configurable via `radio_playlist_limit` (10–50).
@@ -155,7 +155,7 @@ Configurable via `radio_playlist_limit` (10–50).
 **Search** offers fuzzy search with inline actions:
 
 ```bash
-$ ytmpctl search
+$ xmpctl search
 Search YouTube Music:
 > miles davis kind of blue
   1. So What - Miles Davis (9:22)
@@ -168,8 +168,8 @@ Actions: 1) Play now  2) Add to queue  3) Start radio  4) Cancel
 ## Likes & dislikes
 
 ```bash
-ytmpctl like        # toggle like on current track
-ytmpctl dislike     # toggle dislike on current track
+xmpctl like        # toggle like on current track
+xmpctl dislike     # toggle dislike on current track
 ```
 
 Behaviour is idempotent per direction and cross-cancels the opposite rating:
@@ -229,7 +229,7 @@ Two formats are supported; set `playlist_format` in config:
 
 `extras/airplay-bridge/` ships a complete AirPlay stack built on
 [OwnTone](https://owntone.github.io/owntone-server/). It's independent of the
-ytmpd daemon — install it only if you want multi-room AirPlay + proper
+xmpd daemon — install it only if you want multi-room AirPlay + proper
 metadata on your receivers.
 
 **What you get:**
@@ -272,8 +272,8 @@ bindsym $mod+Shift+n exec --no-startup-id mpc next
 bindsym $mod+Shift+b exec --no-startup-id mpc prev
 
 # Ratings
-bindsym $mod+plus  exec --no-startup-id ytmpctl like
-bindsym $mod+minus exec --no-startup-id ytmpctl dislike
+bindsym $mod+plus  exec --no-startup-id xmpctl like
+bindsym $mod+minus exec --no-startup-id xmpctl dislike
 
 # Refresh i3blocks after a control change
 bindsym $mod+Shift+p exec --no-startup-id killall -SIGUSR1 i3blocks
@@ -282,8 +282,8 @@ bindsym $mod+Shift+p exec --no-startup-id killall -SIGUSR1 i3blocks
 ### i3blocks status
 
 ```ini
-[ytmpd]
-command=/path/to/ytmpd/bin/ytmpd-status
+[xmpd]
+command=/path/to/xmpd/bin/xmpd-status
 interval=5
 separator_block_width=15
 ```
@@ -301,7 +301,7 @@ See `examples/i3blocks.conf` for a full setup.
 
 ## Configuration
 
-Config lives at `~/.config/ytmpd/config.yaml` and is created with defaults on
+Config lives at `~/.config/xmpd/config.yaml` and is created with defaults on
 first run. Full documentation of every option is in
 [`examples/config.yaml`](examples/config.yaml). Key settings:
 
@@ -323,16 +323,16 @@ first run. Full documentation of every option is in
 ### Daemon won't start
 
 - `mpc status` — is MPD up? `systemctl --user start mpd` if not.
-- `ls ~/.config/mpd/socket` — does the socket ytmpd targets actually exist?
-- `ls ~/.config/ytmpd/browser.json` — auth file present? Run `python -m
-  ytmpd.ytmusic setup-browser` or `ytmpctl auth --auto`.
-- `tail -f ~/.config/ytmpd/ytmpd.log`.
+- `ls ~/.config/mpd/socket` — does the socket xmpd targets actually exist?
+- `ls ~/.config/xmpd/browser.json` — auth file present? Run `python -m
+  xmpd.ytmusic setup-browser` or `xmpctl auth --auto`.
+- `tail -f ~/.config/xmpd/xmpd.log`.
 
 ### No playlists in MPD
 
-- `ytmpctl sync` then `ytmpctl status` — did it succeed?
+- `xmpctl sync` then `xmpctl status` — did it succeed?
 - `mpc lsplaylists | grep '^YT:'` — are they actually there under the prefix?
-- `grep ERROR ~/.config/ytmpd/ytmpd.log`.
+- `grep ERROR ~/.config/xmpd/xmpd.log`.
 
 ### Playback silent
 
@@ -344,24 +344,24 @@ first run. Full documentation of every option is in
 ### Stream URLs expired
 
 YouTube URLs die at ~6 hours. The daemon refreshes them on every sync cycle;
-force one with `ytmpctl sync`.
+force one with `xmpctl sync`.
 
 ### Authentication failures
 
 - With auto-auth on: check you're still logged into YouTube Music in Firefox,
-  then `ytmpctl auth --auto` to force a cookie re-extract.
-- Without: re-run `python -m ytmpd.ytmusic setup-browser` and paste fresh
+  then `xmpctl auth --auto` to force a cookie re-extract.
+- Without: re-run `python -m xmpd.ytmusic setup-browser` and paste fresh
   headers.
 
 ### i3blocks stale
 
 - `killall -SIGUSR1 i3blocks` forces a refresh.
-- `bin/ytmpd-status` directly to check the script output.
-- `chmod +x bin/ytmpd-status` if permissions are off.
+- `bin/xmpd-status` directly to check the script output.
+- `chmod +x bin/xmpd-status` if permissions are off.
 
 ## How it works
 
-MPD doesn't speak YouTube, so ytmpd runs a local HTTP helper on
+MPD doesn't speak YouTube, so xmpd runs a local HTTP helper on
 `localhost:8080` that re-serves each track's yt-dlp-resolved stream with
 injected ICY metadata. Synced playlists point MPD at `http://localhost:8080/
 proxy/<video_id>`; the proxy fetches the upstream audio, prepends ICY headers,
@@ -376,19 +376,19 @@ cached URL if refresh fails.
 
 ```bash
 pytest                                      # full suite
-pytest --cov=ytmpd --cov-report=term-missing
+pytest --cov=xmpd --cov-report=term-missing
 pytest tests/integration/                   # integration only
 
-mypy ytmpd/
-ruff check --fix ytmpd/
-ruff format ytmpd/
+mypy xmpd/
+ruff check --fix xmpd/
+ruff format xmpd/
 ```
 
 ## Project structure
 
 ```
-ytmpd/
-├── ytmpd/                       # Main package
+xmpd/
+├── xmpd/                       # Main package
 │   ├── __main__.py              # Daemon entry point
 │   ├── config.py                # Config load/validate
 │   ├── cookie_extract.py        # Firefox cookie extraction
@@ -405,8 +405,8 @@ ytmpd/
 │   ├── ytmusic.py               # YouTube Music API wrapper
 │   └── exceptions.py            # Custom exceptions
 ├── bin/
-│   ├── ytmpctl                  # Sync / rating / search CLI
-│   └── ytmpd-status             # i3blocks status script
+│   ├── xmpctl                  # Sync / rating / search CLI
+│   └── xmpd-status             # i3blocks status script
 ├── extras/
 │   └── airplay-bridge/          # Optional OwnTone AirPlay stack
 │       ├── install.sh
@@ -424,7 +424,7 @@ ytmpd/
 ## Migration from v1
 
 If you're coming from the old command-server architecture, see
-[`docs/MIGRATION.md`](docs/MIGRATION.md). Summary: ytmpctl is now a sync tool,
+[`docs/MIGRATION.md`](docs/MIGRATION.md). Summary: xmpctl is now a sync tool,
 not a playback tool; MPD owns playback.
 
 ## License

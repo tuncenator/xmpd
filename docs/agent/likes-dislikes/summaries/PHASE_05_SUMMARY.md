@@ -16,7 +16,7 @@ Create comprehensive end-to-end integration tests, verify all toggle state trans
 
 ### What Was Built
 
-This phase delivered a comprehensive integration test suite that validates the complete like/dislike workflow from ytmpctl commands through to YouTube Music API calls:
+This phase delivered a comprehensive integration test suite that validates the complete like/dislike workflow from xmpctl commands through to YouTube Music API calls:
 
 1. **State Transition Tests** - Verified all 6 possible state transitions work correctly
 2. **Error Handling Tests** - Validated proper error handling for 7 different error scenarios
@@ -174,7 +174,7 @@ Performed manual testing with real MPD (localhost:6601) and YouTube Music API:
 
 1. ✅ **Like neutral track:**
    ```
-   $ bin/ytmpctl like
+   $ bin/xmpctl like
    ✓ ✓ Liked: The Doors - Roadhouse Blues
 
    Triggering sync to update playlists...
@@ -183,19 +183,19 @@ Performed manual testing with real MPD (localhost:6601) and YouTube Music API:
 
 2. ✅ **Toggle like off:**
    ```
-   $ bin/ytmpctl like
+   $ bin/xmpctl like
    Removed like: The Doors - Roadhouse Blues
    ```
 
 3. ✅ **Dislike neutral track:**
    ```
-   $ bin/ytmpctl dislike
+   $ bin/xmpctl dislike
    ✗ ✗ Disliked: The Doors - Roadhouse Blues
    ```
 
 4. ✅ **Switch from dislike to like:**
    ```
-   $ bin/ytmpctl like
+   $ bin/xmpctl like
    ✓ ✓ Liked: The Doors - Roadhouse Blues
 
    Triggering sync to update playlists...
@@ -268,7 +268,7 @@ mixed line ending........................................................Passed
 ## Dependencies
 
 ### Required by This Phase
-- **Phase 4: ytmpctl Command Implementation** - Commands tested by integration tests
+- **Phase 4: xmpctl Command Implementation** - Commands tested by integration tests
 - **Phase 3: YouTube Music API Integration** - API methods mocked in tests
 - **Phase 2: Core Toggle Logic & Rating Manager** - State machine tested
 
@@ -306,8 +306,8 @@ mixed line ending........................................................Passed
 - 65 total tests (integration + unit) run in ~12s (includes rate limiting delays)
 
 **Manual Command Performance:**
-- `ytmpctl like`: ~400-800ms (2 API calls + sync trigger)
-- `ytmpctl dislike`: ~400-800ms (2 API calls, no sync)
+- `xmpctl like`: ~400-800ms (2 API calls + sync trigger)
+- `xmpctl dislike`: ~400-800ms (2 API calls, no sync)
 - Response time acceptable for user-triggered commands
 
 ---

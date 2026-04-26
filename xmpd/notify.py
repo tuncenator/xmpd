@@ -1,4 +1,4 @@
-"""Desktop notification helper for ytmpd.
+"""Desktop notification helper for xmpd.
 
 Sends notifications via notify-send when auto-auth refresh fails,
 with rate limiting to prevent spam.
@@ -52,7 +52,7 @@ def send_notification(
                 "--icon",
                 icon,
                 "--app-name",
-                "ytmpd",
+                "xmpd",
                 title,
                 message,
             ],

@@ -4,14 +4,14 @@ Tests for the sync engine module.
 
 from unittest.mock import Mock
 
-from ytmpd.exceptions import (
+from xmpd.exceptions import (
     MPDConnectionError,
     MPDPlaylistError,
     YTMusicAPIError,
 )
-from ytmpd.mpd_client import TrackWithMetadata
-from ytmpd.sync_engine import SyncEngine, SyncPreview, SyncResult
-from ytmpd.ytmusic import Playlist, Track
+from xmpd.mpd_client import TrackWithMetadata
+from xmpd.sync_engine import SyncEngine, SyncPreview, SyncResult
+from xmpd.ytmusic import Playlist, Track
 
 
 class TestSyncEngineInit:

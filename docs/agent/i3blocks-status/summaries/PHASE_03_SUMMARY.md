@@ -30,7 +30,7 @@ None - all changes were additions/modifications to existing files.
 
 ### Files Modified
 
-- `bin/ytmpd-status` - Added 4 new functions and enhanced main() logic
+- `bin/xmpd-status` - Added 4 new functions and enhanced main() logic
   - Added `get_playlist_context()` - retrieves playlist position and adjacent tracks
   - Added `get_sync_status()` - checks if YouTube tracks are resolved in database
   - Added `smart_truncate()` - intelligent truncation preserving artist names
@@ -154,7 +154,7 @@ Tested with live MPD instance on port 6601 with 50-track playlist:
 
 **Test 1: Basic Status with Context**
 ```bash
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ⏸ Dye O - Not from Here [2:41 ▰▰▰▰▱▱▱▱▱▱ 5:31]
 ⏸ Dye O - Not from Here [2:41 ▰▰▰▰▱▱▱▱▱▱ 5:31]
 #FFB84D
@@ -164,7 +164,7 @@ $ bin/ytmpd-status
 
 **Test 2: Last Track Position**
 ```bash
-$ mpc -p 6601 play 50 && bin/ytmpd-status
+$ mpc -p 6601 play 50 && bin/xmpd-status
 ▶ jamesjamesjames - jamesjamesjame… 4:45] [50/50]
 ▶ jamesjamesjames - jamesjamesjame… 4:45] [50/50]
 #FF6B35
@@ -174,7 +174,7 @@ $ mpc -p 6601 play 50 && bin/ytmpd-status
 
 **Test 3: Next Track Display**
 ```bash
-$ YTMPD_STATUS_SHOW_NEXT=true bin/ytmpd-status
+$ YTMPD_STATUS_SHOW_NEXT=true bin/xmpd-status
 ⏸ Dye O - Not from Here [2:41 ▰▰▰▰▱▱▱▱▱▱ 5:31]
 ↓ Tim van Werd - Come Back To Me
 ⏸ Dye O - Not from Here [2:41 ▰▰▰▰▱▱▱▱▱▱ 5:31]
@@ -185,7 +185,7 @@ $ YTMPD_STATUS_SHOW_NEXT=true bin/ytmpd-status
 
 **Test 4: Previous Track Display**
 ```bash
-$ YTMPD_STATUS_SHOW_PREV=true bin/ytmpd-status
+$ YTMPD_STATUS_SHOW_PREV=true bin/xmpd-status
 ⏸ Dye O - Not from Here [2:41 ▰▰▰▰▱▱▱▱▱▱ 5:31]
 ↑ Paige, Nihil Young - Drown
 ⏸ Dye O - Not from Here [2:41 ▰▰▰▰▱▱▱▱▱▱ 5:31]
@@ -195,7 +195,7 @@ $ YTMPD_STATUS_SHOW_PREV=true bin/ytmpd-status
 
 **Test 5: Compact Mode**
 ```bash
-$ YTMPD_STATUS_COMPACT=true bin/ytmpd-status
+$ YTMPD_STATUS_COMPACT=true bin/xmpd-status
 ⏸ Dye O - Not from Here
 ⏸ Dye O - Not from Here
 #FFB84D
@@ -205,7 +205,7 @@ $ YTMPD_STATUS_COMPACT=true bin/ytmpd-status
 
 **Test 6: Smart Truncation**
 ```bash
-$ YTMPD_STATUS_MAX_LENGTH=40 bin/ytmpd-status
+$ YTMPD_STATUS_MAX_LENGTH=40 bin/xmpd-status
 ▶ Dye O - Not from Here …▱▱▱▱▱▱▱▱ 5:31]
 ▶ Dye O - Not from Here …▱▱▱▱▱▱▱▱ 5:31]
 #FF6B35
@@ -387,22 +387,22 @@ Ready for Phase 4.
 
 ```bash
 # Show next track
-$ YTMPD_STATUS_SHOW_NEXT=true bin/ytmpd-status
+$ YTMPD_STATUS_SHOW_NEXT=true bin/xmpd-status
 ▶ Current Artist - Current Title [3:45 █████░░░░░ 7:30]
 ↓ Next Artist - Next Title
 
 # Show both next and prev
-$ YTMPD_STATUS_SHOW_NEXT=true YTMPD_STATUS_SHOW_PREV=true bin/ytmpd-status
+$ YTMPD_STATUS_SHOW_NEXT=true YTMPD_STATUS_SHOW_PREV=true bin/xmpd-status
 ▶ Current Artist - Current Title [3:45 █████░░░░░ 7:30]
 ↑ Prev Artist - Prev Title
 ↓ Next Artist - Next Title
 
 # Compact mode
-$ YTMPD_STATUS_COMPACT=true bin/ytmpd-status
+$ YTMPD_STATUS_COMPACT=true bin/xmpd-status
 ▶ Artist - Title
 
 # Smart truncation
-$ YTMPD_STATUS_MAX_LENGTH=40 bin/ytmpd-status
+$ YTMPD_STATUS_MAX_LENGTH=40 bin/xmpd-status
 ▶ Artist - Very Long Song … Ending [3…
 ```
 

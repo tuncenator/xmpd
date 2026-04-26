@@ -35,7 +35,7 @@ Comprehensive integration tests, update all documentation for the new architectu
   - Architecture overview with flow diagram
   - MPD setup requirements
   - Updated installation instructions
-  - New usage examples (ytmpctl sync + mpc playback)
+  - New usage examples (xmpctl sync + mpc playback)
   - Updated i3 integration (mpc keybindings)
   - Comprehensive troubleshooting section
   - Updated project structure
@@ -338,7 +338,7 @@ class TestPerformanceScenarios:
 - Features
 - Requirements (including MPD)
 - Installation (4 steps)
-- Usage (ytmpctl + mpc)
+- Usage (xmpctl + mpc)
 - i3 Integration
 - Configuration
 - Troubleshooting (6 common scenarios)

@@ -49,19 +49,19 @@ echo "New version: $NEW_VERSION"
 sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" pyproject.toml
 
 # Update __init__.py
-sed -i "s/__version__ = \".*\"/__version__ = \"$NEW_VERSION\"/" ytmpd/__init__.py
+sed -i "s/__version__ = \".*\"/__version__ = \"$NEW_VERSION\"/" xmpd/__init__.py
 
 # Verify changes
 echo ""
 echo "Updated files:"
-git diff pyproject.toml ytmpd/__init__.py
+git diff pyproject.toml xmpd/__init__.py
 
 # Stage, commit, and tag
 echo ""
 read -p "Commit and tag version $NEW_VERSION? (y/N) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    git add pyproject.toml ytmpd/__init__.py
+    git add pyproject.toml xmpd/__init__.py
     git commit -m "$COMMIT_MSG
 
 Version bumped from $CURRENT_VERSION to $NEW_VERSION"
@@ -72,5 +72,5 @@ Version bumped from $CURRENT_VERSION to $NEW_VERSION"
     echo "To push: git push && git push --tags"
 else
     echo "Aborted. Changes not committed."
-    git restore pyproject.toml ytmpd/__init__.py
+    git restore pyproject.toml xmpd/__init__.py
 fi

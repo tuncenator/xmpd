@@ -290,7 +290,7 @@ Code follows ruff configuration from pyproject.toml:
 
 ## Integration Points
 
-- **Config Integration**: Uses `ytmpd.config.get_config_dir()` to determine state file location (`~/.config/ytmpd/state.json`)
+- **Config Integration**: Uses `ytmpd.config.get_config_dir()` to determine state file location (`~/.config/xmpd/state.json`)
 - **Exception Handling**: Custom `PlayerError` exception propagates up to daemon/server for client error responses
 - **Daemon Integration (Phase 5)**: Daemon will:
   - Instantiate Player on startup

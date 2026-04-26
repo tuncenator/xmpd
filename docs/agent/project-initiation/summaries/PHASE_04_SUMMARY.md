@@ -224,7 +224,7 @@ Code follows ruff configuration from pyproject.toml:
    - Call appropriate Player or YTMusicClient methods
    - Format and return the response string
 
-2. **Socket Path Configuration**: The socket path should be loaded from config (`~/.config/ytmpd/socket` by default). Phase 5 should use `config.load_config()` to get this path.
+2. **Socket Path Configuration**: The socket path should be loaded from config (`~/.config/xmpd/socket` by default). Phase 5 should use `config.load_config()` to get this path.
 
 3. **Response Formatting**: The handler should return a string response WITHOUT the "OK" suffix. The server automatically appends "OK\n" to successful responses. For multi-line responses (like status), return lines separated by "\n".
 

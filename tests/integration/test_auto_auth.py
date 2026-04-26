@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from ytmpd.cookie_extract import FirefoxCookieExtractor
-from ytmpd.exceptions import CookieExtractionError
+from xmpd.cookie_extract import FirefoxCookieExtractor
+from xmpd.exceptions import CookieExtractionError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -568,12 +568,12 @@ class TestDaemonStatusAutoAuth:
         }
 
         with (
-            patch("ytmpd.daemon.load_config", return_value=mock_config),
-            patch("ytmpd.daemon.YTMusicClient") as mock_yt,
-            patch("ytmpd.daemon.SyncEngine"),
-            patch("ytmpd.daemon.MPDClient"),
-            patch("ytmpd.daemon.StreamResolver"),
-            patch("ytmpd.daemon.TrackStore"),
+            patch("xmpd.daemon.load_config", return_value=mock_config),
+            patch("xmpd.daemon.YTMusicClient") as mock_yt,
+            patch("xmpd.daemon.SyncEngine"),
+            patch("xmpd.daemon.MPDClient"),
+            patch("xmpd.daemon.StreamResolver"),
+            patch("xmpd.daemon.TrackStore"),
             patch("pathlib.Path.exists", return_value=True),
             patch("pathlib.Path.mkdir"),
         ):
@@ -581,9 +581,9 @@ class TestDaemonStatusAutoAuth:
             mock_yt_instance.is_authenticated.return_value = (True, "")
             mock_yt.return_value = mock_yt_instance
 
-            from ytmpd.daemon import YTMPDaemon
+            from xmpd.daemon import XMPDaemon
 
-            daemon = YTMPDaemon()
+            daemon = XMPDaemon()
             status = daemon._cmd_status()
 
             assert "auto_auth_enabled" in status

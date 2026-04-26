@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from ytmpd.exceptions import CookieExtractionError
+from xmpd.exceptions import CookieExtractionError
 
 # ---------------------------------------------------------------------------
 # YTMusicClient.refresh_auth tests
@@ -15,10 +15,10 @@ from ytmpd.exceptions import CookieExtractionError
 class TestRefreshAuth:
     """Tests for YTMusicClient.refresh_auth()."""
 
-    @patch("ytmpd.ytmusic.YTMusic")
+    @patch("xmpd.ytmusic.YTMusic")
     def test_refresh_auth_success(self, mock_ytmusic_cls, tmp_path):
         """refresh_auth reinitializes the client and resets cache."""
-        from ytmpd.ytmusic import YTMusicClient
+        from xmpd.ytmusic import YTMusicClient
 
         auth_file = tmp_path / "browser.json"
         auth_file.write_text("{}")
@@ -35,10 +35,10 @@ class TestRefreshAuth:
         # _init_client was called again (YTMusic instantiated twice: init + refresh)
         assert mock_ytmusic_cls.call_count == 2
 
-    @patch("ytmpd.ytmusic.YTMusic")
+    @patch("xmpd.ytmusic.YTMusic")
     def test_refresh_auth_with_new_path(self, mock_ytmusic_cls, tmp_path):
         """refresh_auth updates auth_file when a new path is provided."""
-        from ytmpd.ytmusic import YTMusicClient
+        from xmpd.ytmusic import YTMusicClient
 
         old_auth = tmp_path / "old.json"
         old_auth.write_text("{}")
@@ -51,10 +51,10 @@ class TestRefreshAuth:
         assert result is True
         assert client.auth_file == new_auth
 
-    @patch("ytmpd.ytmusic.YTMusic")
+    @patch("xmpd.ytmusic.YTMusic")
     def test_refresh_auth_failure(self, mock_ytmusic_cls, tmp_path):
         """refresh_auth returns False when _init_client raises."""
-        from ytmpd.ytmusic import YTMusicClient
+        from xmpd.ytmusic import YTMusicClient
 
         auth_file = tmp_path / "browser.json"
         auth_file.write_text("{}")
@@ -74,11 +74,11 @@ class TestRefreshAuth:
 
 
 def _make_daemon(tmp_path, auto_auth_enabled=False, extra_config=None):
-    """Create a mocked YTMPDaemon for testing.
+    """Create a mocked XMPDaemon for testing.
 
     Returns the daemon and the mocks dict.
     """
-    from ytmpd.daemon import YTMPDaemon
+    from xmpd.daemon import XMPDaemon
 
     config_dir = tmp_path / "config"
     config_dir.mkdir(exist_ok=True)
@@ -103,18 +103,18 @@ def _make_daemon(tmp_path, auto_auth_enabled=False, extra_config=None):
         config.update(extra_config)
 
     with (
-        patch("ytmpd.daemon.get_config_dir", return_value=config_dir),
-        patch("ytmpd.daemon.load_config", return_value=config),
-        patch("ytmpd.daemon.YTMusicClient") as mock_ytmusic,
-        patch("ytmpd.daemon.MPDClient"),
-        patch("ytmpd.daemon.StreamResolver"),
-        patch("ytmpd.daemon.SyncEngine"),
+        patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+        patch("xmpd.daemon.load_config", return_value=config),
+        patch("xmpd.daemon.YTMusicClient") as mock_ytmusic,
+        patch("xmpd.daemon.MPDClient"),
+        patch("xmpd.daemon.StreamResolver"),
+        patch("xmpd.daemon.SyncEngine"),
     ):
         mock_ytmusic_instance = mock_ytmusic.return_value
         mock_ytmusic_instance.is_authenticated.return_value = (True, "")
         mock_ytmusic_instance.refresh_auth.return_value = True
 
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
     return daemon
 
@@ -157,13 +157,13 @@ def _patch_auto_refresh(daemon, tmp_path, mock_extractor_cls):
         return output_path
 
     mock_extractor_cls.return_value.build_browser_json.side_effect = _create_tmp_file
-    return patch("ytmpd.daemon.get_config_dir", return_value=config_dir)
+    return patch("xmpd.daemon.get_config_dir", return_value=config_dir)
 
 
 class TestAttemptAutoRefresh:
     """Tests for _attempt_auto_refresh()."""
 
-    @patch("ytmpd.daemon.FirefoxCookieExtractor")
+    @patch("xmpd.daemon.FirefoxCookieExtractor")
     def test_successful_refresh(self, mock_extractor_cls, tmp_path):
         """Successful extraction + client refresh returns True."""
         daemon = _make_daemon(tmp_path, auto_auth_enabled=True)
@@ -179,7 +179,7 @@ class TestAttemptAutoRefresh:
         mock_extractor_cls.return_value.build_browser_json.assert_called_once()
         daemon.ytmusic_client.refresh_auth.assert_called_once()
 
-    @patch("ytmpd.daemon.FirefoxCookieExtractor")
+    @patch("xmpd.daemon.FirefoxCookieExtractor")
     def test_extraction_failure(self, mock_extractor_cls, tmp_path):
         """CookieExtractionError returns False and increments failure count."""
         daemon = _make_daemon(tmp_path, auto_auth_enabled=True)
@@ -187,13 +187,13 @@ class TestAttemptAutoRefresh:
         mock_extractor = mock_extractor_cls.return_value
         mock_extractor.build_browser_json.side_effect = CookieExtractionError("no cookies")
 
-        with patch("ytmpd.daemon.get_config_dir", return_value=tmp_path / "config"):
+        with patch("xmpd.daemon.get_config_dir", return_value=tmp_path / "config"):
             result = daemon._attempt_auto_refresh()
 
         assert result is False
         assert daemon.state["auto_refresh_failures"] == 1
 
-    @patch("ytmpd.daemon.FirefoxCookieExtractor")
+    @patch("xmpd.daemon.FirefoxCookieExtractor")
     def test_client_refresh_failure(self, mock_extractor_cls, tmp_path):
         """When client reinit fails, returns False and increments failures."""
         daemon = _make_daemon(tmp_path, auto_auth_enabled=True)
@@ -206,7 +206,7 @@ class TestAttemptAutoRefresh:
         assert result is False
         assert daemon.state["auto_refresh_failures"] == 1
 
-    @patch("ytmpd.daemon.FirefoxCookieExtractor")
+    @patch("xmpd.daemon.FirefoxCookieExtractor")
     def test_failure_count_increments(self, mock_extractor_cls, tmp_path):
         """Repeated failures increment the counter."""
         daemon = _make_daemon(tmp_path, auto_auth_enabled=True)
@@ -215,11 +215,11 @@ class TestAttemptAutoRefresh:
         mock_extractor = mock_extractor_cls.return_value
         mock_extractor.build_browser_json.side_effect = CookieExtractionError("fail")
 
-        with patch("ytmpd.daemon.get_config_dir", return_value=tmp_path / "config"):
+        with patch("xmpd.daemon.get_config_dir", return_value=tmp_path / "config"):
             daemon._attempt_auto_refresh()
         assert daemon.state["auto_refresh_failures"] == 4
 
-    @patch("ytmpd.daemon.FirefoxCookieExtractor")
+    @patch("xmpd.daemon.FirefoxCookieExtractor")
     def test_success_resets_failure_count(self, mock_extractor_cls, tmp_path):
         """Successful refresh resets the failure counter to 0."""
         daemon = _make_daemon(tmp_path, auto_auth_enabled=True)
@@ -236,7 +236,7 @@ class TestAttemptAutoRefresh:
 class TestAutoAuthLoop:
     """Tests for _auto_auth_loop() thread behavior."""
 
-    @patch("ytmpd.daemon.FirefoxCookieExtractor")
+    @patch("xmpd.daemon.FirefoxCookieExtractor")
     def test_loop_stops_on_shutdown(self, mock_extractor_cls, tmp_path):
         """Auto-auth loop exits when shutdown event is set."""
         daemon = _make_daemon(tmp_path, auto_auth_enabled=True)
@@ -257,7 +257,7 @@ class TestAutoAuthLoop:
         thread.join(timeout=3)
         assert not thread.is_alive()
 
-    @patch("ytmpd.daemon.FirefoxCookieExtractor")
+    @patch("xmpd.daemon.FirefoxCookieExtractor")
     def test_loop_calls_refresh(self, mock_extractor_cls, tmp_path):
         """Auto-auth loop calls _attempt_auto_refresh on schedule."""
         daemon = _make_daemon(tmp_path, auto_auth_enabled=True)
@@ -287,7 +287,7 @@ class TestAutoAuthLoop:
 class TestReactiveRefresh:
     """Tests for reactive refresh in _perform_sync()."""
 
-    @patch("ytmpd.daemon.FirefoxCookieExtractor")
+    @patch("xmpd.daemon.FirefoxCookieExtractor")
     def test_reactive_refresh_on_auth_error(self, mock_extractor_cls, tmp_path):
         """Auth error during sync triggers reactive refresh."""
         daemon = _make_daemon(tmp_path, auto_auth_enabled=True)
@@ -321,7 +321,7 @@ class TestReactiveRefresh:
         # State should reflect success from retry
         assert daemon.state["last_sync_result"]["success"] is True
 
-    @patch("ytmpd.daemon.FirefoxCookieExtractor")
+    @patch("xmpd.daemon.FirefoxCookieExtractor")
     def test_reactive_refresh_cooldown(self, mock_extractor_cls, tmp_path):
         """Reactive refresh respects the cooldown period."""
         daemon = _make_daemon(tmp_path, auto_auth_enabled=True)
@@ -344,11 +344,11 @@ class TestReactiveRefresh:
 
         daemon.sync_engine.sync_all_playlists.side_effect = Exception("unauthorized")
 
-        with patch("ytmpd.daemon.FirefoxCookieExtractor") as mock_cls:
+        with patch("xmpd.daemon.FirefoxCookieExtractor") as mock_cls:
             daemon._perform_sync()
             mock_cls.assert_not_called()
 
-    @patch("ytmpd.daemon.FirefoxCookieExtractor")
+    @patch("xmpd.daemon.FirefoxCookieExtractor")
     def test_no_reactive_refresh_on_non_auth_error(self, mock_extractor_cls, tmp_path):
         """Non-auth errors don't trigger reactive refresh."""
         daemon = _make_daemon(tmp_path, auto_auth_enabled=True)

@@ -1,4 +1,4 @@
-"""Basic tests for ytmpctl CLI client.
+"""Basic tests for xmpctl CLI client.
 
 These tests verify basic functionality without complex mocking.
 Full integration tests are in Phase 8.
@@ -12,45 +12,45 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-YTMPCTL = Path(__file__).parent.parent / "bin" / "ytmpctl"
+XMPCTL = Path(__file__).parent.parent / "bin" / "xmpctl"
 
 
 class TestYtmpctlBasic:
-    """Basic sanity tests for ytmpctl."""
+    """Basic sanity tests for xmpctl."""
 
     def test_ytmpctl_exists(self):
-        """Test ytmpctl file exists and is executable."""
-        assert YTMPCTL.exists()
-        assert YTMPCTL.stat().st_mode & 0o111  # Has execute permission
+        """Test xmpctl file exists and is executable."""
+        assert XMPCTL.exists()
+        assert XMPCTL.stat().st_mode & 0o111  # Has execute permission
 
     def test_ytmpctl_help(self):
-        """Test ytmpctl help command runs successfully."""
+        """Test xmpctl help command runs successfully."""
         result = subprocess.run(
-            [str(YTMPCTL), "help"],
+            [str(XMPCTL), "help"],
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0
-        assert "ytmpctl" in result.stdout
+        assert "xmpctl" in result.stdout
         assert "sync" in result.stdout
         assert "status" in result.stdout
         assert "list-playlists" in result.stdout
         assert "mpc" in result.stdout
 
     def test_ytmpctl_no_args_shows_help(self):
-        """Test ytmpctl with no args shows help."""
+        """Test xmpctl with no args shows help."""
         result = subprocess.run(
-            [str(YTMPCTL)],
+            [str(XMPCTL)],
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0
-        assert "ytmpctl" in result.stdout
+        assert "xmpctl" in result.stdout
 
     def test_ytmpctl_unknown_command(self):
-        """Test ytmpctl with unknown command fails appropriately."""
+        """Test xmpctl with unknown command fails appropriately."""
         result = subprocess.run(
-            [str(YTMPCTL), "nonexistent_command"],
+            [str(XMPCTL), "nonexistent_command"],
             capture_output=True,
             text=True,
         )
@@ -58,11 +58,11 @@ class TestYtmpctlBasic:
         assert "Unknown command" in result.stderr
 
     def test_ytmpctl_sync_daemon_not_running(self):
-        """Test ytmpctl sync fails gracefully when daemon not running."""
+        """Test xmpctl sync fails gracefully when daemon not running."""
         # This assumes daemon is NOT running - if it is, test will fail
         # but that's okay since the test is for the error message
         result = subprocess.run(
-            [str(YTMPCTL), "sync"],
+            [str(XMPCTL), "sync"],
             capture_output=True,
             text=True,
         )
@@ -71,9 +71,9 @@ class TestYtmpctlBasic:
             assert "daemon" in result.stderr.lower() or "socket" in result.stderr.lower()
 
     def test_ytmpctl_status_daemon_not_running(self):
-        """Test ytmpctl status fails gracefully when daemon not running."""
+        """Test xmpctl status fails gracefully when daemon not running."""
         result = subprocess.run(
-            [str(YTMPCTL), "status"],
+            [str(XMPCTL), "status"],
             capture_output=True,
             text=True,
         )
@@ -82,9 +82,9 @@ class TestYtmpctlBasic:
             assert "daemon" in result.stderr.lower() or "socket" in result.stderr.lower()
 
     def test_ytmpctl_list_daemon_not_running(self):
-        """Test ytmpctl list fails gracefully when daemon not running."""
+        """Test xmpctl list fails gracefully when daemon not running."""
         result = subprocess.run(
-            [str(YTMPCTL), "list-playlists"],
+            [str(XMPCTL), "list-playlists"],
             capture_output=True,
             text=True,
         )
@@ -94,25 +94,25 @@ class TestYtmpctlBasic:
 
 
 class TestYtmpctlPythonSyntax:
-    """Test that ytmpctl has valid Python syntax."""
+    """Test that xmpctl has valid Python syntax."""
 
     def test_ytmpctl_python_syntax(self):
-        """Test ytmpctl is valid Python code."""
+        """Test xmpctl is valid Python code."""
         result = subprocess.run(
-            ["python3", "-m", "py_compile", str(YTMPCTL)],
+            ["python3", "-m", "py_compile", str(XMPCTL)],
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 0, f"Syntax error in ytmpctl: {result.stderr}"
+        assert result.returncode == 0, f"Syntax error in xmpctl: {result.stderr}"
 
 
 class TestYtmpctlSearch:
-    """Tests for ytmpctl search command functionality."""
+    """Tests for xmpctl search command functionality."""
 
     def test_search_help_includes_command(self):
         """Test that help message includes search command."""
         result = subprocess.run(
-            [str(YTMPCTL), "help"],
+            [str(XMPCTL), "help"],
             capture_output=True,
             text=True,
         )
@@ -124,7 +124,7 @@ class TestYtmpctlSearch:
         """Test that search command handles daemon not running gracefully."""
         # Provide empty input to exit immediately
         result = subprocess.run(
-            [str(YTMPCTL), "search"],
+            [str(XMPCTL), "search"],
             capture_output=True,
             text=True,
             input="\n",  # Empty query to exit

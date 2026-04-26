@@ -26,7 +26,7 @@ class TrackStore:
         - updated_at (REAL): Unix timestamp of last update
 
     Example:
-        >>> store = TrackStore("~/.config/ytmpd/track_mapping.db")
+        >>> store = TrackStore("~/.config/xmpd/track_mapping.db")
         >>> store.add_track(
         ...     video_id="dQw4w9WgXcQ",
         ...     stream_url="https://youtube.com/watch?v=...",

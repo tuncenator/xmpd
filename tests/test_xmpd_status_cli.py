@@ -1,4 +1,4 @@
-"""Tests for ytmpd-status CLI argument parsing and configuration."""
+"""Tests for xmpd-status CLI argument parsing and configuration."""
 
 import argparse
 import os
@@ -9,10 +9,10 @@ from unittest.mock import patch
 
 import pytest
 
-# Load ytmpd-status script as a module
+# Load xmpd-status script as a module
 # We need to do this because the script doesn't have a .py extension
 # Use a unique module name to avoid conflicts with other test files
-_script_path = Path(__file__).parent.parent / "bin" / "ytmpd-status"
+_script_path = Path(__file__).parent.parent / "bin" / "xmpd-status"
 _ytmpd_status_code = _script_path.read_text()
 
 # Create a module object with unique name for CLI tests
@@ -32,7 +32,7 @@ class TestArgumentParsing:
 
     def test_parse_args_defaults(self):
         """Test default argument values."""
-        with patch("sys.argv", ["ytmpd-status"]):
+        with patch("sys.argv", ["xmpd-status"]):
             args = ytmpd_status.parse_arguments()
 
             # Connection defaults
@@ -71,14 +71,14 @@ class TestArgumentParsing:
 
     def test_parse_args_connection_options(self):
         """Test connection option parsing."""
-        with patch("sys.argv", ["ytmpd-status", "--host", "example.com", "--port", "6600"]):
+        with patch("sys.argv", ["xmpd-status", "--host", "example.com", "--port", "6600"]):
             args = ytmpd_status.parse_arguments()
             assert args.host == "example.com"
             assert args.port == 6600
 
     def test_parse_args_display_options(self):
         """Test display option parsing."""
-        with patch("sys.argv", ["ytmpd-status", "-l", "80", "-f", "{icon} {title}", "-c"]):
+        with patch("sys.argv", ["xmpd-status", "-l", "80", "-f", "{icon} {title}", "-c"]):
             args = ytmpd_status.parse_arguments()
             assert args.max_length == 80
             assert args.format == "{icon} {title}"
@@ -88,7 +88,7 @@ class TestArgumentParsing:
         """Test progress bar option parsing."""
         with patch(
             "sys.argv",
-            ["ytmpd-status", "--no-show-bar", "--bar-length", "15", "--bar-style", "blocks"],
+            ["xmpd-status", "--no-show-bar", "--bar-length", "15", "--bar-style", "blocks"],
         ):
             args = ytmpd_status.parse_arguments()
             assert args.show_bar is False
@@ -97,13 +97,13 @@ class TestArgumentParsing:
 
     def test_parse_args_show_bar_flag(self):
         """Test --show-bar explicitly enables bar."""
-        with patch("sys.argv", ["ytmpd-status", "--show-bar"]):
+        with patch("sys.argv", ["xmpd-status", "--show-bar"]):
             args = ytmpd_status.parse_arguments()
             assert args.show_bar is True
 
     def test_parse_args_playlist_options(self):
         """Test playlist context option parsing."""
-        with patch("sys.argv", ["ytmpd-status", "--show-next", "--show-prev", "--show-position"]):
+        with patch("sys.argv", ["xmpd-status", "--show-next", "--show-prev", "--show-position"]):
             args = ytmpd_status.parse_arguments()
             assert args.show_next is True
             assert args.show_prev is True
@@ -114,7 +114,7 @@ class TestArgumentParsing:
         with patch(
             "sys.argv",
             [
-                "ytmpd-status",
+                "xmpd-status",
                 "--color-youtube-playing",
                 "#FF0000",
                 "--color-youtube-paused",
@@ -139,7 +139,7 @@ class TestArgumentParsing:
         with patch(
             "sys.argv",
             [
-                "ytmpd-status",
+                "xmpd-status",
                 "--icon-playing",
                 "►",
                 "--icon-paused",
@@ -155,7 +155,7 @@ class TestArgumentParsing:
 
     def test_parse_args_verbose_flag(self):
         """Test verbose flag."""
-        with patch("sys.argv", ["ytmpd-status", "-v"]):
+        with patch("sys.argv", ["xmpd-status", "-v"]):
             args = ytmpd_status.parse_arguments()
             assert args.verbose is True
 
@@ -164,65 +164,65 @@ class TestEnvironmentVariableCompatibility:
     """Test backward compatibility with environment variables."""
 
     def test_env_var_max_length(self):
-        """Test YTMPD_STATUS_MAX_LENGTH environment variable."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_MAX_LENGTH": "100"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_MAX_LENGTH environment variable."""
+        with patch.dict(os.environ, {"XMPD_STATUS_MAX_LENGTH": "100"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.max_length == 100
 
     def test_env_var_bar_length(self):
-        """Test YTMPD_STATUS_BAR_LENGTH environment variable."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_BAR_LENGTH": "20"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_BAR_LENGTH environment variable."""
+        with patch.dict(os.environ, {"XMPD_STATUS_BAR_LENGTH": "20"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.bar_length == 20
 
     def test_env_var_show_bar_true(self):
-        """Test YTMPD_STATUS_SHOW_BAR=true."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_SHOW_BAR": "true"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_SHOW_BAR=true."""
+        with patch.dict(os.environ, {"XMPD_STATUS_SHOW_BAR": "true"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.show_bar is True
 
     def test_env_var_show_bar_false(self):
-        """Test YTMPD_STATUS_SHOW_BAR=false."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_SHOW_BAR": "false"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_SHOW_BAR=false."""
+        with patch.dict(os.environ, {"XMPD_STATUS_SHOW_BAR": "false"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.show_bar is False
 
     def test_env_var_bar_style(self):
-        """Test YTMPD_STATUS_BAR_STYLE environment variable."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_BAR_STYLE": "smooth"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_BAR_STYLE environment variable."""
+        with patch.dict(os.environ, {"XMPD_STATUS_BAR_STYLE": "smooth"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.bar_style == "smooth"
 
     def test_env_var_show_next(self):
-        """Test YTMPD_STATUS_SHOW_NEXT environment variable."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_SHOW_NEXT": "true"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_SHOW_NEXT environment variable."""
+        with patch.dict(os.environ, {"XMPD_STATUS_SHOW_NEXT": "true"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.show_next is True
 
     def test_env_var_show_prev(self):
-        """Test YTMPD_STATUS_SHOW_PREV environment variable."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_SHOW_PREV": "1"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_SHOW_PREV environment variable."""
+        with patch.dict(os.environ, {"XMPD_STATUS_SHOW_PREV": "1"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.show_prev is True
 
     def test_env_var_compact(self):
-        """Test YTMPD_STATUS_COMPACT environment variable."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_COMPACT": "yes"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_COMPACT environment variable."""
+        with patch.dict(os.environ, {"XMPD_STATUS_COMPACT": "yes"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.compact is True
 
     def test_env_var_format(self):
-        """Test YTMPD_STATUS_FORMAT environment variable."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_FORMAT": "{icon} {artist}"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_FORMAT environment variable."""
+        with patch.dict(os.environ, {"XMPD_STATUS_FORMAT": "{icon} {artist}"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.format == "{icon} {artist}"
 
@@ -231,11 +231,11 @@ class TestEnvironmentVariableCompatibility:
         with patch.dict(
             os.environ,
             {
-                "YTMPD_STATUS_COLOR_YOUTUBE_PLAYING": "#AABBCC",
-                "YTMPD_STATUS_COLOR_STOPPED": "#112233",
+                "XMPD_STATUS_COLOR_YOUTUBE_PLAYING": "#AABBCC",
+                "XMPD_STATUS_COLOR_STOPPED": "#112233",
             },
         ):
-            with patch("sys.argv", ["ytmpd-status"]):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.color_youtube_playing == "#AABBCC"
                 assert args.color_stopped == "#112233"
@@ -245,11 +245,11 @@ class TestEnvironmentVariableCompatibility:
         with patch.dict(
             os.environ,
             {
-                "YTMPD_STATUS_ICON_PLAYING": "►",
-                "YTMPD_STATUS_ICON_PAUSED": "P",
+                "XMPD_STATUS_ICON_PLAYING": "►",
+                "XMPD_STATUS_ICON_PAUSED": "P",
             },
         ):
-            with patch("sys.argv", ["ytmpd-status"]):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.icon_playing == "►"
                 assert args.icon_paused == "P"
@@ -259,44 +259,44 @@ class TestPriorityOrder:
     """Test that CLI args override environment variables."""
 
     def test_cli_overrides_env_max_length(self):
-        """CLI --max-length should override YTMPD_STATUS_MAX_LENGTH."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_MAX_LENGTH": "100"}):
-            with patch("sys.argv", ["ytmpd-status", "--max-length", "80"]):
+        """CLI --max-length should override XMPD_STATUS_MAX_LENGTH."""
+        with patch.dict(os.environ, {"XMPD_STATUS_MAX_LENGTH": "100"}):
+            with patch("sys.argv", ["xmpd-status", "--max-length", "80"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.max_length == 80
 
     def test_cli_overrides_env_bar_length(self):
-        """CLI --bar-length should override YTMPD_STATUS_BAR_LENGTH."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_BAR_LENGTH": "20"}):
-            with patch("sys.argv", ["ytmpd-status", "--bar-length", "15"]):
+        """CLI --bar-length should override XMPD_STATUS_BAR_LENGTH."""
+        with patch.dict(os.environ, {"XMPD_STATUS_BAR_LENGTH": "20"}):
+            with patch("sys.argv", ["xmpd-status", "--bar-length", "15"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.bar_length == 15
 
     def test_cli_overrides_env_show_bar(self):
-        """CLI --no-show-bar should override YTMPD_STATUS_SHOW_BAR=true."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_SHOW_BAR": "true"}):
-            with patch("sys.argv", ["ytmpd-status", "--no-show-bar"]):
+        """CLI --no-show-bar should override XMPD_STATUS_SHOW_BAR=true."""
+        with patch.dict(os.environ, {"XMPD_STATUS_SHOW_BAR": "true"}):
+            with patch("sys.argv", ["xmpd-status", "--no-show-bar"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.show_bar is False
 
     def test_cli_overrides_env_compact(self):
-        """CLI --compact should override YTMPD_STATUS_COMPACT=false."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_COMPACT": "false"}):
-            with patch("sys.argv", ["ytmpd-status", "--compact"]):
+        """CLI --compact should override XMPD_STATUS_COMPACT=false."""
+        with patch.dict(os.environ, {"XMPD_STATUS_COMPACT": "false"}):
+            with patch("sys.argv", ["xmpd-status", "--compact"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.compact is True
 
     def test_cli_overrides_env_format(self):
-        """CLI --format should override YTMPD_STATUS_FORMAT."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_FORMAT": "{icon} {artist}"}):
-            with patch("sys.argv", ["ytmpd-status", "--format", "{title}"]):
+        """CLI --format should override XMPD_STATUS_FORMAT."""
+        with patch.dict(os.environ, {"XMPD_STATUS_FORMAT": "{icon} {artist}"}):
+            with patch("sys.argv", ["xmpd-status", "--format", "{title}"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.format == "{title}"
 
     def test_cli_overrides_env_color(self):
         """CLI color args should override env vars."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_COLOR_YOUTUBE_PLAYING": "#000000"}):
-            with patch("sys.argv", ["ytmpd-status", "--color-youtube-playing", "#FFFFFF"]):
+        with patch.dict(os.environ, {"XMPD_STATUS_COLOR_YOUTUBE_PLAYING": "#000000"}):
+            with patch("sys.argv", ["xmpd-status", "--color-youtube-playing", "#FFFFFF"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.color_youtube_playing == "#FFFFFF"
 
@@ -375,13 +375,13 @@ class TestValidation:
 
     def test_parse_args_invalid_max_length(self):
         """Test max-length out of range."""
-        with patch("sys.argv", ["ytmpd-status", "--max-length", "250"]):
+        with patch("sys.argv", ["xmpd-status", "--max-length", "250"]):
             with pytest.raises(SystemExit):
                 ytmpd_status.parse_arguments()
 
     def test_parse_args_invalid_bar_length(self):
         """Test bar-length out of range."""
-        with patch("sys.argv", ["ytmpd-status", "--bar-length", "100"]):
+        with patch("sys.argv", ["xmpd-status", "--bar-length", "100"]):
             with pytest.raises(SystemExit):
                 ytmpd_status.parse_arguments()
 
@@ -452,14 +452,14 @@ class TestBarStyleConversion:
 
     def test_bar_style_auto_converts_to_empty(self):
         """Test that bar_style='auto' is converted to empty string."""
-        with patch("sys.argv", ["ytmpd-status", "--bar-style", "auto"]):
+        with patch("sys.argv", ["xmpd-status", "--bar-style", "auto"]):
             args = ytmpd_status.parse_arguments()
             assert args.bar_style == ""
 
     def test_bar_style_explicit_not_converted(self):
         """Test that explicit bar styles are not converted."""
         for style in ["blocks", "smooth", "simple"]:
-            with patch("sys.argv", ["ytmpd-status", "--bar-style", style]):
+            with patch("sys.argv", ["xmpd-status", "--bar-style", style]):
                 args = ytmpd_status.parse_arguments()
                 assert args.bar_style == style
 
@@ -468,15 +468,15 @@ class TestHostAndPort:
     """Test host and port environment variable support."""
 
     def test_env_var_host(self):
-        """Test YTMPD_STATUS_HOST environment variable."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_HOST": "192.168.1.100"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_HOST environment variable."""
+        with patch.dict(os.environ, {"XMPD_STATUS_HOST": "192.168.1.100"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.host == "192.168.1.100"
 
     def test_env_var_port(self):
-        """Test YTMPD_STATUS_PORT environment variable."""
-        with patch.dict(os.environ, {"YTMPD_STATUS_PORT": "6700"}):
-            with patch("sys.argv", ["ytmpd-status"]):
+        """Test XMPD_STATUS_PORT environment variable."""
+        with patch.dict(os.environ, {"XMPD_STATUS_PORT": "6700"}):
+            with patch("sys.argv", ["xmpd-status"]):
                 args = ytmpd_status.parse_arguments()
                 assert args.port == 6700

@@ -154,7 +154,7 @@ Tested with live MPD instance on port 6601:
 
 **Test 1: Basic YouTube Track (Playing)**
 ```bash
-$ mpc -p 6601 play && bin/ytmpd-status
+$ mpc -p 6601 play && bin/xmpd-status
 ▶ Dye O - Not from Here [0:23 ▱▱▱▱▱▱▱▱▱▱ 5:31]
 ▶ Dye O - Not from Here [0:23 ▱▱▱▱▱▱▱▱▱▱ 5:31]
 #FF6B35
@@ -163,7 +163,7 @@ $ mpc -p 6601 play && bin/ytmpd-status
 
 **Test 2: Paused State**
 ```bash
-$ mpc -p 6601 pause && bin/ytmpd-status
+$ mpc -p 6601 pause && bin/xmpd-status
 ⏸ Dye O - Not from Here [2:02 ▱▱▱▱▱▱▱▱▱▱ 5:31]
 ⏸ Dye O - Not from Here [2:02 ▱▱▱▱▱▱▱▱▱▱ 5:31]
 #FFB84D
@@ -172,7 +172,7 @@ $ mpc -p 6601 pause && bin/ytmpd-status
 
 **Test 3: Next Track Display**
 ```bash
-$ YTMPD_STATUS_SHOW_NEXT=true bin/ytmpd-status
+$ YTMPD_STATUS_SHOW_NEXT=true bin/xmpd-status
 ▶ Dye O - Not from Here [0:23 ▱▱▱▱▱▱▱▱▱▱ 5:31]
 ↓ Tim van Werd - Come Back To Me
 ▶ Dye O - Not from Here [0:23 ▱▱▱▱▱▱▱▱▱▱ 5:31]
@@ -182,7 +182,7 @@ $ YTMPD_STATUS_SHOW_NEXT=true bin/ytmpd-status
 
 **Test 4: Compact Mode**
 ```bash
-$ YTMPD_STATUS_COMPACT=true bin/ytmpd-status
+$ YTMPD_STATUS_COMPACT=true bin/xmpd-status
 ▶ Dye O - Not from Here
 ▶ Dye O - Not from Here
 #FF6B35
@@ -191,7 +191,7 @@ $ YTMPD_STATUS_COMPACT=true bin/ytmpd-status
 
 **Test 5: Bar Style Override**
 ```bash
-$ YTMPD_STATUS_BAR_STYLE=blocks bin/ytmpd-status
+$ YTMPD_STATUS_BAR_STYLE=blocks bin/xmpd-status
 ▶ Dye O - Not from Here [0:54 █░░░░░░░░░ 5:31]
 ▶ Dye O - Not from Here [0:54 █░░░░░░░░░ 5:31]
 #FF6B35
@@ -200,7 +200,7 @@ $ YTMPD_STATUS_BAR_STYLE=blocks bin/ytmpd-status
 
 **Test 6: Smart Truncation**
 ```bash
-$ YTMPD_STATUS_MAX_LENGTH=30 bin/ytmpd-status
+$ YTMPD_STATUS_MAX_LENGTH=30 bin/xmpd-status
 ▶ Dye O - Not from …▱▱▱ 5:31]
 ▶ Dye O - Not from …▱▱▱ 5:31]
 #FF6B35

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""ytmpd-status - i3blocks status script for ytmpd.
+"""xmpd-status - i3blocks status script for xmpd.
 
 This script queries MPD status and formats it for i3blocks display,
 with special handling for YouTube-streamed vs local tracks.
 
 Environment Variables (deprecated - use CLI args instead):
-    YTMPD_STATUS_MAX_LENGTH: Maximum length before truncation (default: 50)
-    YTMPD_STATUS_BAR_LENGTH: Progress bar length in characters (default: 10)
-    YTMPD_STATUS_SHOW_BAR: Enable/disable progress bar (default: true)
-    YTMPD_STATUS_BAR_STYLE: Force specific bar style - 'blocks', 'smooth', or 'simple'
+    XMPD_STATUS_MAX_LENGTH: Maximum length before truncation (default: 50)
+    XMPD_STATUS_BAR_LENGTH: Progress bar length in characters (default: 10)
+    XMPD_STATUS_SHOW_BAR: Enable/disable progress bar (default: true)
+    XMPD_STATUS_BAR_STYLE: Force specific bar style - 'blocks', 'smooth', or 'simple'
                             (default: auto-detect based on track type)
-    YTMPD_STATUS_SHOW_NEXT: Show next track info (default: false)
-    YTMPD_STATUS_SHOW_PREV: Show previous track info (default: false)
-    YTMPD_STATUS_COMPACT: Minimal output mode (default: false)
+    XMPD_STATUS_SHOW_NEXT: Show next track info (default: false)
+    XMPD_STATUS_SHOW_PREV: Show previous track info (default: false)
+    XMPD_STATUS_COMPACT: Minimal output mode (default: false)
 
 Progress Bar Styles:
     blocks: █████░░░░░ (default for all tracks)
@@ -56,7 +56,7 @@ __version__ = "2.1.0"
 
 
 def get_auth_status() -> tuple[bool, str, int]:
-    """Check authentication status from ytmpd daemon.
+    """Check authentication status from xmpd daemon.
 
     Returns:
         Tuple of (is_valid, error_message, auto_refresh_failures).
@@ -64,7 +64,7 @@ def get_auth_status() -> tuple[bool, str, int]:
         Returns (True, "", 0) if daemon is not running (can't check).
     """
     try:
-        socket_path = Path.home() / ".config" / "ytmpd" / "sync_socket"
+        socket_path = Path.home() / ".config" / "xmpd" / "sync_socket"
         if not socket_path.exists():
             # Daemon not running, can't check auth
             return True, "", 0
@@ -133,8 +133,8 @@ def get_track_type(file_path: str) -> str:
     if file_path.startswith("http://localhost:6602/proxy/"):
         return "youtube"
 
-    # Check ytmpd database for additional YouTube tracks
-    db_path = Path.home() / ".config" / "ytmpd" / "track_mapping.db"
+    # Check xmpd database for additional YouTube tracks
+    db_path = Path.home() / ".config" / "xmpd" / "track_mapping.db"
     if not db_path.exists():
         # No database, assume local if not a proxy URL
         return "local" if not file_path.startswith("http") else "unknown"
@@ -327,7 +327,7 @@ def get_sync_status(file_path: str) -> str:
     video_id = file_path.replace("http://localhost:6602/proxy/", "")
 
     # Check database
-    db_path = Path.home() / ".config" / "ytmpd" / "track_mapping.db"
+    db_path = Path.home() / ".config" / "xmpd" / "track_mapping.db"
     if not db_path.exists():
         return "unknown"
 
@@ -683,8 +683,8 @@ def parse_arguments() -> argparse.Namespace:
         Parsed arguments namespace.
     """
     parser = argparse.ArgumentParser(
-        prog="ytmpd-status",
-        description="Display ytmpd/MPD status for i3blocks with YouTube track detection",
+        prog="xmpd-status",
+        description="Display xmpd/MPD status for i3blocks with YouTube track detection",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Format String Placeholders:
@@ -701,11 +701,11 @@ Format String Placeholders:
   {prev}      - Previous track (if available)
 
 Examples:
-  ytmpd-status
-  ytmpd-status --compact --no-show-bar
-  ytmpd-status --format "{icon} {title} ({elapsed}/{duration})"
-  ytmpd-status --bar-length 15 --show-next
-  ytmpd-status --host localhost --port 6600
+  xmpd-status
+  xmpd-status --compact --no-show-bar
+  xmpd-status --format "{icon} {title} ({elapsed}/{duration})"
+  xmpd-status --bar-length 15 --show-next
+  xmpd-status --host localhost --port 6600
         """,
     )
 
@@ -720,13 +720,13 @@ Examples:
     conn_group = parser.add_argument_group("Connection Options")
     conn_group.add_argument(
         "--host",
-        default=os.environ.get("YTMPD_STATUS_HOST", "localhost"),
+        default=os.environ.get("XMPD_STATUS_HOST", "localhost"),
         help="MPD server host (default: localhost)",
     )
     conn_group.add_argument(
         "--port",
         type=validate_port,
-        default=int(os.environ.get("YTMPD_STATUS_PORT", "6601")),
+        default=int(os.environ.get("XMPD_STATUS_PORT", "6601")),
         help="MPD server port (default: 6601)",
     )
 
@@ -736,20 +736,20 @@ Examples:
         "-l",
         "--max-length",
         type=lambda x: validate_positive_int(x, 1, 200, "max-length"),
-        default=int(os.environ.get("YTMPD_STATUS_MAX_LENGTH", "50")),
+        default=int(os.environ.get("XMPD_STATUS_MAX_LENGTH", "50")),
         help="Maximum output length (default: 50)",
     )
     display_group.add_argument(
         "-f",
         "--format",
-        default=os.environ.get("YTMPD_STATUS_FORMAT", ""),
+        default=os.environ.get("XMPD_STATUS_FORMAT", ""),
         help="Custom format string (default: auto)",
     )
     display_group.add_argument(
         "-c",
         "--compact",
         action="store_true",
-        default=os.environ.get("YTMPD_STATUS_COMPACT", "false").lower() in ("true", "1", "yes"),
+        default=os.environ.get("XMPD_STATUS_COMPACT", "false").lower() in ("true", "1", "yes"),
         help="Use compact display mode",
     )
 
@@ -771,19 +771,19 @@ Examples:
     bar_group.add_argument(
         "--bar-length",
         type=lambda x: validate_positive_int(x, 1, 50, "bar-length"),
-        default=int(os.environ.get("YTMPD_STATUS_BAR_LENGTH", "10")),
+        default=int(os.environ.get("XMPD_STATUS_BAR_LENGTH", "10")),
         help="Progress bar length in characters (default: 10)",
     )
     bar_group.add_argument(
         "--bar-style",
         choices=["blocks", "smooth", "simple", "auto"],
-        default=os.environ.get("YTMPD_STATUS_BAR_STYLE", "auto"),
+        default=os.environ.get("XMPD_STATUS_BAR_STYLE", "auto"),
         help="Progress bar style (default: auto)",
     )
     bar_group.add_argument(
         "--fixed-bar-length",
         action="store_true",
-        default=os.environ.get("YTMPD_STATUS_FIXED_BAR_LENGTH", "false").lower()
+        default=os.environ.get("XMPD_STATUS_FIXED_BAR_LENGTH", "false").lower()
         in ("true", "1", "yes"),
         help=(
             "Prevent progress bar from shrinking "
@@ -796,19 +796,19 @@ Examples:
     playlist_group.add_argument(
         "--show-next",
         action="store_true",
-        default=os.environ.get("YTMPD_STATUS_SHOW_NEXT", "false").lower() in ("true", "1", "yes"),
+        default=os.environ.get("XMPD_STATUS_SHOW_NEXT", "false").lower() in ("true", "1", "yes"),
         help="Show next track",
     )
     playlist_group.add_argument(
         "--show-prev",
         action="store_true",
-        default=os.environ.get("YTMPD_STATUS_SHOW_PREV", "false").lower() in ("true", "1", "yes"),
+        default=os.environ.get("XMPD_STATUS_SHOW_PREV", "false").lower() in ("true", "1", "yes"),
         help="Show previous track",
     )
     playlist_group.add_argument(
         "--show-position",
         action="store_true",
-        default=os.environ.get("YTMPD_STATUS_SHOW_POSITION", "false").lower()
+        default=os.environ.get("XMPD_STATUS_SHOW_POSITION", "false").lower()
         in ("true", "1", "yes"),
         help="Show playlist position",
     )
@@ -818,31 +818,31 @@ Examples:
     color_group.add_argument(
         "--color-youtube-playing",
         type=validate_color,
-        default=os.environ.get("YTMPD_STATUS_COLOR_YOUTUBE_PLAYING", "#f7768e"),
+        default=os.environ.get("XMPD_STATUS_COLOR_YOUTUBE_PLAYING", "#f7768e"),
         help="Color for YouTube playing (default: #f7768e)",
     )
     color_group.add_argument(
         "--color-youtube-paused",
         type=validate_color,
-        default=os.environ.get("YTMPD_STATUS_COLOR_YOUTUBE_PAUSED", "#d9677b"),
+        default=os.environ.get("XMPD_STATUS_COLOR_YOUTUBE_PAUSED", "#d9677b"),
         help="Color for YouTube paused (default: #d9677b)",
     )
     color_group.add_argument(
         "--color-local-playing",
         type=validate_color,
-        default=os.environ.get("YTMPD_STATUS_COLOR_LOCAL_PLAYING", "#7dcfff"),
+        default=os.environ.get("XMPD_STATUS_COLOR_LOCAL_PLAYING", "#7dcfff"),
         help="Color for local playing (default: #7dcfff)",
     )
     color_group.add_argument(
         "--color-local-paused",
         type=validate_color,
-        default=os.environ.get("YTMPD_STATUS_COLOR_LOCAL_PAUSED", "#5ab3dd"),
+        default=os.environ.get("XMPD_STATUS_COLOR_LOCAL_PAUSED", "#5ab3dd"),
         help="Color for local paused (default: #5ab3dd)",
     )
     color_group.add_argument(
         "--color-stopped",
         type=validate_color,
-        default=os.environ.get("YTMPD_STATUS_COLOR_STOPPED", "#565f89"),
+        default=os.environ.get("XMPD_STATUS_COLOR_STOPPED", "#565f89"),
         help="Color for stopped (default: #565f89)",
     )
 
@@ -850,17 +850,17 @@ Examples:
     icon_group = parser.add_argument_group("Icon Options")
     icon_group.add_argument(
         "--icon-playing",
-        default=os.environ.get("YTMPD_STATUS_ICON_PLAYING", "▶"),
+        default=os.environ.get("XMPD_STATUS_ICON_PLAYING", "▶"),
         help="Icon for playing state (default: ▶)",
     )
     icon_group.add_argument(
         "--icon-paused",
-        default=os.environ.get("YTMPD_STATUS_ICON_PAUSED", "⏸"),
+        default=os.environ.get("XMPD_STATUS_ICON_PAUSED", "⏸"),
         help="Icon for paused state (default: ⏸)",
     )
     icon_group.add_argument(
         "--icon-stopped",
-        default=os.environ.get("YTMPD_STATUS_ICON_STOPPED", "⏹"),
+        default=os.environ.get("XMPD_STATUS_ICON_STOPPED", "⏹"),
         help="Icon for stopped state (default: ⏹)",
     )
 
@@ -891,7 +891,7 @@ Examples:
     # Handle show_bar default (backward compatibility)
     if args.show_bar is None:
         # Not specified on CLI, check env var
-        args.show_bar = os.environ.get("YTMPD_STATUS_SHOW_BAR", "true").lower() in (
+        args.show_bar = os.environ.get("XMPD_STATUS_SHOW_BAR", "true").lower() in (
             "true",
             "1",
             "yes",
@@ -1330,7 +1330,7 @@ def run_idle_mode(args) -> None:
 
 
 def main() -> None:
-    """Display MPD/ytmpd status for i3blocks."""
+    """Display MPD/xmpd status for i3blocks."""
     # Parse arguments (with backward compatibility for env vars)
     args = parse_arguments()
 

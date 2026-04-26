@@ -1,65 +1,65 @@
-"""Custom exceptions for ytmpd.
+"""Custom exceptions for xmpd.
 
-This module defines custom exception classes used throughout the ytmpd application
+This module defines custom exception classes used throughout the xmpd application
 for better error handling and debugging.
 """
 
 
-class YTMPDError(Exception):
-    """Base exception for all ytmpd errors."""
+class XMPDError(Exception):
+    """Base exception for all xmpd errors."""
 
     pass
 
 
-class YTMusicAuthError(YTMPDError):
+class YTMusicAuthError(XMPDError):
     """Raised when YouTube Music authentication fails."""
 
     pass
 
 
-class YTMusicAPIError(YTMPDError):
+class YTMusicAPIError(XMPDError):
     """Raised when a YouTube Music API call fails."""
 
     pass
 
 
-class YTMusicNotFoundError(YTMPDError):
+class YTMusicNotFoundError(XMPDError):
     """Raised when a requested resource is not found in YouTube Music."""
 
     pass
 
 
-class ConfigError(YTMPDError):
+class ConfigError(XMPDError):
     """Raised when configuration is invalid or cannot be loaded."""
 
     pass
 
 
-class PlayerError(YTMPDError):
+class PlayerError(XMPDError):
     """Raised when player operations fail."""
 
     pass
 
 
-class ServerError(YTMPDError):
+class ServerError(XMPDError):
     """Raised when socket server operations fail."""
 
     pass
 
 
-class MPDConnectionError(YTMPDError):
+class MPDConnectionError(XMPDError):
     """Raised when connection to MPD fails."""
 
     pass
 
 
-class MPDPlaylistError(YTMPDError):
+class MPDPlaylistError(XMPDError):
     """Raised when MPD playlist operations fail."""
 
     pass
 
 
-class ProxyError(YTMPDError):
+class ProxyError(XMPDError):
     """Base exception for proxy errors."""
 
     pass
@@ -83,7 +83,7 @@ class URLRefreshError(ProxyError):
     pass
 
 
-class CookieExtractionError(YTMPDError):
+class CookieExtractionError(XMPDError):
     """Raised when browser cookie extraction fails."""
 
     pass

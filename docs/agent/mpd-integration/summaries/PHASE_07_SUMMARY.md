@@ -8,7 +8,7 @@
 
 ## Objective
 
-Simplify ytmpctl to focus on sync-specific commands (sync, status, list-playlists), removing playback commands that are now handled by mpc.
+Simplify xmpctl to focus on sync-specific commands (sync, status, list-playlists), removing playback commands that are now handled by mpc.
 
 ---
 
@@ -16,7 +16,7 @@ Simplify ytmpctl to focus on sync-specific commands (sync, status, list-playlist
 
 ### What Was Built
 
-- Completely refactored `bin/ytmpctl` with new sync-focused command set
+- Completely refactored `bin/xmpctl` with new sync-focused command set
 - Removed all old playback commands (play, pause, resume, stop, next, prev, queue)
 - Implemented new sync commands (sync, status, list-playlists)
 - Added JSON-based communication protocol with daemon's sync socket
@@ -31,7 +31,7 @@ Simplify ytmpctl to focus on sync-specific commands (sync, status, list-playlist
 
 ### Files Modified
 
-- `bin/ytmpctl` - Complete rewrite (256 lines old → 344 lines new)
+- `bin/xmpctl` - Complete rewrite (256 lines old → 344 lines new)
   - Changed from old socket protocol to JSON-based sync protocol
   - Replaced playback commands with sync commands
   - Added color/Unicode support
@@ -43,7 +43,7 @@ Simplify ytmpctl to focus on sync-specific commands (sync, status, list-playlist
 
 - **Color and Unicode Detection**: Implemented runtime detection of terminal capabilities rather than assuming support. Gracefully falls back to plain text when colors/Unicode aren't available.
 
-- **Help-First UX**: When run with no arguments, ytmpctl now shows help instead of erroring. This makes the tool more discoverable for new users.
+- **Help-First UX**: When run with no arguments, xmpctl now shows help instead of erroring. This makes the tool more discoverable for new users.
 
 - **mpc Integration Guidance**: Help text prominently explains that playback is now via mpc, with clear examples. This helps users transition from the old architecture.
 
@@ -55,7 +55,7 @@ Simplify ytmpctl to focus on sync-specific commands (sync, status, list-playlist
 
 ## Completion Criteria Status
 
-- [x] `bin/ytmpctl` refactored with new commands
+- [x] `bin/xmpctl` refactored with new commands
 - [x] Old playback commands removed (play, pause, resume, stop, next, prev, queue, search)
 - [x] `sync` command triggers immediate sync
 - [x] `status` command shows last sync info with detailed statistics
@@ -111,9 +111,9 @@ $ pytest -v
 
 ### Manual Testing
 
-- Verified ytmpctl help displays correctly without color support
-- Tested ytmpctl sync/status/list error messages when daemon not running
-- Confirmed script is executable (chmod +x bin/ytmpctl)
+- Verified xmpctl help displays correctly without color support
+- Tested xmpctl sync/status/list error messages when daemon not running
+- Confirmed script is executable (chmod +x bin/xmpctl)
 - Validated JSON parsing for daemon responses
 - Tested Unicode and color fallback behavior
 
@@ -123,11 +123,11 @@ $ pytest -v
 
 ### Challenge 1: Testing Python Script Without .py Extension
 
-**Solution:** Initially attempted complex importlib approaches to load ytmpctl as a module for unit testing. After encountering import issues, switched to subprocess-based testing which is simpler, more realistic, and tests the actual user experience. This approach also avoids Python version compatibility issues with importlib.
+**Solution:** Initially attempted complex importlib approaches to load xmpctl as a module for unit testing. After encountering import issues, switched to subprocess-based testing which is simpler, more realistic, and tests the actual user experience. This approach also avoids Python version compatibility issues with importlib.
 
 ### Challenge 2: Backward Compatibility with Old Socket Protocol
 
-**Solution:** Completely removed old socket protocol support. Phase 6 daemon now uses JSON-based sync socket, so ytmpctl must match. Old ytmpctl functionality (playback commands) is now handled by mpc, so no compatibility layer needed.
+**Solution:** Completely removed old socket protocol support. Phase 6 daemon now uses JSON-based sync socket, so xmpctl must match. Old xmpctl functionality (playback commands) is now handled by mpc, so no compatibility layer needed.
 
 ---
 
@@ -162,13 +162,13 @@ All tests pass. Code follows ruff configuration from pyproject.toml. Type hints 
 
 ## Notes for Future Phases
 
-- **Socket Location**: ytmpctl connects to `~/.config/ytmpd/sync_socket` (not the old `socket` path). Phase 8 testing should account for this.
+- **Socket Location**: xmpctl connects to `~/.config/xmpd/sync_socket` (not the old `socket` path). Phase 8 testing should account for this.
 
 - **Command Responses**: All daemon responses are JSON with `success` field. Phase 8 integration tests can parse these for verification.
 
 - **Color/Unicode Testing**: Terminal capability detection works in non-TTY environments (like tests). Phase 8 shouldn't need special handling for this.
 
-- **Help Command**: Shows comprehensive workflow guidance including mpc commands. Phase 8 documentation can reference ytmpctl help output.
+- **Help Command**: Shows comprehensive workflow guidance including mpc commands. Phase 8 documentation can reference xmpctl help output.
 
 - **Error Messages**: Clear, actionable error messages when daemon not running. Phase 8 troubleshooting guide can leverage these.
 
@@ -178,7 +178,7 @@ All tests pass. Code follows ruff configuration from pyproject.toml. Type hints 
 
 ## Integration Points
 
-- **Daemon Socket**: ytmpctl connects to sync socket at `~/.config/ytmpd/sync_socket` implemented in Phase 6
+- **Daemon Socket**: xmpctl connects to sync socket at `~/.config/xmpd/sync_socket` implemented in Phase 6
 - **JSON Protocol**: Sends simple text commands ("sync", "status", "list", "quit") and receives JSON responses
 - **Status Information**: Reads sync statistics from daemon's state persistence (sync_state.json via status command)
 - **MPD Playback**: Help text directs users to mpc for playback control, completing the separation of concerns
@@ -203,14 +203,14 @@ None identified in this phase.
 
 **Minor Notes:**
 - No shell completion implemented (mentioned as future enhancement in plan). Can add completions for bash/zsh in Phase 9 if desired.
-- No support for custom socket paths via CLI flag - always uses `~/.config/ytmpd/sync_socket`. Could add `--socket` flag in future.
+- No support for custom socket paths via CLI flag - always uses `~/.config/xmpd/sync_socket`. Could add `--socket` flag in future.
 - Error messages assume standard installation paths. If users have custom config directories, errors may be less helpful.
 
 ---
 
 ## Security Considerations
 
-- Unix socket located at `~/.config/ytmpd/sync_socket` with default permissions
+- Unix socket located at `~/.config/xmpd/sync_socket` with default permissions
 - No authentication on socket (relies on file system permissions)
 - No arbitrary command execution vectors
 - JSON parsing uses standard library json module (safe)
@@ -225,10 +225,10 @@ None identified in this phase.
 
 **Recommended Actions:**
 1. Proceed to Phase 8 for comprehensive integration testing
-2. Test full workflow: start daemon → ytmpctl sync → ytmpctl status → mpc load/play
+2. Test full workflow: start daemon → xmpctl sync → xmpctl status → mpc load/play
 3. Document the new architecture in README.md
 4. Create migration guide for users upgrading from old ytmpd
-5. Write troubleshooting guide leveraging ytmpctl's error messages
+5. Write troubleshooting guide leveraging xmpctl's error messages
 
 ---
 
@@ -236,7 +236,7 @@ None identified in this phase.
 
 **Phase Status:** ✅ COMPLETE
 
-All completion criteria met, all tests passing (148 total tests in project including 8 new ytmpctl tests), CLI ready for Phase 8 integration testing.
+All completion criteria met, all tests passing (148 total tests in project including 8 new xmpctl tests), CLI ready for Phase 8 integration testing.
 
 ---
 
@@ -246,16 +246,16 @@ All completion criteria met, all tests passing (148 total tests in project inclu
 
 ```bash
 # Show help
-ytmpctl help
+xmpctl help
 
 # Trigger immediate sync
-ytmpctl sync
+xmpctl sync
 
 # Check sync status and statistics
-ytmpctl status
+xmpctl status
 
 # List YouTube Music playlists
-ytmpctl list-playlists
+xmpctl list-playlists
 
 # Load and play a playlist (via mpc)
 mpc load "YT: Favorites"
@@ -312,7 +312,7 @@ import json
 
 # Connect to sync socket
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect("/home/user/.config/ytmpd/sync_socket")
+sock.connect("/home/user/.config/xmpd/sync_socket")
 
 # Send command
 sock.sendall(b"status\n")
@@ -329,7 +329,7 @@ print(data["playlists_synced"])  # 5
 
 - Phase 6 Summary: Daemon sync socket protocol details
 - Project Plan Phase 7: Original specifications
-- bin/ytmpctl: Full implementation with inline documentation
+- bin/xmpctl: Full implementation with inline documentation
 
 ---
 

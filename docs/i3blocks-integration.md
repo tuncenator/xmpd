@@ -1,6 +1,6 @@
-# i3blocks Integration Guide for ytmpd-status
+# i3blocks Integration Guide for xmpd-status
 
-This guide explains how to integrate `ytmpd-status` with i3blocks for a dynamic music status display in your i3 window manager status bar.
+This guide explains how to integrate `xmpd-status` with i3blocks for a dynamic music status display in your i3 window manager status bar.
 
 ## Table of Contents
 
@@ -20,7 +20,7 @@ This guide explains how to integrate `ytmpd-status` with i3blocks for a dynamic 
 
 ## Overview
 
-`ytmpd-status` is a Python script that displays MPD playback status for i3blocks, with special handling for YouTube-streamed tracks via ytmpd. It provides:
+`xmpd-status` is a Python script that displays MPD playback status for i3blocks, with special handling for YouTube-streamed tracks via xmpd. It provides:
 
 - **Idle mode**: Efficient monitoring using MPD's idle protocol (minimal CPU usage)
 - **Click handlers**: Control playback directly from the status bar
@@ -36,13 +36,13 @@ This guide explains how to integrate `ytmpd-status` with i3blocks for a dynamic 
 **Minimum configuration** (add to `~/.config/i3blocks/config`):
 
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --idle --handle-clicks
+[xmpd-status]
+command=/path/to/xmpd-status --idle --handle-clicks
 interval=persist
 signal=10
 ```
 
-Replace `/path/to/ytmpd-status` with the actual path to the script (e.g., `~/Sync/Programs/ytmpd/bin/ytmpd-status`).
+Replace `/path/to/xmpd-status` with the actual path to the script (e.g., `~/Sync/Programs/xmpd/bin/xmpd-status`).
 
 Reload i3blocks:
 ```bash
@@ -56,20 +56,20 @@ pkill -SIGUSR1 i3blocks
 ### Prerequisites
 
 - **i3blocks**: Status bar for i3wm
-- **MPD**: Music Player Daemon (running on port 6601 by default for ytmpd)
-- **python-mpd2**: Python library for MPD (installed with ytmpd)
-- **ytmpd**: For YouTube track streaming (optional, works with regular MPD too)
+- **MPD**: Music Player Daemon (running on port 6601 by default for xmpd)
+- **python-mpd2**: Python library for MPD (installed with xmpd)
+- **xmpd**: For YouTube track streaming (optional, works with regular MPD too)
 
 ### Steps
 
-1. **Ensure ytmpd-status is executable**:
+1. **Ensure xmpd-status is executable**:
    ```bash
-   chmod +x ~/Sync/Programs/ytmpd/bin/ytmpd-status
+   chmod +x ~/Sync/Programs/xmpd/bin/xmpd-status
    ```
 
 2. **Test the script manually**:
    ```bash
-   ~/Sync/Programs/ytmpd/bin/ytmpd-status
+   ~/Sync/Programs/xmpd/bin/xmpd-status
    ```
 
    You should see output like:
@@ -96,8 +96,8 @@ Idle mode runs continuously and updates automatically when MPD state changes. Th
 
 **Basic idle mode**:
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --idle --handle-clicks
+[xmpd-status]
+command=/path/to/xmpd-status --idle --handle-clicks
 interval=persist
 signal=10
 markup=none
@@ -105,8 +105,8 @@ markup=none
 
 **With display options**:
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --idle --handle-clicks --bar-length 15 --show-next
+[xmpd-status]
+command=/path/to/xmpd-status --idle --handle-clicks --bar-length 15 --show-next
 interval=persist
 signal=10
 markup=none
@@ -114,8 +114,8 @@ markup=none
 
 **Compact mode**:
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --idle --handle-clicks --compact
+[xmpd-status]
+command=/path/to/xmpd-status --idle --handle-clicks --compact
 interval=persist
 signal=10
 markup=none
@@ -127,8 +127,8 @@ Polling mode runs the script at regular intervals. Less efficient but simpler.
 
 **Poll every 2 seconds**:
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --handle-clicks
+[xmpd-status]
+command=/path/to/xmpd-status --handle-clicks
 interval=2
 signal=10
 markup=none
@@ -136,8 +136,8 @@ markup=none
 
 **Poll every 5 seconds** (lower CPU usage):
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --handle-clicks
+[xmpd-status]
+command=/path/to/xmpd-status --handle-clicks
 interval=5
 signal=10
 markup=none
@@ -156,8 +156,8 @@ Click handlers require the `--handle-clicks` flag. They work in both idle and po
 
 **Example**:
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --idle --handle-clicks
+[xmpd-status]
+command=/path/to/xmpd-status --idle --handle-clicks
 interval=persist
 signal=10
 markup=none
@@ -169,47 +169,47 @@ markup=none
 
 Control progress bar length:
 ```bash
-ytmpd-status --bar-length 20  # Default: 10
+xmpd-status --bar-length 20  # Default: 10
 ```
 
 #### Bar Style
 
 Choose progress bar style:
 ```bash
-ytmpd-status --bar-style blocks  # █████░░░░░ (default for local)
-ytmpd-status --bar-style smooth  # ▰▰▰▰▰▱▱▱▱▱ (default for YouTube)
-ytmpd-status --bar-style simple  # #####----- (ASCII fallback)
-ytmpd-status --bar-style auto    # Auto-detect based on track type
+xmpd-status --bar-style blocks  # █████░░░░░ (default for local)
+xmpd-status --bar-style smooth  # ▰▰▰▰▰▱▱▱▱▱ (default for YouTube)
+xmpd-status --bar-style simple  # #####----- (ASCII fallback)
+xmpd-status --bar-style auto    # Auto-detect based on track type
 ```
 
 #### Hide Progress Bar
 
 ```bash
-ytmpd-status --no-show-bar
+xmpd-status --no-show-bar
 ```
 
 #### Maximum Length
 
 Control total output length:
 ```bash
-ytmpd-status --max-length 60  # Default: 50
+xmpd-status --max-length 60  # Default: 50
 ```
 
 #### Show Next/Previous Tracks
 
 ```bash
-ytmpd-status --show-next   # Show next track
-ytmpd-status --show-prev   # Show previous track
-ytmpd-status --show-next --show-prev  # Show both
+xmpd-status --show-next   # Show next track
+xmpd-status --show-prev   # Show previous track
+xmpd-status --show-next --show-prev  # Show both
 ```
 
 #### Custom Format String
 
 Complete control over output format:
 ```bash
-ytmpd-status --format "{icon} {title} - {artist} {bar}"
-ytmpd-status --format "{icon} {title} ({elapsed}/{duration})"
-ytmpd-status --format "{artist} - {title} {bar} [{position}/{total}]"
+xmpd-status --format "{icon} {title} - {artist} {bar}"
+xmpd-status --format "{icon} {title} ({elapsed}/{duration})"
+xmpd-status --format "{artist} - {title} {bar} [{position}/{total}]"
 ```
 
 **Available placeholders**:
@@ -228,7 +228,7 @@ ytmpd-status --format "{artist} - {title} {bar} [{position}/{total}]"
 #### Custom Colors
 
 ```bash
-ytmpd-status \
+xmpd-status \
   --color-youtube-playing "#f7768e" \
   --color-youtube-paused "#d9677b" \
   --color-local-playing "#7dcfff" \
@@ -239,7 +239,7 @@ ytmpd-status \
 #### Custom Icons
 
 ```bash
-ytmpd-status \
+xmpd-status \
   --icon-playing "▶️" \
   --icon-paused "⏸️" \
   --icon-stopped "⏹️"
@@ -254,7 +254,7 @@ ytmpd-status \
 Manually trigger a refresh (useful for debugging or scripting):
 
 ```bash
-pkill -RTMIN+10 ytmpd-status
+pkill -RTMIN+10 xmpd-status
 ```
 
 The signal number (10) matches the `signal=` value in i3blocks config.
@@ -264,7 +264,7 @@ The signal number (10) matches the `signal=` value in i3blocks config.
 If your MPD runs on a different port:
 
 ```bash
-ytmpd-status --port 6600  # Default MPD port
+xmpd-status --port 6600  # Default MPD port
 ```
 
 ### Different MPD Host
@@ -272,7 +272,7 @@ ytmpd-status --port 6600  # Default MPD port
 For remote MPD servers:
 
 ```bash
-ytmpd-status --host 192.168.1.100 --port 6600
+xmpd-status --host 192.168.1.100 --port 6600
 ```
 
 ### Verbose Mode
@@ -280,18 +280,18 @@ ytmpd-status --host 192.168.1.100 --port 6600
 Enable verbose output for debugging:
 
 ```bash
-ytmpd-status --idle --verbose
+xmpd-status --idle --verbose
 ```
 
 View logs:
 ```bash
-journalctl --user -f | grep ytmpd-status
+journalctl --user -f | grep xmpd-status
 ```
 
 Or redirect stderr to a file in i3blocks config:
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --idle --verbose 2>>/tmp/ytmpd-status.log
+[xmpd-status]
+command=/path/to/xmpd-status --idle --verbose 2>>/tmp/xmpd-status.log
 interval=persist
 signal=10
 ```
@@ -301,13 +301,13 @@ signal=10
 Run separate blocks for different MPD servers:
 
 ```ini
-[ytmpd-main]
-command=/path/to/ytmpd-status --idle --handle-clicks --port 6601
+[xmpd-main]
+command=/path/to/xmpd-status --idle --handle-clicks --port 6601
 interval=persist
 signal=10
 
-[ytmpd-secondary]
-command=/path/to/ytmpd-status --idle --handle-clicks --port 6602
+[xmpd-secondary]
+command=/path/to/xmpd-status --idle --handle-clicks --port 6602
 interval=persist
 signal=11
 ```
@@ -327,7 +327,7 @@ signal=11
 
 2. **Test the script manually**:
    ```bash
-   /path/to/ytmpd-status
+   /path/to/xmpd-status
    ```
 
 3. **Check i3blocks logs**:
@@ -343,7 +343,7 @@ signal=11
 
 2. **Check `$BLOCK_BUTTON` environment variable**:
    ```bash
-   BLOCK_BUTTON=1 /path/to/ytmpd-status --handle-clicks
+   BLOCK_BUTTON=1 /path/to/xmpd-status --handle-clicks
    ```
 
 3. **Check MPD permissions** (ensure you can control playback)
@@ -352,12 +352,12 @@ signal=11
 
 1. **Check if process is running**:
    ```bash
-   ps aux | grep ytmpd-status
+   ps aux | grep xmpd-status
    ```
 
 2. **Kill old instances**:
    ```bash
-   pkill ytmpd-status
+   pkill xmpd-status
    pkill -SIGUSR1 i3blocks  # Reload
    ```
 
@@ -374,7 +374,7 @@ signal=11
 
 3. **Test color output**:
    ```bash
-   /path/to/ytmpd-status | tail -n 1
+   /path/to/xmpd-status | tail -n 1
    # Should output: #RRGGBB
    ```
 
@@ -393,7 +393,7 @@ signal=11
 
 3. **Check for runaway processes**:
    ```bash
-   ps aux | grep ytmpd-status
+   ps aux | grep xmpd-status
    # Kill duplicates if found
    ```
 
@@ -404,7 +404,7 @@ signal=11
    systemctl --user status mpd
    ```
 
-2. **Verify port** (ytmpd uses 6601 by default):
+2. **Verify port** (xmpd uses 6601 by default):
    ```bash
    netstat -tlnp | grep 6601
    # or
@@ -421,14 +421,14 @@ signal=11
 
 If you see "Database not available" or tracks aren't classified correctly:
 
-1. **Ensure ytmpd is installed and configured**
+1. **Ensure xmpd is installed and configured**
 
 2. **Check database path**:
    ```bash
-   ls -la ~/.config/ytmpd/track_mapping.db
+   ls -la ~/.config/xmpd/track_mapping.db
    ```
 
-3. **Works with regular MPD too** - ytmpd database is optional
+3. **Works with regular MPD too** - xmpd database is optional
 
 ---
 
@@ -455,7 +455,7 @@ If you see "Database not available" or tracks aren't classified correctly:
 
 ### Comparison with Bash Scripts
 
-| Metric | ytmpd-status (idle) | Old bash scripts |
+| Metric | xmpd-status (idle) | Old bash scripts |
 |--------|---------------------|------------------|
 | CPU usage | ~0.1% | ~2-5% |
 | Memory | ~20MB | ~5MB (but multiple processes) |
@@ -470,8 +470,8 @@ If you see "Database not available" or tracks aren't classified correctly:
 ### Minimal (Display Only)
 
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --idle
+[xmpd-status]
+command=/path/to/xmpd-status --idle
 interval=persist
 signal=10
 ```
@@ -479,8 +479,8 @@ signal=10
 ### Full Featured
 
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --idle --handle-clicks --show-next --bar-length 15
+[xmpd-status]
+command=/path/to/xmpd-status --idle --handle-clicks --show-next --bar-length 15
 interval=persist
 signal=10
 markup=none
@@ -489,8 +489,8 @@ markup=none
 ### Custom Format
 
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --idle --handle-clicks --format "{icon} {title} {bar}"
+[xmpd-status]
+command=/path/to/xmpd-status --idle --handle-clicks --format "{icon} {title} {bar}"
 interval=persist
 signal=10
 markup=none
@@ -499,8 +499,8 @@ markup=none
 ### Compact with Colors
 
 ```ini
-[ytmpd-status]
-command=/path/to/ytmpd-status --idle --handle-clicks --compact \
+[xmpd-status]
+command=/path/to/xmpd-status --idle --handle-clicks --compact \
   --color-youtube-playing "#f7768e" \
   --color-local-playing "#7dcfff"
 interval=persist
@@ -512,11 +512,11 @@ markup=none
 
 ## See Also
 
-- `ytmpd-status --help` - Complete list of command-line arguments
+- `xmpd-status --help` - Complete list of command-line arguments
 - `examples/i3blocks.conf` - Additional configuration examples
 - i3blocks documentation: https://github.com/vivien/i3blocks
 - MPD documentation: https://www.musicpd.org/doc/
-- ytmpd documentation: See main README
+- xmpd documentation: See main README
 
 ---
 

@@ -1,4 +1,4 @@
-"""YouTube Music API wrapper for ytmpd.
+"""YouTube Music API wrapper for xmpd.
 
 This module provides a wrapper around ytmusicapi that handles authentication
 and provides clean interfaces for search, playback, and song info retrieval.
@@ -12,9 +12,9 @@ from typing import Any
 
 from ytmusicapi import YTMusic
 
-from ytmpd.config import get_config_dir
-from ytmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
-from ytmpd.rating import RatingManager, RatingState
+from xmpd.config import get_config_dir
+from xmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
+from xmpd.rating import RatingManager, RatingState
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class YTMusicClient:
 
         Args:
             auth_file: Path to browser authentication file. If None, uses default location
-                       (~/.config/ytmpd/browser.json).
+                       (~/.config/xmpd/browser.json).
 
         Raises:
             YTMusicAuthError: If authentication fails or credentials are invalid.
@@ -111,7 +111,7 @@ class YTMusicClient:
             if not self.auth_file.exists():
                 raise YTMusicAuthError(
                     f"Browser authentication file not found: {self.auth_file}\n"
-                    f"Please run: python -m ytmpd.ytmusic setup-browser"
+                    f"Please run: python -m xmpd.ytmusic setup-browser"
                 )
 
             logger.info("Initializing YouTube Music client with browser authentication")
@@ -903,8 +903,8 @@ class YTMusicClient:
             print("Browser authentication setup complete!")
             print(f"Credentials saved to: {browser_file}")
             print()
-            print("You can now start the ytmpd daemon with:")
-            print("  python -m ytmpd")
+            print("You can now start the xmpd daemon with:")
+            print("  python -m xmpd")
             print("=" * 60)
 
         except KeyboardInterrupt:
@@ -927,7 +927,7 @@ def main() -> None:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
     else:
-        print("Usage: python -m ytmpd.ytmusic setup-browser")
+        print("Usage: python -m xmpd.ytmusic setup-browser")
         sys.exit(1)
 
 

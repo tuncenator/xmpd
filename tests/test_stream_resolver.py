@@ -1,5 +1,5 @@
 """
-Tests for ytmpd/stream_resolver.py - Stream URL resolver with yt-dlp integration.
+Tests for xmpd/stream_resolver.py - Stream URL resolver with yt-dlp integration.
 """
 
 import time
@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch, MagicMock
 import pytest
 import yt_dlp
 
-from ytmpd.stream_resolver import StreamResolver, CachedURL
+from xmpd.stream_resolver import StreamResolver, CachedURL
 
 
 class TestCachedURL:
@@ -120,7 +120,7 @@ class TestStreamResolverCaching:
 class TestStreamResolverExtraction:
     """Tests for URL extraction with yt-dlp."""
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_success(self, mock_ydl_class):
         """Test successful URL extraction."""
         # Mock yt-dlp context manager
@@ -139,7 +139,7 @@ class TestStreamResolverExtraction:
             download=False
         )
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_no_info(self, mock_ydl_class):
         """Test extraction when no info is returned."""
         mock_ydl = MagicMock()
@@ -151,7 +151,7 @@ class TestStreamResolverExtraction:
 
         assert url is None
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_no_url_in_info(self, mock_ydl_class):
         """Test extraction when info lacks URL field."""
         mock_ydl = MagicMock()
@@ -163,7 +163,7 @@ class TestStreamResolverExtraction:
 
         assert url is None
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_private_video(self, mock_ydl_class):
         """Test extraction of private video."""
         mock_ydl = MagicMock()
@@ -175,7 +175,7 @@ class TestStreamResolverExtraction:
 
         assert url is None
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_unavailable_video(self, mock_ydl_class):
         """Test extraction of unavailable video."""
         mock_ydl = MagicMock()
@@ -187,7 +187,7 @@ class TestStreamResolverExtraction:
 
         assert url is None
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_region_locked(self, mock_ydl_class):
         """Test extraction of region-locked video."""
         mock_ydl = MagicMock()
@@ -201,7 +201,7 @@ class TestStreamResolverExtraction:
 
         assert url is None
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_removed_video(self, mock_ydl_class):
         """Test extraction of removed video."""
         mock_ydl = MagicMock()
@@ -215,7 +215,7 @@ class TestStreamResolverExtraction:
 
         assert url is None
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_extractor_error(self, mock_ydl_class):
         """Test extraction with extractor error."""
         mock_ydl = MagicMock()
@@ -227,8 +227,8 @@ class TestStreamResolverExtraction:
 
         assert url is None
 
-    @patch('ytmpd.stream_resolver.time.sleep')
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.time.sleep')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_network_error_retry_success(self, mock_ydl_class, mock_sleep):
         """Test extraction retries on network error and succeeds."""
         mock_ydl = MagicMock()
@@ -246,8 +246,8 @@ class TestStreamResolverExtraction:
         assert mock_ydl.extract_info.call_count == 2
         mock_sleep.assert_called_once_with(1)
 
-    @patch('ytmpd.stream_resolver.time.sleep')
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.time.sleep')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_network_error_retry_fails(self, mock_ydl_class, mock_sleep):
         """Test extraction retries on network error and fails."""
         mock_ydl = MagicMock()
@@ -262,7 +262,7 @@ class TestStreamResolverExtraction:
         assert mock_ydl.extract_info.call_count == 2
         mock_sleep.assert_called_once_with(1)
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_extract_url_unexpected_error(self, mock_ydl_class):
         """Test extraction with unexpected error."""
         mock_ydl = MagicMock()
@@ -278,7 +278,7 @@ class TestStreamResolverExtraction:
 class TestStreamResolverResolveVideoId:
     """Tests for resolve_video_id() method."""
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_video_id_cache_miss(self, mock_ydl_class):
         """Test resolving video ID with cache miss."""
         mock_ydl = MagicMock()
@@ -295,7 +295,7 @@ class TestStreamResolverResolveVideoId:
         assert 'dQw4w9WgXcQ' in resolver._cache
         assert resolver._cache['dQw4w9WgXcQ'].url == 'https://example.com/audio.m4a'
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_video_id_cache_hit(self, mock_ydl_class):
         """Test resolving video ID with cache hit."""
         resolver = StreamResolver()
@@ -312,7 +312,7 @@ class TestStreamResolverResolveVideoId:
         # Verify yt-dlp was not called
         mock_ydl_class.assert_not_called()
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_video_id_extraction_fails(self, mock_ydl_class):
         """Test resolving video ID when extraction fails."""
         mock_ydl = MagicMock()
@@ -326,7 +326,7 @@ class TestStreamResolverResolveVideoId:
         # Verify it was not cached
         assert 'bad_vid' not in resolver._cache
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_video_id_expired_cache(self, mock_ydl_class):
         """Test resolving video ID with expired cache entry."""
         mock_ydl = MagicMock()
@@ -358,7 +358,7 @@ class TestStreamResolverResolveVideoId:
 class TestStreamResolverBatchResolution:
     """Tests for resolve_batch() method."""
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_batch_empty_list(self, mock_ydl_class):
         """Test batch resolution with empty list."""
         resolver = StreamResolver()
@@ -367,7 +367,7 @@ class TestStreamResolverBatchResolution:
         assert results == {}
         mock_ydl_class.assert_not_called()
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_batch_all_success(self, mock_ydl_class):
         """Test batch resolution where all videos succeed."""
         mock_ydl = MagicMock()
@@ -388,7 +388,7 @@ class TestStreamResolverBatchResolution:
         assert results['vid2'] == 'https://example.com/vid2.m4a'
         assert results['vid3'] == 'https://example.com/vid3.m4a'
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_batch_partial_success(self, mock_ydl_class):
         """Test batch resolution where some videos fail."""
         mock_ydl = MagicMock()
@@ -411,7 +411,7 @@ class TestStreamResolverBatchResolution:
         assert 'bad_vid' not in results
         assert 'vid3' in results
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_batch_uses_cache(self, mock_ydl_class):
         """Test batch resolution uses cached entries."""
         mock_ydl = MagicMock()
@@ -435,7 +435,7 @@ class TestStreamResolverBatchResolution:
         # Verify yt-dlp was only called once (for new_vid)
         assert mock_ydl.extract_info.call_count == 1
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_batch_handles_exceptions(self, mock_ydl_class):
         """Test batch resolution handles exceptions gracefully."""
         mock_ydl = MagicMock()
@@ -459,7 +459,7 @@ class TestStreamResolverBatchResolution:
         assert 'exception_vid' not in results
         assert 'vid3' in results
 
-    @patch('ytmpd.stream_resolver.yt_dlp.YoutubeDL')
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_batch_parallel_processing(self, mock_ydl_class):
         """Test batch resolution processes videos in parallel."""
         mock_ydl = MagicMock()

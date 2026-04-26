@@ -1,4 +1,4 @@
-"""MPD client module for ytmpd.
+"""MPD client module for xmpd.
 
 This module provides a high-level wrapper around python-mpd2 for MPD
 communication, with a focus on playlist management operations.
@@ -13,8 +13,8 @@ from typing import Any
 from mpd import CommandError, ConnectionError
 from mpd import MPDClient as MPDClientBase
 
-from ytmpd.exceptions import MPDConnectionError, MPDPlaylistError
-from ytmpd.xspf_generator import XSPFTrack, generate_xspf
+from xmpd.exceptions import MPDConnectionError, MPDPlaylistError
+from xmpd.xspf_generator import XSPFTrack, generate_xspf
 
 logger = logging.getLogger(__name__)
 

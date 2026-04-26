@@ -64,7 +64,7 @@ This phase completed the like/dislike feature by adding comprehensive user-facin
 
 1. **Documentation Placement**:
    - Placed like/dislike section after "Radio and Search Features" and before "i3 Integration"
-   - This groups all ytmpctl command features together logically
+   - This groups all xmpctl command features together logically
    - Maintains consistent structure with other feature documentation
 
 2. **Example-Driven Documentation**:
@@ -93,7 +93,7 @@ This phase completed the like/dislike feature by adding comprehensive user-facin
 
 - [x] `README.md` updated with like/dislike documentation
 - [x] User guide created (integrated into README.md)
-- [x] `ytmpctl help` text updated (verified already complete from Phase 4)
+- [x] `xmpctl help` text updated (verified already complete from Phase 4)
 - [x] Changelog entry created
 - [x] All code has proper docstrings and type hints
 - [x] Keybinding examples provided for window managers (i3)
@@ -165,10 +165,10 @@ fix end of files.........................................................Passed
 - Analyzed existing README structure
 - Found "Radio and Search Features" section under Usage
 - Placed like/dislike as subsection at same level (### heading)
-- This groups all ytmpctl command features together logically
+- This groups all xmpctl command features together logically
 - Maintains consistency with existing documentation patterns
 
-**Impact:** Users can easily find all ytmpctl commands in one section of the README.
+**Impact:** Users can easily find all xmpctl commands in one section of the README.
 
 ### Challenge 2: Known Limitation Communication
 
@@ -194,7 +194,7 @@ fix end of files.........................................................Passed
 ### Documentation
 - [x] README.md comprehensive and user-friendly
 - [x] CHANGELOG.md complete with technical and user-facing details
-- [x] All code has docstrings (rating.py, ytmusic.py rating methods, ytmpctl commands)
+- [x] All code has docstrings (rating.py, ytmusic.py rating methods, xmpctl commands)
 - [x] Type hints complete throughout
 - [x] No TODO/FIXME comments remain
 
@@ -215,7 +215,7 @@ mixed line ending........................................................Passed
 
 ### Required by This Phase
 - **Phase 5: End-to-End Testing & Validation** - Provided test results and validation for documentation
-- **Phase 4: ytmpctl Command Implementation** - Provided ytmpctl help text to verify
+- **Phase 4: xmpctl Command Implementation** - Provided xmpctl help text to verify
 - **Phase 3: YouTube Music API Integration** - Provided API limitation details to document
 - **Phase 2: Core Toggle Logic & Rating Manager** - Provided state machine details to document
 
@@ -234,7 +234,7 @@ The like/dislike feature is now fully implemented, tested, and documented. No fu
 - ✅ API research complete (Phase 1)
 - ✅ Toggle logic implemented (Phase 2)
 - ✅ YouTube Music integration complete (Phase 3)
-- ✅ ytmpctl commands implemented (Phase 4)
+- ✅ xmpctl commands implemented (Phase 4)
 - ✅ End-to-end testing complete (Phase 5)
 - ✅ Documentation complete (Phase 6)
 
@@ -299,7 +299,7 @@ This phase completes the like/dislike feature. No additional work required.
 1. Consider adding similar documentation for other features (radio, search)
 2. Create visual documentation (screenshots, GIFs) for README
 3. Consider creating video tutorial
-4. Add man page for ytmpctl
+4. Add man page for xmpctl
 
 **Suggested Workflow:**
 
@@ -320,7 +320,7 @@ All objectives achieved. Documentation comprehensive and user-friendly. Code qua
 **Final Deliverables:**
 - README.md updated with complete feature documentation
 - CHANGELOG.md updated with detailed feature entry
-- ytmpctl help text verified
+- xmpctl help text verified
 - Code quality verified (docstrings, type hints, no TODOs)
 - All 462 tests passing
 
@@ -346,7 +346,7 @@ Ready for user testing and release.
 - Moved from planned: 1 feature (like/dislike)
 
 **Code Quality Review:**
-- Files reviewed: 3 (rating.py, ytmusic.py, ytmpctl)
+- Files reviewed: 3 (rating.py, ytmusic.py, xmpctl)
 - Docstrings verified: All present and complete
 - Type hints verified: Complete throughout
 - TODO comments found: 0

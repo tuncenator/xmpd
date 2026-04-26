@@ -263,7 +263,7 @@ from ytmpd.stream_resolver import StreamResolver
 from ytmpd.icy_proxy import ICYProxyServer
 
 async def main():
-    store = TrackStore("~/.config/ytmpd/track_mapping.db")
+    store = TrackStore("~/.config/xmpd/track_mapping.db")
     resolver = StreamResolver(cache_hours=5)
 
     async with ICYProxyServer(

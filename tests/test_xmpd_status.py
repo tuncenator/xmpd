@@ -1,4 +1,4 @@
-"""Tests for bin/ytmpd-status script.
+"""Tests for bin/xmpd-status script.
 
 Tests cover MPD connection, track classification, color selection,
 and output formatting functionality.
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Import the script module
-script_path = Path(__file__).parent.parent / "bin" / "ytmpd-status"
+script_path = Path(__file__).parent.parent / "bin" / "xmpd-status"
 spec = importlib.util.spec_from_file_location(
     "ytmpd_status",
     script_path,
@@ -28,7 +28,7 @@ spec.loader.exec_module(ytmpd_status)
 class TestGetMPDClient:
     """Test MPD client connection."""
 
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.MPDClient")
     def test_successful_connection(self, mock_mpd_class):
         """Test successful MPD connection."""
@@ -40,7 +40,7 @@ class TestGetMPDClient:
         assert client is not None
         mock_client.connect.assert_called_once_with("localhost", 6601)
 
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.MPDClient")
     def test_connection_refused(self, mock_mpd_class):
         """Test connection failure when MPD is not running."""
@@ -52,7 +52,7 @@ class TestGetMPDClient:
 
         assert client is None
 
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.MPDClient")
     def test_connection_os_error(self, mock_mpd_class):
         """Test connection failure with OS error."""
@@ -86,7 +86,7 @@ class TestGetTrackType:
     def test_youtube_from_database(self, tmp_path):
         """Test YouTube track detection from database."""
         # Create temporary database
-        db_path = tmp_path / ".config" / "ytmpd"
+        db_path = tmp_path / ".config" / "xmpd"
         db_path.mkdir(parents=True)
         db_file = db_path / "track_mapping.db"
 
@@ -117,7 +117,7 @@ class TestGetTrackType:
     def test_local_file_not_in_database(self, tmp_path):
         """Test local file detection when not in database."""
         # Create temporary database
-        db_path = tmp_path / ".config" / "ytmpd"
+        db_path = tmp_path / ".config" / "xmpd"
         db_path.mkdir(parents=True)
         db_file = db_path / "track_mapping.db"
 
@@ -143,7 +143,7 @@ class TestGetTrackType:
 
     def test_unknown_http_url(self, tmp_path):
         """Test unknown HTTP URL when not in database."""
-        db_path = tmp_path / ".config" / "ytmpd"
+        db_path = tmp_path / ".config" / "xmpd"
         db_path.mkdir(parents=True)
         db_file = db_path / "track_mapping.db"
 
@@ -166,7 +166,7 @@ class TestGetTrackType:
     def test_database_error_fallback(self, tmp_path):
         """Test fallback to heuristic when database query fails."""
         # Create database path but with bad permissions or corrupted
-        db_path = tmp_path / ".config" / "ytmpd"
+        db_path = tmp_path / ".config" / "xmpd"
         db_path.mkdir(parents=True)
 
         with patch("ytmpd_status.Path.home") as mock_home:
@@ -239,9 +239,9 @@ class TestTruncate:
 class TestColorSelection:
     """Test color selection for different states and track types."""
 
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_youtube_playing_color(self, mock_track_type, mock_client, capsys):
         """Test color for playing YouTube track."""
@@ -270,7 +270,7 @@ class TestColorSelection:
         assert lines[2] == "#f7768e"  # Pink for YouTube playing
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_youtube_paused_color(self, mock_track_type, mock_client, capsys):
         """Test color for paused YouTube track."""
@@ -296,7 +296,7 @@ class TestColorSelection:
         assert lines[2] == "#d9677b"  # Deeper pink for YouTube paused
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_local_playing_color(self, mock_track_type, mock_client, capsys):
         """Test color for playing local track."""
@@ -322,7 +322,7 @@ class TestColorSelection:
         assert lines[2] == "#7dcfff"  # Cyan for local playing
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_local_paused_color(self, mock_track_type, mock_client, capsys):
         """Test color for paused local track."""
@@ -347,7 +347,7 @@ class TestColorSelection:
         lines = captured.out.strip().split("\n")
         assert lines[2] == "#5ab3dd"  # Deeper cyan for local paused
 
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_mpd_client")
     def test_mpd_not_running(self, mock_client, capsys):
         """Test output when MPD is not running."""
@@ -362,7 +362,7 @@ class TestColorSelection:
         assert "MPD stopped" in lines[0]
         assert lines[2] == "#565f89"  # Slate
 
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_mpd_client")
     def test_mpd_stopped(self, mock_client, capsys):
         """Test output when MPD is stopped."""
@@ -385,7 +385,7 @@ class TestOutputFormatting:
     """Test output formatting for i3blocks."""
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_basic_output_format(self, mock_track_type, mock_client, capsys):
         """Test basic output format."""
@@ -418,11 +418,11 @@ class TestOutputFormatting:
         assert "[" in lines[0] and "]" in lines[0]
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_truncation_in_output(self, mock_track_type, mock_client, capsys, monkeypatch):
         """Test output truncation."""
-        monkeypatch.setenv("YTMPD_STATUS_MAX_LENGTH", "30")
+        monkeypatch.setenv("XMPD_STATUS_MAX_LENGTH", "30")
 
         mock_mpd = MagicMock()
         mock_client.return_value = mock_mpd
@@ -448,7 +448,7 @@ class TestOutputFormatting:
         assert "…" in lines[0]  # Check for proper ellipsis character
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_pause_icon(self, mock_track_type, mock_client, capsys):
         """Test pause icon display."""
@@ -608,7 +608,7 @@ class TestProgressBarIntegration:
     """Test progress bar integration with main output."""
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_progress_bar_in_output_youtube(self, mock_track_type, mock_client, capsys):
         """Test progress bar appears in output for YouTube track."""
@@ -639,7 +639,7 @@ class TestProgressBarIntegration:
         assert "1:00" in lines[0]
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_progress_bar_in_output_local(self, mock_track_type, mock_client, capsys):
         """Test progress bar appears in output for local track."""
@@ -670,11 +670,11 @@ class TestProgressBarIntegration:
         assert "1:30" in lines[0]
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_progress_bar_disabled(self, mock_track_type, mock_client, capsys, monkeypatch):
         """Test that progress bar can be disabled via environment variable."""
-        monkeypatch.setenv("YTMPD_STATUS_SHOW_BAR", "false")
+        monkeypatch.setenv("XMPD_STATUS_SHOW_BAR", "false")
 
         mock_mpd = MagicMock()
         mock_client.return_value = mock_mpd
@@ -703,11 +703,11 @@ class TestProgressBarIntegration:
         assert "▱" not in lines[0]
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_custom_bar_length(self, mock_track_type, mock_client, capsys, monkeypatch):
         """Test custom bar length via environment variable."""
-        monkeypatch.setenv("YTMPD_STATUS_BAR_LENGTH", "5")
+        monkeypatch.setenv("XMPD_STATUS_BAR_LENGTH", "5")
 
         mock_mpd = MagicMock()
         mock_client.return_value = mock_mpd
@@ -734,11 +734,11 @@ class TestProgressBarIntegration:
         assert "█" in lines[0] or "░" in lines[0]
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_forced_bar_style(self, mock_track_type, mock_client, capsys, monkeypatch):
         """Test forcing a specific bar style via environment variable."""
-        monkeypatch.setenv("YTMPD_STATUS_BAR_STYLE", "simple")
+        monkeypatch.setenv("XMPD_STATUS_BAR_STYLE", "simple")
 
         mock_mpd = MagicMock()
         mock_client.return_value = mock_mpd
@@ -766,7 +766,7 @@ class TestProgressBarIntegration:
         assert "▱" not in lines[0]
 
     @patch("ytmpd_status.get_mpd_client")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_track_type")
     def test_no_duration_no_bar(self, mock_track_type, mock_client, capsys):
         """Test that bar is not shown when duration is 0 or missing."""
@@ -905,7 +905,7 @@ class TestGetSyncStatus:
     def test_youtube_resolved(self, tmp_path):
         """Test sync status for resolved YouTube track."""
         # Create temporary database
-        db_path = tmp_path / ".config" / "ytmpd"
+        db_path = tmp_path / ".config" / "xmpd"
         db_path.mkdir(parents=True)
         db_file = db_path / "track_mapping.db"
 
@@ -932,7 +932,7 @@ class TestGetSyncStatus:
     def test_youtube_unresolved(self, tmp_path):
         """Test sync status for unresolved YouTube track."""
         # Create temporary database
-        db_path = tmp_path / ".config" / "ytmpd"
+        db_path = tmp_path / ".config" / "xmpd"
         db_path.mkdir(parents=True)
         db_file = db_path / "track_mapping.db"
 
@@ -959,7 +959,7 @@ class TestGetSyncStatus:
     def test_youtube_not_in_database(self, tmp_path):
         """Test sync status for YouTube track not in database."""
         # Create empty database
-        db_path = tmp_path / ".config" / "ytmpd"
+        db_path = tmp_path / ".config" / "xmpd"
         db_path.mkdir(parents=True)
         db_file = db_path / "track_mapping.db"
 
@@ -1052,7 +1052,7 @@ class TestContextAwareMessaging:
     @patch("ytmpd_status.get_mpd_client")
     @patch("ytmpd_status.get_track_type")
     @patch("ytmpd_status.get_playlist_context")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_sync_status")
     def test_unresolved_youtube_track(self, mock_sync, mock_ctx, mock_track, mock_client, capsys):
         """Test 'Resolving...' message for unresolved YouTube track."""
@@ -1081,7 +1081,7 @@ class TestContextAwareMessaging:
     @patch("ytmpd_status.get_mpd_client")
     @patch("ytmpd_status.get_track_type")
     @patch("ytmpd_status.get_playlist_context")
-    @patch("sys.argv", ["ytmpd-status", "--show-position"])
+    @patch("sys.argv", ["xmpd-status", "--show-position"])
     @patch("ytmpd_status.get_sync_status")
     def test_first_track_position(self, mock_sync, mock_ctx, mock_track, mock_client, capsys):
         """Test position display for first track."""
@@ -1110,7 +1110,7 @@ class TestContextAwareMessaging:
     @patch("ytmpd_status.get_mpd_client")
     @patch("ytmpd_status.get_track_type")
     @patch("ytmpd_status.get_playlist_context")
-    @patch("sys.argv", ["ytmpd-status", "--show-position"])
+    @patch("sys.argv", ["xmpd-status", "--show-position"])
     @patch("ytmpd_status.get_sync_status")
     def test_last_track_position(self, mock_sync, mock_ctx, mock_track, mock_client, capsys):
         """Test position display for last track."""
@@ -1139,7 +1139,7 @@ class TestContextAwareMessaging:
     @patch("ytmpd_status.get_mpd_client")
     @patch("ytmpd_status.get_track_type")
     @patch("ytmpd_status.get_playlist_context")
-    @patch("sys.argv", ["ytmpd-status", "--show-position"])
+    @patch("sys.argv", ["xmpd-status", "--show-position"])
     @patch("ytmpd_status.get_sync_status")
     def test_single_track_playlist(self, mock_sync, mock_ctx, mock_track, mock_client, capsys):
         """Test position display for single track playlist."""
@@ -1169,11 +1169,11 @@ class TestContextAwareMessaging:
 class TestCompactMode:
     """Test compact mode functionality."""
 
-    @patch.dict("os.environ", {"YTMPD_STATUS_COMPACT": "true"})
+    @patch.dict("os.environ", {"XMPD_STATUS_COMPACT": "true"})
     @patch("ytmpd_status.get_mpd_client")
     @patch("ytmpd_status.get_track_type")
     @patch("ytmpd_status.get_playlist_context")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_sync_status")
     def test_compact_mode_output(self, mock_sync, mock_ctx, mock_track, mock_client, capsys):
         """Test that compact mode produces minimal output."""
@@ -1213,11 +1213,11 @@ class TestCompactMode:
 class TestNextPrevDisplay:
     """Test next/previous track display."""
 
-    @patch.dict("os.environ", {"YTMPD_STATUS_SHOW_NEXT": "true"})
+    @patch.dict("os.environ", {"XMPD_STATUS_SHOW_NEXT": "true"})
     @patch("ytmpd_status.get_mpd_client")
     @patch("ytmpd_status.get_track_type")
     @patch("ytmpd_status.get_playlist_context")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_sync_status")
     def test_show_next_track(self, mock_sync, mock_ctx, mock_track, mock_client, capsys):
         """Test next track display when enabled."""
@@ -1252,11 +1252,11 @@ class TestNextPrevDisplay:
         assert "Next Artist" in output
         assert "Next Song" in output
 
-    @patch.dict("os.environ", {"YTMPD_STATUS_SHOW_PREV": "true"})
+    @patch.dict("os.environ", {"XMPD_STATUS_SHOW_PREV": "true"})
     @patch("ytmpd_status.get_mpd_client")
     @patch("ytmpd_status.get_track_type")
     @patch("ytmpd_status.get_playlist_context")
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     @patch("ytmpd_status.get_sync_status")
     def test_show_prev_track(self, mock_sync, mock_ctx, mock_track, mock_client, capsys):
         """Test previous track display when enabled."""

@@ -8,7 +8,7 @@
 
 ## Objective
 
-Implement interactive terminal UI in ytmpctl for search workflow
+Implement interactive terminal UI in xmpctl for search workflow
 
 ---
 
@@ -36,7 +36,7 @@ Successfully implemented the complete interactive search CLI for ytmpd:
 
 ### Files Modified
 
-- `bin/ytmpctl` - Added `cmd_search()` function (lines 264-441), updated command dispatcher to handle "search" (lines 562-563), updated help message to include search command (line 497). Radio action (option 3) automatically applies playlist and starts playback (lines 378-432).
+- `bin/xmpctl` - Added `cmd_search()` function (lines 264-441), updated command dispatcher to handle "search" (lines 562-563), updated help message to include search command (line 497). Radio action (option 3) automatically applies playlist and starts playback (lines 378-432).
 - `tests/test_ytmpctl.py` - Added imports for mocking (lines 7-10), added `TestYtmpctlSearch` test class with 2 tests covering help and daemon interaction (lines 109-136)
 - `ytmpd/daemon.py` - Fixed search command parsing to support multi-word queries (line 511): changed from `parts[1]` to `" ".join(parts[1:])` to join all words after "search"
 
@@ -50,14 +50,14 @@ Successfully implemented the complete interactive search CLI for ytmpd:
 6. **Unicode and color support**: Reused existing `colorize()` and `has_unicode_support()` functions for consistent UI
 7. **Action dispatch**: Each action (play/queue/radio) sends appropriate command to daemon with video ID
 8. **Keyboard interrupt handling**: Catches KeyboardInterrupt at any point and exits cleanly with "Cancelled." message
-9. **Test approach**: Used simple integration tests checking help message and daemon interaction rather than complex mocking, consistent with existing ytmpctl test patterns
-10. **Auto-apply for radio action**: Option 3 (start radio) automatically loads config, clears MPD queue, loads radio playlist, and starts playback - same as `ytmpctl radio --apply` behavior. No manual steps required.
+9. **Test approach**: Used simple integration tests checking help message and daemon interaction rather than complex mocking, consistent with existing xmpctl test patterns
+10. **Auto-apply for radio action**: Option 3 (start radio) automatically loads config, clears MPD queue, loads radio playlist, and starts playback - same as `xmpctl radio --apply` behavior. No manual steps required.
 
 ---
 
 ## Completion Criteria Status
 
-- [x] `ytmpctl search` command implemented
+- [x] `xmpctl search` command implemented
 - [x] Interactive flow works end-to-end
 - [x] Search query prompt works
 - [x] Results display formatted correctly
@@ -109,7 +109,7 @@ tests/test_ytmpctl.py::TestYtmpctlSearch::test_search_command_requires_daemon PA
 ============================== 10 passed in 0.62s ==============================
 ```
 
-All 10 ytmpctl tests pass, including:
+All 10 xmpctl tests pass, including:
 - 2 new Phase 5 tests for search command
 - 7 existing basic tests (help, unknown command, daemon checks)
 - 1 Python syntax validation test
@@ -120,7 +120,7 @@ Performed manual testing of search command:
 
 1. **Empty query handling**:
    ```bash
-   $ echo "" | bin/ytmpctl search
+   $ echo "" | bin/xmpctl search
    Search YouTube Music:
    > Empty query. Exiting.
    ```
@@ -128,19 +128,19 @@ Performed manual testing of search command:
 
 2. **Help message includes search**:
    ```bash
-   $ bin/ytmpctl help | grep search
-   ytmpctl search            Interactive search for YouTube Music tracks
+   $ bin/xmpctl help | grep search
+   xmpctl search            Interactive search for YouTube Music tracks
    ```
    ✓ Search command documented in help
 
 3. **Command dispatcher routing**:
-   - `bin/ytmpctl search` command recognized and routes to `cmd_search()`
+   - `bin/xmpctl search` command recognized and routes to `cmd_search()`
    - Daemon communication works correctly
    - Error handling displays appropriate messages
 
 4. **Multi-word query search**:
    ```bash
-   $ echo -e "miles davis\nq" | bin/ytmpctl search | head -15
+   $ echo -e "miles davis\nq" | bin/xmpctl search | head -15
    Search YouTube Music:
    >
    Searching for: miles davis...
@@ -161,7 +161,7 @@ Performed manual testing of search command:
 
 ### Challenge 1: Test strategy for interactive CLI
 
-**Problem**: ytmpctl is a standalone Python script (not a module), making it difficult to import and mock internal functions for unit testing.
+**Problem**: xmpctl is a standalone Python script (not a module), making it difficult to import and mock internal functions for unit testing.
 
 **Solution**: Followed existing test patterns in `test_ytmpctl.py` which use subprocess-based integration tests. Added simple tests that verify help message and basic command behavior, consistent with existing tests for sync, status, and list commands.
 
@@ -192,7 +192,7 @@ Performed manual testing of search command:
 
 ### Formatting
 - [x] Code follows existing project style (PEP 8 compliant)
-- [x] Consistent with existing ytmpctl command patterns
+- [x] Consistent with existing xmpctl command patterns
 - [x] Proper error handling with try/except
 - [x] Clear user-facing messages at each step
 
@@ -204,7 +204,7 @@ Performed manual testing of search command:
 
 ### Linting
 
-No linting issues. Code follows existing patterns in `bin/ytmpctl` and `tests/test_ytmpctl.py`.
+No linting issues. Code follows existing patterns in `bin/xmpctl` and `tests/test_ytmpctl.py`.
 
 ---
 
@@ -233,7 +233,7 @@ The search feature is now fully functional for interactive use:
 python -m ytmpd &
 
 # Interactive search
-ytmpctl search
+xmpctl search
 
 # Example flow:
 # 1. Enter query: "miles davis"
@@ -255,9 +255,9 @@ The interactive prompt pattern from `cmd_search()` could be reused for other fea
 
 ### Integration Points
 
-- `bin/ytmpctl:cmd_search()` - Main search command handler (lines 264-397)
-- `bin/ytmpctl:main()` - Command dispatcher includes "search" case (lines 562-563)
-- `bin/ytmpctl:show_help()` - Help message includes search description (line 497)
+- `bin/xmpctl:cmd_search()` - Main search command handler (lines 264-397)
+- `bin/xmpctl:main()` - Command dispatcher includes "search" case (lines 562-563)
+- `bin/xmpctl:show_help()` - Help message includes search description (line 497)
 
 ---
 
@@ -331,7 +331,7 @@ All deliverables met, all tests passing, no blockers for next phase.
 
 **Basic search workflow:**
 ```bash
-$ ytmpctl search
+$ xmpctl search
 Search YouTube Music:
 > miles davis so what
 
@@ -364,7 +364,7 @@ Applying radio playlist to MPD...
 
 **Empty query (immediate exit):**
 ```bash
-$ ytmpctl search
+$ xmpctl search
 Search YouTube Music:
 >
 Empty query. Exiting.
@@ -372,7 +372,7 @@ Empty query. Exiting.
 
 **Cancel with 'q':**
 ```bash
-$ ytmpctl search
+$ xmpctl search
 Search YouTube Music:
 > miles davis
 
@@ -386,7 +386,7 @@ Cancelled.
 
 **Keyboard interrupt (Ctrl+C):**
 ```bash
-$ ytmpctl search
+$ xmpctl search
 Search YouTube Music:
 > ^C
 Cancelled.
@@ -433,7 +433,7 @@ Cancelled.
 
 ### Implementation Code Reference
 
-**Search Command Handler (ytmpctl:264-397):**
+**Search Command Handler (xmpctl:264-397):**
 - Step 1: Get query from user input, exit if empty
 - Step 2: Send search command to daemon via `send_command()`
 - Step 3: Display formatted results (number, title, artist, duration)
@@ -441,15 +441,15 @@ Cancelled.
 - Step 5: Display action menu with 4 choices
 - Step 6: Execute selected action (play/queue/radio/cancel)
 
-**Command Dispatcher (ytmpctl:562-563):**
+**Command Dispatcher (xmpctl:562-563):**
 ```python
 elif command == "search":
     cmd_search()
 ```
 
-**Help Message (ytmpctl:497):**
+**Help Message (xmpctl:497):**
 ```python
-ytmpctl search            Interactive search for YouTube Music tracks
+xmpctl search            Interactive search for YouTube Music tracks
 ```
 
 ---

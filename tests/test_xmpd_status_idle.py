@@ -1,4 +1,4 @@
-"""Tests for ytmpd-status idle mode, signal handling, and i3blocks integration."""
+"""Tests for xmpd-status idle mode, signal handling, and i3blocks integration."""
 
 import importlib.machinery
 import importlib.util
@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Load the ytmpd-status script as a module
-script_path = Path(__file__).parent.parent / "bin" / "ytmpd-status"
+# Load the xmpd-status script as a module
+script_path = Path(__file__).parent.parent / "bin" / "xmpd-status"
 spec = importlib.util.spec_from_file_location(
     "ytmpd_status_idle_tests",
     script_path,
@@ -460,26 +460,26 @@ class TestIdleMode:
 class TestArgumentParsing:
     """Test argument parsing for idle mode options."""
 
-    @patch("sys.argv", ["ytmpd-status"])
+    @patch("sys.argv", ["xmpd-status"])
     def test_parse_arguments_no_idle(self):
         """Test default (no idle mode)."""
         args = ytmpd_status_idle.parse_arguments()
         assert args.idle is False
         assert args.handle_clicks is False
 
-    @patch("sys.argv", ["ytmpd-status", "--idle"])
+    @patch("sys.argv", ["xmpd-status", "--idle"])
     def test_parse_arguments_idle(self):
         """Test --idle flag."""
         args = ytmpd_status_idle.parse_arguments()
         assert args.idle is True
 
-    @patch("sys.argv", ["ytmpd-status", "--handle-clicks"])
+    @patch("sys.argv", ["xmpd-status", "--handle-clicks"])
     def test_parse_arguments_handle_clicks(self):
         """Test --handle-clicks flag."""
         args = ytmpd_status_idle.parse_arguments()
         assert args.handle_clicks is True
 
-    @patch("sys.argv", ["ytmpd-status", "--idle", "--handle-clicks"])
+    @patch("sys.argv", ["xmpd-status", "--idle", "--handle-clicks"])
     def test_parse_arguments_both(self):
         """Test both flags together."""
         args = ytmpd_status_idle.parse_arguments()

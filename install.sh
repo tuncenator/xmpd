@@ -1,12 +1,12 @@
 #!/bin/bash
 #
-# ytmpd Installation Script
+# xmpd Installation Script
 #
-# This script automates the installation of ytmpd (YouTube Music MPD daemon).
+# This script automates the installation of xmpd (YouTube Music MPD daemon).
 # It handles:
 # - Installing uv (if needed)
 # - Creating a virtual environment
-# - Installing ytmpd and dependencies
+# - Installing xmpd and dependencies
 # - Setting up YouTube Music authentication
 # - Optionally installing systemd service
 # - Adding binaries to PATH
@@ -26,7 +26,7 @@ Usage: $0 [--with-airplay-bridge] [--check]
 
   --with-airplay-bridge   Also install extras/airplay-bridge (OwnTone+MPD metadata bridge, speaker router, rofi picker).
                           Personal stack; see extras/airplay-bridge/install.sh.
-  --check                 No changes; report readiness for ytmpd and (if present) the airplay-bridge.
+  --check                 No changes; report readiness for xmpd and (if present) the airplay-bridge.
 EOF
             exit 0 ;;
     esac
@@ -62,12 +62,12 @@ BRIDGE_DIR="$SCRIPT_DIR/extras/airplay-bridge"
 
 # --- check mode: no changes, just report ---
 if [[ "$CHECK_ONLY" == "1" ]]; then
-    info "ytmpd readiness check"
+    info "xmpd readiness check"
     if command -v uv &> /dev/null; then ok_marker="OK"; else ok_marker="MISSING"; fi
     info "  uv: $ok_marker"
     if [ -d "$SCRIPT_DIR/.venv" ]; then info "  venv: OK"; else info "  venv: MISSING"; fi
-    if [ -f "$HOME/.config/ytmpd/browser.json" ]; then info "  ytmusic auth: OK"; else info "  ytmusic auth: MISSING"; fi
-    if [ -f "$HOME/.config/systemd/user/ytmpd.service" ]; then info "  systemd user unit: OK"; else info "  systemd user unit: MISSING"; fi
+    if [ -f "$HOME/.config/xmpd/browser.json" ]; then info "  ytmusic auth: OK"; else info "  ytmusic auth: MISSING"; fi
+    if [ -f "$HOME/.config/systemd/user/xmpd.service" ]; then info "  systemd user unit: OK"; else info "  systemd user unit: MISSING"; fi
     if [ -x "$BRIDGE_DIR/install.sh" ]; then
         echo
         info "extras/airplay-bridge readiness:"
@@ -76,7 +76,7 @@ if [[ "$CHECK_ONLY" == "1" ]]; then
     exit 0
 fi
 
-info "Starting ytmpd installation..."
+info "Starting xmpd installation..."
 
 cd "$SCRIPT_DIR"
 
@@ -113,10 +113,10 @@ fi
 info "Activating virtual environment..."
 source .venv/bin/activate
 
-# Step 4: Install ytmpd with dependencies
-info "Installing ytmpd and dependencies..."
+# Step 4: Install xmpd with dependencies
+info "Installing xmpd and dependencies..."
 uv pip install -e ".[dev]"
-info "ytmpd installed successfully"
+info "xmpd installed successfully"
 
 # Step 5: Setup YouTube Music authentication
 info ""
@@ -124,24 +124,24 @@ info "=========================================="
 info "YouTube Music Authentication Setup"
 info "=========================================="
 info ""
-info "ytmpd requires YouTube Music authentication via browser headers."
+info "xmpd requires YouTube Music authentication via browser headers."
 info "The next step will guide you through extracting these headers."
 info ""
 read -p "Do you want to set up authentication now? [Y/n] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
-    python -m ytmpd.ytmusic setup-browser
+    python -m xmpd.ytmusic setup-browser
 
     # Check if authentication was successful
-    if [ -f "$HOME/.config/ytmpd/browser.json" ]; then
+    if [ -f "$HOME/.config/xmpd/browser.json" ]; then
         info "Authentication setup complete!"
     else
         warn "Authentication setup was skipped or failed. You can run it later with:"
-        warn "  source .venv/bin/activate && python -m ytmpd.ytmusic setup-browser"
+        warn "  source .venv/bin/activate && python -m xmpd.ytmusic setup-browser"
     fi
 else
     warn "Skipping authentication setup. Run this command later:"
-    warn "  source .venv/bin/activate && python -m ytmpd.ytmusic setup-browser"
+    warn "  source .venv/bin/activate && python -m xmpd.ytmusic setup-browser"
 fi
 
 # Step 6: Optionally install systemd service
@@ -151,13 +151,13 @@ info "=========================================="
 info "systemd Service Installation (Optional)"
 info "=========================================="
 info ""
-info "You can install a systemd user service to start ytmpd automatically."
+info "You can install a systemd user service to start xmpd automatically."
 info ""
 read -p "Do you want to install the systemd service? [y/N] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    if [ ! -f "ytmpd.service" ]; then
-        error "ytmpd.service file not found. Please create it first."
+    if [ ! -f "xmpd.service" ]; then
+        error "xmpd.service file not found. Please create it first."
     fi
 
     # Create systemd user directory if needed
@@ -165,9 +165,9 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
 
     # Detect music directory from config
     MUSIC_DIR="$HOME/Music"  # Default
-    if [ -f "$HOME/.config/ytmpd/config.yaml" ]; then
+    if [ -f "$HOME/.config/xmpd/config.yaml" ]; then
         # Try to read mpd_music_directory from config
-        CONFIG_MUSIC_DIR=$(grep "^mpd_music_directory:" "$HOME/.config/ytmpd/config.yaml" | sed 's/^mpd_music_directory:[[:space:]]*//' | sed 's/#.*//' | tr -d '"' | tr -d "'")
+        CONFIG_MUSIC_DIR=$(grep "^mpd_music_directory:" "$HOME/.config/xmpd/config.yaml" | sed 's/^mpd_music_directory:[[:space:]]*//' | sed 's/#.*//' | tr -d '"' | tr -d "'")
         if [ -n "$CONFIG_MUSIC_DIR" ]; then
             # Expand ~ to $HOME
             MUSIC_DIR="${CONFIG_MUSIC_DIR/#\~/$HOME}"
@@ -177,10 +177,10 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     info "Detected music directory: $MUSIC_DIR"
 
     # Copy and customize service file
-    SERVICE_FILE="$HOME/.config/systemd/user/ytmpd.service"
-    sed -e "s|/path/to/ytmpd|$SCRIPT_DIR|g" \
+    SERVICE_FILE="$HOME/.config/systemd/user/xmpd.service"
+    sed -e "s|/path/to/xmpd|$SCRIPT_DIR|g" \
         -e "s|%h/Music|$MUSIC_DIR|g" \
-        ytmpd.service > "$SERVICE_FILE"
+        xmpd.service > "$SERVICE_FILE"
 
     info "systemd service installed to $SERVICE_FILE"
     SYSTEMD_INSTALLED=true
@@ -195,9 +195,9 @@ info "=========================================="
 info "Binary Installation"
 info "=========================================="
 info ""
-info "ytmpd provides two executables:"
-info "  - ytmpctl: Command-line client"
-info "  - ytmpd-status: i3blocks status script"
+info "xmpd provides two executables:"
+info "  - xmpctl: Command-line client"
+info "  - xmpd-status: i3blocks status script"
 info ""
 read -p "Do you want to install binaries to ~/.local/bin? [Y/n] " -n 1 -r
 echo
@@ -206,8 +206,8 @@ if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
     mkdir -p "$HOME/.local/bin"
 
     # Create symlinks
-    ln -sf "$SCRIPT_DIR/bin/ytmpctl" "$HOME/.local/bin/ytmpctl"
-    ln -sf "$SCRIPT_DIR/bin/ytmpd-status" "$HOME/.local/bin/ytmpd-status"
+    ln -sf "$SCRIPT_DIR/bin/xmpctl" "$HOME/.local/bin/xmpctl"
+    ln -sf "$SCRIPT_DIR/bin/xmpd-status" "$HOME/.local/bin/xmpd-status"
 
     info "Binaries installed to ~/.local/bin"
     info "Note: ~/.local/bin should be in your PATH (usually added by default)"
@@ -216,8 +216,8 @@ if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
     BINARIES_INSTALLED=true
 else
     info "Skipping binary installation. You can use absolute paths:"
-    info "  $SCRIPT_DIR/bin/ytmpctl"
-    info "  $SCRIPT_DIR/bin/ytmpd-status"
+    info "  $SCRIPT_DIR/bin/xmpctl"
+    info "  $SCRIPT_DIR/bin/xmpd-status"
 fi
 
 # Step 7.5: Optional airplay-bridge
@@ -239,45 +239,45 @@ info "=========================================="
 info "Installation Complete!"
 info "=========================================="
 info ""
-info "ytmpd has been successfully installed to: $SCRIPT_DIR"
+info "xmpd has been successfully installed to: $SCRIPT_DIR"
 info ""
 
 # Dynamic instructions based on what was installed
 if [ "$SYSTEMD_INSTALLED" = true ]; then
     info "Quick Start (with systemd):"
     info "  1. Enable and start daemon:"
-    info "     systemctl --user enable --now ytmpd.service"
+    info "     systemctl --user enable --now xmpd.service"
     info ""
     if [ "$BINARIES_INSTALLED" = true ]; then
         info "  2. Control playback:"
-        info "     ytmpctl play \"hey jude beatles\""
+        info "     xmpctl play \"hey jude beatles\""
         info ""
         info "  3. Check status:"
-        info "     ytmpctl status"
+        info "     xmpctl status"
     else
         info "  2. Control playback:"
-        info "     $SCRIPT_DIR/bin/ytmpctl play \"hey jude beatles\""
+        info "     $SCRIPT_DIR/bin/xmpctl play \"hey jude beatles\""
         info ""
         info "  3. Check status:"
-        info "     $SCRIPT_DIR/bin/ytmpctl status"
+        info "     $SCRIPT_DIR/bin/xmpctl status"
     fi
 else
     info "Quick Start (manual):"
     info "  1. Start daemon:"
-    info "     source .venv/bin/activate && python -m ytmpd &"
+    info "     source .venv/bin/activate && python -m xmpd &"
     info ""
     if [ "$BINARIES_INSTALLED" = true ]; then
         info "  2. Control playback:"
-        info "     ytmpctl play \"hey jude beatles\""
+        info "     xmpctl play \"hey jude beatles\""
         info ""
         info "  3. Check status:"
-        info "     ytmpctl status"
+        info "     xmpctl status"
     else
         info "  2. Control playback:"
-        info "     $SCRIPT_DIR/bin/ytmpctl play \"hey jude beatles\""
+        info "     $SCRIPT_DIR/bin/xmpctl play \"hey jude beatles\""
         info ""
         info "  3. Check status:"
-        info "     $SCRIPT_DIR/bin/ytmpctl status"
+        info "     $SCRIPT_DIR/bin/xmpctl status"
     fi
 fi
 
@@ -285,7 +285,7 @@ info ""
 if [ "$BINARIES_INSTALLED" = true ]; then
     info "For i3blocks integration:"
     info "  - See examples/i3blocks.conf for configuration examples"
-    info "  - Use 'ytmpd-status' in your i3blocks config"
+    info "  - Use 'xmpd-status' in your i3blocks config"
 else
     info "For i3blocks integration:"
     info "  - See examples/i3blocks.conf for configuration examples"

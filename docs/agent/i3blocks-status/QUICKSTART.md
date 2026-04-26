@@ -273,19 +273,19 @@ mypy ytmpd/
 # Run the ytmpd daemon
 python -m ytmpd
 
-# Use ytmpctl commands
-bin/ytmpctl status
-bin/ytmpctl search "query"
+# Use xmpctl commands
+bin/xmpctl status
+bin/xmpctl search "query"
 
-# Test ytmpd-status locally
-bin/ytmpd-status
+# Test xmpd-status locally
+bin/xmpd-status
 ```
 
 #### Dependencies
 
 Main dependencies:
 - `python-mpd2` - MPD client library (to be added in Phase 1)
-- `click` - CLI framework (already used in ytmpctl)
+- `click` - CLI framework (already used in xmpctl)
 - `pytest` - Testing framework
 
 ---

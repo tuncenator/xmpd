@@ -1,4 +1,4 @@
-"""Tests for ytmpd.cookie_extract module."""
+"""Tests for xmpd.cookie_extract module."""
 
 import json
 import sqlite3
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from ytmpd.cookie_extract import _ORIGIN, FirefoxCookieExtractor
-from ytmpd.exceptions import CookieExtractionError
+from xmpd.cookie_extract import _ORIGIN, FirefoxCookieExtractor
+from xmpd.exceptions import CookieExtractionError
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -383,43 +383,43 @@ class TestBuildBrowserJson:
 
 class TestAutoAuthConfig:
     def test_default_config_has_auto_auth(self) -> None:
-        from ytmpd.config import _validate_config
+        from xmpd.config import _validate_config
 
         config = _validate_config({"auto_auth": {"enabled": False, "browser": "firefox-dev"}})
         assert config["auto_auth"]["enabled"] is False
 
     def test_invalid_browser(self) -> None:
-        from ytmpd.config import _validate_config
+        from xmpd.config import _validate_config
 
         with pytest.raises(ValueError, match="auto_auth.browser"):
             _validate_config({"auto_auth": {"browser": "chrome"}})
 
     def test_invalid_enabled(self) -> None:
-        from ytmpd.config import _validate_config
+        from xmpd.config import _validate_config
 
         with pytest.raises(ValueError, match="auto_auth.enabled"):
             _validate_config({"auto_auth": {"enabled": "yes"}})
 
     def test_invalid_container_type(self) -> None:
-        from ytmpd.config import _validate_config
+        from xmpd.config import _validate_config
 
         with pytest.raises(ValueError, match="auto_auth.container"):
             _validate_config({"auto_auth": {"container": 123}})
 
     def test_invalid_profile_type(self) -> None:
-        from ytmpd.config import _validate_config
+        from xmpd.config import _validate_config
 
         with pytest.raises(ValueError, match="auto_auth.profile"):
             _validate_config({"auto_auth": {"profile": 123}})
 
     def test_invalid_refresh_interval(self) -> None:
-        from ytmpd.config import _validate_config
+        from xmpd.config import _validate_config
 
         with pytest.raises(ValueError, match="auto_auth.refresh_interval_hours"):
             _validate_config({"auto_auth": {"refresh_interval_hours": -1}})
 
     def test_valid_full_config(self) -> None:
-        from ytmpd.config import _validate_config
+        from xmpd.config import _validate_config
 
         config = _validate_config(
             {
@@ -436,7 +436,7 @@ class TestAutoAuthConfig:
         assert config["auto_auth"]["container"] == "Personal"
 
     def test_null_container_is_valid(self) -> None:
-        from ytmpd.config import _validate_config
+        from xmpd.config import _validate_config
 
         config = _validate_config({"auto_auth": {"container": None}})
         assert config["auto_auth"]["container"] is None

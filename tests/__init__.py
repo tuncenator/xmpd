@@ -1,1 +1,1 @@
-"""Tests for ytmpd."""
+"""Tests for xmpd."""

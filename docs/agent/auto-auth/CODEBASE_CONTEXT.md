@@ -20,7 +20,7 @@
 
 **Authentication**: Uses `browser.json` (extracted browser request headers) via ytmusicapi. No OAuth. Manual refresh required when cookies expire (~every few days). This is the problem the auto-auth feature solves.
 
-**Config directory**: `~/.config/ytmpd/` contains browser.json, config.yaml, state files, logs, and SQLite databases.
+**Config directory**: `~/.config/xmpd/` contains browser.json, config.yaml, state files, logs, and SQLite databases.
 
 ---
 
@@ -31,7 +31,7 @@
 | `ytmpd/daemon.py` | Main daemon class, socket server, thread management, auto-auth | `_auto_auth_loop()`: proactive refresh thread + notification on failure. `_attempt_auto_refresh()`: cookie extraction + client reinit. `_perform_sync()`: reactive refresh on auth failure + notification. `_cmd_status()`: includes auto-auth fields |
 | `ytmpd/notify.py` | Desktop notification via notify-send | `send_notification()`: rate-limited (1/hour), handles missing notify-send gracefully |
 | `ytmpd/ytmusic.py` | YouTube Music API wrapper via ytmusicapi | `refresh_auth()`: reinitialize client with fresh credentials. `is_authenticated()`: cached 5-min auth check |
-| `ytmpd/config.py` (209 lines) | Config loading, validation, defaults | `load_config()` merges user YAML with defaults. `get_config_dir()` returns `~/.config/ytmpd/` |
+| `ytmpd/config.py` (209 lines) | Config loading, validation, defaults | `load_config()` merges user YAML with defaults. `get_config_dir()` returns `~/.config/xmpd/` |
 | `ytmpd/exceptions.py` | Custom exception hierarchy | `YTMusicAuthError` for auth failures, `CookieExtractionError` for cookie extraction. All inherit from `YTMPDError` |
 | `ytmpd/sync_engine.py` (535 lines) | Orchestrates YouTube -> MPD playlist sync | `sync_all_playlists()` is the main entry point |
 | `ytmpd/stream_resolver.py` (392 lines) | yt-dlp URL extraction with caching | Persistent cache at `stream_cache.json`, 5-hour TTL |
@@ -40,8 +40,8 @@
 | `ytmpd/track_store.py` (205 lines) | SQLite metadata storage | Thread-safe with locks |
 | `ytmpd/rating.py` (180 lines) | Like/dislike state machine | RatingManager, RatingState, RatingAction |
 | `ytmpd/__main__.py` (66 lines) | Entry point | `python -m ytmpd` starts daemon |
-| `bin/ytmpctl` | CLI client for daemon commands | `cmd_auth(auto=False)` supports `--auto` flag for cookie extraction, `cmd_status()` shows auto-auth info |
-| `bin/ytmpd-status` | i3blocks status display script | `get_auth_status()` returns `(bool, str, int)` 3-tuple with auth_valid, error, auto_refresh_failures. Color overrides: red on auth failure, orange on refresh failures |
+| `bin/xmpctl` | CLI client for daemon commands | `cmd_auth(auto=False)` supports `--auto` flag for cookie extraction, `cmd_status()` shows auto-auth info |
+| `bin/xmpd-status` | i3blocks status display script | `get_auth_status()` returns `(bool, str, int)` 3-tuple with auth_valid, error, auto_refresh_failures. Color overrides: red on auth failure, orange on refresh failures |
 | `examples/config.yaml` | Example configuration | All config keys documented with comments, includes `auto_auth` section |
 | `ytmpd/cookie_extract.py` | Firefox cookie extraction module | `FirefoxCookieExtractor` class: profile detection, cookie extraction, browser.json generation |
 | `tests/test_cookie_extract.py` | Unit tests for cookie extraction | 33 tests covering all methods and edge cases |
@@ -110,7 +110,7 @@ def send_notification(
 ### Config (`ytmpd/config.py`)
 
 ```python
-def get_config_dir() -> Path  # Returns ~/.config/ytmpd/
+def get_config_dir() -> Path  # Returns ~/.config/xmpd/
 def load_config() -> dict[str, Any]  # Loads YAML, merges with defaults (deep-merge for auto_auth), validates
 ```
 
@@ -144,7 +144,7 @@ def get_authorization(auth: str) -> str:
 - **Rate limiting**: 100ms minimum between ytmusicapi API calls (`_rate_limit()`)
 - **Thread safety**: Locks for shared state (`_sync_lock`, TrackStore locks). Daemon threads are `daemon=True`.
 - **Config pattern**: YAML file merged with hardcoded defaults. `_validate_config()` normalizes paths and validates types/ranges.
-- **Logging**: Python `logging` module, configurable level, file output to `~/.config/ytmpd/ytmpd.log`
+- **Logging**: Python `logging` module, configurable level, file output to `~/.config/xmpd/xmpd.log`
 - **IPC protocol**: Text commands over Unix socket (`sync_socket`), JSON responses terminated with newline.
 - **CLI scripts**: Auto-detect venv and re-exec with venv Python if available.
 
@@ -232,5 +232,5 @@ auto_auth:
 - **Phase 0 (Setup)**: Initial codebase exploration and documentation. Proved cookie extraction from Firefox Dev Edition works with ytmusicapi authentication.
 - **Phase 1 (Cookie Extraction Module)**: Created `ytmpd/cookie_extract.py` with `FirefoxCookieExtractor` class. Added `CookieExtractionError` to exceptions. Added `auto_auth` config section with defaults, deep-merge, and validation. Updated `examples/config.yaml`. 33 unit tests.
 - **Phase 2 (Daemon Auto-Refresh Integration)**: Added `refresh_auth()` to `YTMusicClient`. Added `_auto_auth_loop()` proactive refresh thread, `_attempt_auto_refresh()` with atomic file write, reactive refresh in `_perform_sync()` with 5-min cooldown. Updated `_cmd_status()` with auto-auth fields. State persistence for `last_auto_refresh` and `auto_refresh_failures`. 21 tests.
-- **Phase 3 (Notifications, CLI, i3blocks)**: Created `ytmpd/notify.py` with rate-limited `send_notification()`. Added notification triggers in daemon after proactive/reactive refresh failures. Added `ytmpctl auth --auto` command. Updated `ytmpctl status` with auto-auth display. Updated `bin/ytmpd-status` with auth-aware color coding (red/orange). Updated `get_auth_status()` to return 3-tuple. 11 tests.
+- **Phase 3 (Notifications, CLI, i3blocks)**: Created `ytmpd/notify.py` with rate-limited `send_notification()`. Added notification triggers in daemon after proactive/reactive refresh failures. Added `xmpctl auth --auto` command. Updated `xmpctl status` with auto-auth display. Updated `bin/xmpd-status` with auth-aware color coding (red/orange). Updated `get_auth_status()` to return 3-tuple. 11 tests.
 - **Phase 4 (Integration Testing & Docs)**: Added `_query_cookies_with_retry()` with locked DB retry (3 attempts, 1s delay) and corrupt DB handling. Created 25 integration tests in `tests/integration/test_auto_auth.py`. Added Auto-Authentication section to README.md. Updated project structure in README.

@@ -58,7 +58,7 @@ git log -1
 ```
 Add ytmusicapi rating method research and documentation
 Implement RatingManager with toggle state machine
-Add like/dislike commands to ytmpctl CLI
+Add like/dislike commands to xmpctl CLI
 Add end-to-end tests for rating workflow
 Update documentation for like/dislike feature
 ```
@@ -76,19 +76,19 @@ Currently, ytmpd only syncs from YouTube Music to MPD (one-way: YT→MPD). This 
 ### Scope
 
 **In Scope**:
-- `ytmpctl like` command - Toggle like status for current track
-- `ytmpctl dislike` command - Toggle dislike status for current track
+- `xmpctl like` command - Toggle like status for current track
+- `xmpctl dislike` command - Toggle dislike status for current track
 - Toggle semantics (like → neutral → like, or dislike → like)
 - Query current rating state from YouTube Music API
 - Update rating via YouTube Music API (rate_song method)
-- Immediate playlist refresh after liking (trigger `ytmpctl sync`)
+- Immediate playlist refresh after liking (trigger `xmpctl sync`)
 - User feedback on action taken ("Liked ✓", "Removed like", "Disliked ✗", etc.)
 - Error handling (no track playing, network issues, not a YouTube track)
 
 **Out of Scope**:
 - Batch operations (liking multiple tracks at once)
 - Undo last rating change
-- Status command showing rating (`ytmpctl status --show-rating`)
+- Status command showing rating (`xmpctl status --show-rating`)
 - Social features or sharing
 - Analytics/reports on liked/disliked songs
 - GUI or web interface
@@ -112,16 +112,16 @@ Currently, ytmpd only syncs from YouTube Music to MPD (one-way: YT→MPD). This 
 
 1. **Rating Manager** (`ytmpd/rating.py`): State machine implementing toggle logic
 2. **YouTube Music API Wrapper** (`ytmpd/ytmusic.py` extensions): Methods to get/set ratings
-3. **ytmpctl Commands** (`bin/ytmpctl`): CLI commands for like/dislike
+3. **xmpctl Commands** (`bin/xmpctl`): CLI commands for like/dislike
 4. **Current Track Detection**: Query MPD for currently playing track's video_id
-5. **Sync Trigger**: Call `ytmpctl sync` after rating changes
+5. **Sync Trigger**: Call `xmpctl sync` after rating changes
 
 ### Data Flow
 
 ```
 User presses keybinding
     ↓
-ytmpctl like/dislike
+xmpctl like/dislike
     ↓
 Get current track from MPD (video_id)
     ↓
@@ -131,7 +131,7 @@ Apply toggle logic (state machine)
     ↓
 Set new rating via YouTube Music API
     ↓
-Trigger immediate sync (ytmpctl sync)
+Trigger immediate sync (xmpctl sync)
     ↓
 User sees feedback ("Liked ✓")
 ```
@@ -147,7 +147,7 @@ User sees feedback ("Liked ✓")
 - **Integration Points**:
   - Existing `YTMusicClient` class in `ytmpd/ytmusic.py`
   - Existing `MPDClient` class in `ytmpd/mpd_client.py`
-  - Existing `ytmpctl` CLI in `bin/ytmpctl`
+  - Existing `xmpctl` CLI in `bin/xmpctl`
 
 ### Toggle Logic State Machine
 
@@ -369,7 +369,7 @@ Implement all 6 transitions:
 
 **Enables**:
 - Phase 3: YouTube Music API Integration will use RatingManager
-- Phase 4: ytmpctl commands will use RatingManager
+- Phase 4: xmpctl commands will use RatingManager
 
 #### Completion Criteria
 
@@ -558,7 +558,7 @@ def set_track_rating(self, video_id: str, rating: RatingState) -> None:
 - Phase 2: RatingManager class
 
 **Enables**:
-- Phase 4: ytmpctl commands will call these methods
+- Phase 4: xmpctl commands will call these methods
 
 #### Completion Criteria
 
@@ -651,17 +651,17 @@ class TestRatingIntegration:
 
 ---
 
-### Phase 4: ytmpctl Command Implementation
+### Phase 4: xmpctl Command Implementation
 
-**Objective**: Add `like` and `dislike` commands to ytmpctl CLI, integrate with MPD for current track detection, implement rating logic, and trigger immediate sync.
+**Objective**: Add `like` and `dislike` commands to xmpctl CLI, integrate with MPD for current track detection, implement rating logic, and trigger immediate sync.
 
 **Estimated Context Budget**: ~45k tokens
 
 #### Deliverables
 
-1. Updated `bin/ytmpctl` with new commands:
-   - `ytmpctl like` - Toggle like for current track
-   - `ytmpctl dislike` - Toggle dislike for current track
+1. Updated `bin/xmpctl` with new commands:
+   - `xmpctl like` - Toggle like for current track
+   - `xmpctl dislike` - Toggle dislike for current track
 2. Current track detection from MPD
 3. Integration with `YTMusicClient` and `RatingManager`
 4. Immediate sync trigger after rating change
@@ -671,17 +671,17 @@ class TestRatingIntegration:
 
 #### Detailed Requirements
 
-**Add Commands to `bin/ytmpctl`**:
+**Add Commands to `bin/xmpctl`**:
 
-The current structure of `bin/ytmpctl` is a bash script that routes commands. You'll need to:
+The current structure of `bin/xmpctl` is a bash script that routes commands. You'll need to:
 
 1. Add `like` and `dislike` to the command routing
 2. Create Python handlers for these commands
 
 **Implementation Approach**:
 
-Based on existing ytmpctl structure, you may need to:
-- Add like/dislike handlers to the main ytmpctl script
+Based on existing xmpctl structure, you may need to:
+- Add like/dislike handlers to the main xmpctl script
 - Or create new Python module (e.g., `ytmpd/cli/rating.py`)
 
 Check how existing commands like `status`, `sync`, `radio` are implemented and follow the same pattern.
@@ -690,7 +690,7 @@ Check how existing commands like `status`, `sync`, `radio` are implemented and f
 
 ```python
 def handle_like():
-    """Handle ytmpctl like command."""
+    """Handle xmpctl like command."""
     try:
         # 1. Get current track from MPD
         video_id, title, artist = get_current_track_from_mpd()
@@ -752,8 +752,8 @@ def get_current_track_from_mpd() -> tuple[str, str, str]:
 ```python
 def trigger_sync():
     """Trigger immediate playlist sync after rating change."""
-    # Call: bin/ytmpctl sync
-    # Or use subprocess.run(["bin/ytmpctl", "sync"])
+    # Call: bin/xmpctl sync
+    # Or use subprocess.run(["bin/xmpctl", "sync"])
     # Or import and call the sync function directly
     pass
 ```
@@ -779,12 +779,12 @@ Handle errors gracefully:
 
 **Updated Help Text**:
 
-Update `ytmpctl help` output to include:
+Update `xmpctl help` output to include:
 
 ```
 Playback Control:
-  ytmpctl like              Toggle like for current track
-  ytmpctl dislike           Toggle dislike for current track
+  xmpctl like              Toggle like for current track
+  xmpctl dislike           Toggle dislike for current track
 
   Use mpc for playback control of synced playlists:
     mpc load "YT: Favorites"    Load YouTube playlist in MPD
@@ -811,8 +811,8 @@ Removed dislike: Artist - Title
 
 #### Completion Criteria
 
-- [ ] `ytmpctl like` command implemented and working
-- [ ] `ytmpctl dislike` command implemented and working
+- [ ] `xmpctl like` command implemented and working
+- [ ] `xmpctl dislike` command implemented and working
 - [ ] Current track detection from MPD works correctly
 - [ ] Rating logic integrated (RatingManager + YTMusicClient)
 - [ ] Immediate sync triggered after liking a song
@@ -826,8 +826,8 @@ Removed dislike: Artist - Title
 #### Git Commit Checklist
 
 After completing this phase:
-- [ ] `git add bin/ytmpctl` (and any new Python modules)
-- [ ] `git commit -m "Add like/dislike commands to ytmpctl CLI"`
+- [ ] `git add bin/xmpctl` (and any new Python modules)
+- [ ] `git commit -m "Add like/dislike commands to xmpctl CLI"`
 - [ ] Verify commit: `git log -1`
 
 #### Testing Requirements
@@ -835,15 +835,15 @@ After completing this phase:
 **Manual Testing**:
 
 1. Start MPD and play a YouTube Music track
-2. Run `ytmpctl like` → Verify:
+2. Run `xmpctl like` → Verify:
    - Song is liked on YouTube Music (check web interface)
    - Feedback message shows "✓ Liked: Artist - Title"
    - Sync is triggered
    - On next sync or immediate sync, "Liked Songs" playlist updates
-3. Run `ytmpctl like` again → Verify:
+3. Run `xmpctl like` again → Verify:
    - Like is removed
    - Feedback shows "Removed like: ..."
-4. Run `ytmpctl dislike` → Verify similar behavior
+4. Run `xmpctl dislike` → Verify similar behavior
 5. Test error cases:
    - No track playing → Clear error message
    - Not a YouTube track (play local file) → Clear error message
@@ -866,7 +866,7 @@ After completing this phase:
 
 #### Notes
 
-- Follow existing ytmpctl patterns and code style
+- Follow existing xmpctl patterns and code style
 - Reuse existing MPD client if available, or use `mpc` command
 - Sync trigger should be non-blocking (async/background) if possible
 - User feedback should be immediate (don't wait for sync to complete)
@@ -911,9 +911,9 @@ class TestLikeDislikeWorkflow:
     """End-to-end tests for like/dislike workflow."""
 
     def test_like_neutral_track_full_flow(self, mock_mpd, mock_ytmusic):
-        """Test liking a neutral track through ytmpctl."""
+        """Test liking a neutral track through xmpctl."""
         # Setup: MPD playing a track, track is neutral on YTM
-        # Execute: ytmpctl like
+        # Execute: xmpctl like
         # Verify:
         #   - get_track_rating called
         #   - RatingManager.apply_action called with NEUTRAL, LIKE
@@ -925,7 +925,7 @@ class TestLikeDislikeWorkflow:
     def test_like_liked_track_removes_like(self, mock_mpd, mock_ytmusic):
         """Test toggling off a like."""
         # Setup: Track is already liked
-        # Execute: ytmpctl like
+        # Execute: xmpctl like
         # Verify: Rating set to NEUTRAL, message shows "Removed like"
         pass
 
@@ -948,27 +948,27 @@ class TestLikeDislikeWorkflow:
     def test_no_track_playing_error(self, mock_mpd):
         """Test error handling when no track is playing."""
         # Setup: MPD not playing anything
-        # Execute: ytmpctl like
+        # Execute: xmpctl like
         # Verify: Error message shown, exit code 1
         pass
 
     def test_non_youtube_track_error(self, mock_mpd):
         """Test error handling for non-YouTube tracks."""
         # Setup: MPD playing local file (not YouTube proxy URL)
-        # Execute: ytmpctl like
+        # Execute: xmpctl like
         # Verify: Error message shown
         pass
 
     def test_api_error_handling(self, mock_mpd, mock_ytmusic):
         """Test handling of YouTube Music API errors."""
         # Setup: Mock API to raise YTMusicAPIError
-        # Execute: ytmpctl like
+        # Execute: xmpctl like
         # Verify: Error message shown, no crash
         pass
 
     def test_sync_triggered_after_like(self, mock_mpd, mock_ytmusic, mock_sync):
         """Test that sync is triggered after liking a song."""
-        # Execute: ytmpctl like (neutral → liked)
+        # Execute: xmpctl like (neutral → liked)
         # Verify: sync function called
         pass
 
@@ -1055,7 +1055,7 @@ Document test results in your phase summary:
 #### Dependencies
 
 **Requires**:
-- Phase 4: ytmpctl commands implemented
+- Phase 4: xmpctl commands implemented
 
 **Enables**:
 - Phase 6: Documentation can reference validated behavior
@@ -1094,7 +1094,7 @@ After completing this phase:
 
 **Coverage**:
 - Run coverage report: `pytest --cov=ytmpd --cov-report=html`
-- Ensure rating.py, ytmusic.py (rating methods), and ytmpctl commands are covered
+- Ensure rating.py, ytmusic.py (rating methods), and xmpctl commands are covered
 
 #### Notes
 
@@ -1118,7 +1118,7 @@ After completing this phase:
 
 1. Updated `README.md` with like/dislike feature documentation
 2. User guide for like/dislike workflow
-3. Updated `--help` text in ytmpctl
+3. Updated `--help` text in xmpctl
 4. Changelog entry
 5. Code comments and docstrings review
 6. Example keybinding configurations (i3wm, sway, etc.)
@@ -1137,8 +1137,8 @@ ytmpd supports bidirectional sync - you can like or dislike tracks from your MPD
 
 ### Commands
 
-ytmpctl like              Toggle like for currently playing track
-ytmpctl dislike           Toggle dislike for currently playing track
+xmpctl like              Toggle like for currently playing track
+xmpctl dislike           Toggle dislike for currently playing track
 
 
 ### Toggle Behavior
@@ -1159,8 +1159,8 @@ Both commands use toggle logic:
 
 Add to your `~/.config/i3/config`:
 
-bindsym $mod+plus exec ytmpctl like
-bindsym $mod+minus exec ytmpctl dislike
+bindsym $mod+plus exec xmpctl like
+bindsym $mod+minus exec xmpctl dislike
 
 
 ### Sync Behavior
@@ -1189,7 +1189,7 @@ Create a comprehensive user guide:
 - Troubleshooting common issues
 - FAQ
 
-**Updated Help Text** (`bin/ytmpctl help`):
+**Updated Help Text** (`bin/xmpctl help`):
 
 Ensure help text is clear and includes:
 - Command syntax
@@ -1206,8 +1206,8 @@ Create entry for next version (format depends on existing changelog format):
 
 ### Added
 - Bidirectional like/dislike support for YouTube Music tracks
-  - `ytmpctl like` - Toggle like status for current track
-  - `ytmpctl dislike` - Toggle dislike status for current track
+  - `xmpctl like` - Toggle like status for current track
+  - `xmpctl dislike` - Toggle dislike status for current track
   - Immediate sync trigger after liking songs
   - Toggle semantics: pressing same command twice reverts action
   - Support for all rating state transitions (like, dislike, neutral)
@@ -1237,20 +1237,20 @@ Provide keybinding examples for popular window managers:
 
 **i3wm:**
 ```
-bindsym $mod+plus exec ytmpctl like
-bindsym $mod+minus exec ytmpctl dislike
+bindsym $mod+plus exec xmpctl like
+bindsym $mod+minus exec xmpctl dislike
 ```
 
 **Sway:**
 ```
-bindsym $mod+plus exec ytmpctl like
-bindsym $mod+minus exec ytmpctl dislike
+bindsym $mod+plus exec xmpctl like
+bindsym $mod+minus exec xmpctl dislike
 ```
 
 **Awesome WM:**
 ```lua
-awful.key({ modkey }, "=", function() awful.spawn("ytmpctl like") end),
-awful.key({ modkey }, "-", function() awful.spawn("ytmpctl dislike") end),
+awful.key({ modkey }, "=", function() awful.spawn("xmpctl like") end),
+awful.key({ modkey }, "-", function() awful.spawn("xmpctl dislike") end),
 ```
 
 **Troubleshooting Guide**:
@@ -1263,13 +1263,13 @@ Common issues and solutions:
    - Solution: Load a synced YouTube playlist (`mpc load "YT: Favorites"`)
 
 3. **"Failed to update rating"**
-   - Check authentication: `ls ~/.config/ytmpd/browser.json`
+   - Check authentication: `ls ~/.config/xmpd/browser.json`
    - Re-authenticate if needed: `python -m ytmpd.ytmusic setup-browser`
    - Check network connection
 
 4. **Liked song doesn't appear in playlist**
-   - Trigger manual sync: `ytmpctl sync`
-   - Check sync status: `ytmpctl status`
+   - Trigger manual sync: `xmpctl sync`
+   - Check sync status: `xmpctl status`
    - Verify "Liked Songs" playlist exists on YouTube Music
 
 5. **Rate limiting errors**
@@ -1288,7 +1288,7 @@ Common issues and solutions:
 
 - [ ] `README.md` updated with like/dislike documentation
 - [ ] User guide created (or added to existing docs)
-- [ ] `ytmpctl help` text updated
+- [ ] `xmpctl help` text updated
 - [ ] Changelog entry created
 - [ ] All code has proper docstrings and type hints
 - [ ] Keybinding examples provided for multiple window managers
@@ -1301,7 +1301,7 @@ Common issues and solutions:
 #### Git Commit Checklist
 
 After completing this phase:
-- [ ] `git add README.md CHANGELOG.md bin/ytmpctl` (and any docs)
+- [ ] `git add README.md CHANGELOG.md bin/xmpctl` (and any docs)
 - [ ] `git commit -m "Update documentation for like/dislike feature"`
 - [ ] Verify commit: `git log -1`
 
@@ -1393,19 +1393,19 @@ RatingState + Action → RatingManager.apply_action() → RatingTransition
 RatingTransition.new_state → YTMusicClient.set_track_rating() → API (LikeStatus)
 ```
 
-### ytmpctl ↔ MPD
+### xmpctl ↔ MPD
 
 **Current track detection:**
-- ytmpctl queries MPD for currently playing track
+- xmpctl queries MPD for currently playing track
 - Extracts video_id from MPD file path: `http://localhost:6602/proxy/{video_id}`
 - Gets artist and title from MPD metadata
 
-### ytmpctl ↔ Sync
+### xmpctl ↔ Sync
 
 **Immediate sync trigger:**
-- After liking a song, ytmpctl triggers sync
+- After liking a song, xmpctl triggers sync
 - Can be implemented as:
-  - `subprocess.run(["bin/ytmpctl", "sync"])`
+  - `subprocess.run(["bin/xmpctl", "sync"])`
   - Or direct function call to sync logic
   - Should be non-blocking (don't wait for sync to complete)
 
@@ -1474,7 +1474,7 @@ ytmusicapi.rate_song(
 **LikeStatus**: ytmusicapi enum for rating values (LIKE, DISLIKE, INDIFFERENT)
 **MPD**: Music Player Daemon
 **ytmpd**: YouTube Music to MPD sync daemon
-**ytmpctl**: CLI control tool for ytmpd
+**xmpctl**: CLI control tool for ytmpd
 **Toggle Logic**: Pressing same command twice reverts the action
 **Bidirectional Sync**: Changes flow both YT→MPD and MPD→YT
 
@@ -1484,7 +1484,7 @@ ytmusicapi.rate_song(
 
 Features not in current scope but potentially valuable later:
 
-- [ ] `ytmpctl status --show-rating` - Show current track's rating in status output
+- [ ] `xmpctl status --show-rating` - Show current track's rating in status output
 - [ ] Batch operations: Like multiple tracks from a playlist
 - [ ] Undo last rating change
 - [ ] Rating history / audit log

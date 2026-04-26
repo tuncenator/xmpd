@@ -29,7 +29,7 @@ Replace environment variables with comprehensive CLI arguments, maintain backwar
 
 ### Files Modified
 
-- `bin/ytmpd-status` - Added argparse CLI, format templating, and validation (added ~400 lines)
+- `bin/xmpd-status` - Added argparse CLI, format templating, and validation (added ~400 lines)
 - `tests/integration/test_ytmpd_status_integration.py` - Added sys.argv mocking for test compatibility
 - `tests/test_ytmpd_status.py` - Added sys.argv mocking to all main() calls for test isolation
 
@@ -149,50 +149,50 @@ All 370 tests passing (318 existing + 52 new CLI tests).
 
 **Help system**:
 ```bash
-$ bin/ytmpd-status --help
+$ bin/xmpd-status --help
 # Output: Comprehensive help with all option groups, descriptions, examples
 ```
 
 **Basic usage**:
 ```bash
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ▶ Tim van Werd - Come Back To Me…▰▰▱ 3:58] [1/50]
 ```
 
 **Compact mode**:
 ```bash
-$ bin/ytmpd-status --compact
+$ bin/xmpd-status --compact
 ▶ Tim van Werd - Come Back To Me
 ```
 
 **Custom bar length**:
 ```bash
-$ bin/ytmpd-status --bar-length 20
+$ bin/xmpd-status --bar-length 20
 # (works with longer progress bar)
 ```
 
 **Custom format string**:
 ```bash
-$ bin/ytmpd-status --format "{icon} {title} ({elapsed}/{duration})"
+$ bin/xmpd-status --format "{icon} {title} ({elapsed}/{duration})"
 ▶ Come Back To Me (3:58/3:58)
 ```
 
 **Environment variable backward compatibility**:
 ```bash
-$ YTMPD_STATUS_BAR_LENGTH=15 bin/ytmpd-status
+$ YTMPD_STATUS_BAR_LENGTH=15 bin/xmpd-status
 # (works with 15-char bar)
 ```
 
 **CLI overrides environment**:
 ```bash
-$ YTMPD_STATUS_BAR_LENGTH=15 bin/ytmpd-status --bar-length 5
+$ YTMPD_STATUS_BAR_LENGTH=15 bin/xmpd-status --bar-length 5
 # (uses 5-char bar from CLI, not 15 from env)
 ```
 
 **Version info**:
 ```bash
-$ bin/ytmpd-status --version
-ytmpd-status 2.0.0
+$ bin/xmpd-status --version
+xmpd-status 2.0.0
 ```
 
 ---
@@ -201,7 +201,7 @@ ytmpd-status 2.0.0
 
 ### Challenge 1: Script Import for Testing
 
-**Problem**: `bin/ytmpd-status` doesn't have .py extension, making it difficult to import in tests.
+**Problem**: `bin/xmpd-status` doesn't have .py extension, making it difficult to import in tests.
 
 **Solution**: Used `importlib.util` with `SourceFileLoader` for main tests, and `exec()` with custom module creation for CLI tests. Each test module uses unique sys.modules name to avoid conflicts.
 
@@ -209,7 +209,7 @@ ytmpd-status 2.0.0
 
 **Problem**: `parse_arguments()` reads `sys.argv` by default, which caused tests to see pytest's command-line arguments.
 
-**Solution**: Added `@patch("sys.argv", ["ytmpd-status"])` decorator to all tests that call `main()`. This ensures consistent argv regardless of how pytest is invoked.
+**Solution**: Added `@patch("sys.argv", ["xmpd-status"])` decorator to all tests that call `main()`. This ensures consistent argv regardless of how pytest is invoked.
 
 ### Challenge 3: Module Name Conflicts
 
@@ -346,7 +346,7 @@ All completion criteria met. All 370 tests passing (52 new CLI tests + 318 exist
 - **Tests Created**: 52 new CLI tests
 - **Total Test Count**: 370 tests (318 existing + 52 new)
 - **Test Pass Rate**: 100% (370/370 passing)
-- **Files Modified**: 3 (ytmpd-status, 2 test files)
+- **Files Modified**: 3 (xmpd-status, 2 test files)
 - **Files Created**: 1 (test_ytmpd_status_cli.py)
 - **Lines of Code Added**: ~500 lines (400 in script, 100 in tests)
 - **CLI Arguments**: 30+ arguments across 6 groups

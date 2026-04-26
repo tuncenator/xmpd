@@ -1,5 +1,5 @@
 """
-Integration tests for ytmpd end-to-end workflows.
+Integration tests for xmpd end-to-end workflows.
 
 These tests verify the complete sync workflow from YouTube Music to MPD,
 using mocked external dependencies but testing real component integration.
@@ -16,11 +16,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from ytmpd.daemon import YTMPDaemon
-from ytmpd.mpd_client import MPDClient
-from ytmpd.stream_resolver import StreamResolver
-from ytmpd.sync_engine import SyncEngine
-from ytmpd.ytmusic import Playlist, Track, YTMusicClient
+from xmpd.daemon import XMPDaemon
+from xmpd.mpd_client import MPDClient
+from xmpd.stream_resolver import StreamResolver
+from xmpd.sync_engine import SyncEngine
+from xmpd.ytmusic import Playlist, Track, YTMusicClient
 
 
 class TestFullSyncWorkflow:
@@ -98,7 +98,7 @@ class TestFullSyncWorkflow:
         return {
             "auth_file": str(temp_config_dir / "browser.json"),
             "log_level": "DEBUG",
-            "log_file": str(temp_config_dir / "ytmpd.log"),
+            "log_file": str(temp_config_dir / "xmpd.log"),
             "mpd_socket_path": str(temp_config_dir / "mpd_socket"),
             "sync_interval_minutes": 30,
             "enable_auto_sync": False,  # Disable auto-sync for tests
@@ -393,7 +393,7 @@ class TestFullSyncWorkflow:
 
 class TestPerformanceScenarios:
     """
-    Performance and stress tests for ytmpd sync operations.
+    Performance and stress tests for xmpd sync operations.
     """
 
     def test_large_playlist_sync(self):

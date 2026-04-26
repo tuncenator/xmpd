@@ -196,9 +196,9 @@ None - Phase 1 is the foundational phase for the track-metadata feature.
 
 ## Notes for Future Phases
 
-1. **Database path**: TrackStore defaults to using the provided path. Phase 2 should use `~/.config/ytmpd/track_mapping.db` from configuration.
+1. **Database path**: TrackStore defaults to using the provided path. Phase 2 should use `~/.config/xmpd/track_mapping.db` from configuration.
 
-2. **Proxy configuration**: Server host and port are configurable via constructor. Phase 2 should read these from `~/.config/ytmpd/config.yaml`.
+2. **Proxy configuration**: Server host and port are configurable via constructor. Phase 2 should read these from `~/.config/xmpd/config.yaml`.
 
 3. **Stream URL expiration**: TrackStore has `update_stream_url()` method for refreshing expired YouTube URLs. Phase 3 should implement automatic refresh logic when YouTube returns 403/410 errors.
 
@@ -214,7 +214,7 @@ None - Phase 1 is the foundational phase for the track-metadata feature.
 
 ### TrackStore Integration
 - **Used by**: ICYProxyServer (for video_id lookups), SyncEngine (Phase 2, for storing track mappings)
-- **Database location**: Configurable, should be set to `~/.config/ytmpd/track_mapping.db` in Phase 2
+- **Database location**: Configurable, should be set to `~/.config/xmpd/track_mapping.db` in Phase 2
 - **Thread safety**: Uses SQLite's built-in connection-level locking. Each component should use its own TrackStore instance.
 
 ### ICYProxyServer Integration
@@ -269,7 +269,7 @@ None - Phase 1 is the foundational phase for the track-metadata feature.
 **Recommended Actions:**
 1. Update `ytmpd/mpd_client.py` to generate proxy URLs instead of direct YouTube URLs
 2. Integrate ICYProxyServer lifecycle into `ytmpd/daemon.py` (start on daemon start, stop on daemon stop)
-3. Add proxy configuration to `~/.config/ytmpd/config.yaml` (host, port, database path)
+3. Add proxy configuration to `~/.config/xmpd/config.yaml` (host, port, database path)
 4. Integrate TrackStore with sync engine to store track mappings during playlist sync
 5. Add configuration parsing for proxy settings in `ytmpd/config.py`
 6. Manual testing: Load playlist in MPD and verify metadata displays correctly
@@ -293,7 +293,7 @@ All completion criteria met successfully. Minor test coverage gap for end-to-end
 from ytmpd.track_store import TrackStore
 
 # Create store
-with TrackStore("~/.config/ytmpd/track_mapping.db") as store:
+with TrackStore("~/.config/xmpd/track_mapping.db") as store:
     # Add track
     store.add_track(
         video_id="dQw4w9WgXcQ",
@@ -317,7 +317,7 @@ from ytmpd.track_store import TrackStore
 from ytmpd.icy_proxy import ICYProxyServer
 
 async def main():
-    store = TrackStore("~/.config/ytmpd/track_mapping.db")
+    store = TrackStore("~/.config/xmpd/track_mapping.db")
 
     async with ICYProxyServer(store, host="localhost", port=8080) as proxy:
         print("Proxy running on http://localhost:8080")

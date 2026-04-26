@@ -6,9 +6,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from ytmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
-from ytmpd.rating import RatingState
-from ytmpd.ytmusic import YTMusicClient
+from xmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
+from xmpd.rating import RatingState
+from xmpd.ytmusic import YTMusicClient
 
 
 class TestYTMusicClientRating:
@@ -37,7 +37,7 @@ class TestYTMusicClientRating:
     @pytest.fixture
     def client(self, mock_oauth_file: Path, mock_ytmusic: Mock) -> YTMusicClient:
         """Create a YTMusicClient instance with mocked dependencies."""
-        with patch("ytmpd.ytmusic.YTMusic", return_value=mock_ytmusic):
+        with patch("xmpd.ytmusic.YTMusic", return_value=mock_ytmusic):
             client = YTMusicClient(auth_file=mock_oauth_file)
         return client
 
@@ -152,7 +152,7 @@ class TestYTMusicClientRating:
 
     def test_get_track_rating_not_authenticated(self, mock_oauth_file: Path) -> None:
         """Test error handling when client is not authenticated."""
-        with patch("ytmpd.ytmusic.YTMusic", return_value=Mock()):
+        with patch("xmpd.ytmusic.YTMusic", return_value=Mock()):
             client = YTMusicClient(auth_file=mock_oauth_file)
             client._client = None  # Simulate no authentication
 
@@ -247,7 +247,7 @@ class TestYTMusicClientRating:
 
     def test_set_track_rating_not_authenticated(self, mock_oauth_file: Path) -> None:
         """Test error handling when client is not authenticated."""
-        with patch("ytmpd.ytmusic.YTMusic", return_value=Mock()):
+        with patch("xmpd.ytmusic.YTMusic", return_value=Mock()):
             client = YTMusicClient(auth_file=mock_oauth_file)
             client._client = None  # Simulate no authentication
 

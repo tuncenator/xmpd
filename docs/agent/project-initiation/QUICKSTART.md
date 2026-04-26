@@ -152,7 +152,7 @@ uv pip install <package-name>
 python -m ytmpd.daemon
 
 # Run the client (once implemented)
-./ytmpctl status
+./xmpctl status
 ```
 
 ### Dependencies

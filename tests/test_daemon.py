@@ -1,22 +1,22 @@
-"""Tests for ytmpd sync daemon."""
+"""Tests for xmpd sync daemon."""
 
 import json
 import signal
 from unittest.mock import Mock, patch
 
-from ytmpd.daemon import YTMPDaemon
-from ytmpd.sync_engine import SyncResult
+from xmpd.daemon import XMPDaemon
+from xmpd.sync_engine import SyncResult
 
 
 class TestDaemonInit:
     """Tests for daemon initialization."""
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_daemon_initializes_components(
         self,
         mock_get_config_dir,
@@ -47,7 +47,7 @@ class TestDaemonInit:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Verify components initialized
         assert daemon.ytmusic_client is not None
@@ -56,12 +56,12 @@ class TestDaemonInit:
         assert daemon.sync_engine is not None
         assert daemon.config == mock_load_config.return_value
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_daemon_loads_state(
         self,
         mock_get_config_dir,
@@ -106,7 +106,7 @@ class TestDaemonInit:
             json.dump(state_data, f)
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Verify state loaded
         assert daemon.state["last_sync"] == "2025-10-17T12:00:00Z"
@@ -116,12 +116,12 @@ class TestDaemonInit:
 class TestPerformSync:
     """Tests for sync execution."""
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_perform_sync_updates_state(
         self,
         mock_get_config_dir,
@@ -166,7 +166,7 @@ class TestPerformSync:
         mock_sync_engine_class.return_value = mock_sync_engine
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Perform sync
         daemon._perform_sync()
@@ -177,12 +177,12 @@ class TestPerformSync:
         assert daemon.state["last_sync_result"]["playlists_synced"] == 3
         assert daemon.state["last_sync_result"]["tracks_added"] == 50
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_perform_sync_handles_errors(
         self,
         mock_get_config_dir,
@@ -218,7 +218,7 @@ class TestPerformSync:
         mock_sync_engine_class.return_value = mock_sync_engine
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Perform sync (should not raise)
         daemon._perform_sync()
@@ -228,12 +228,12 @@ class TestPerformSync:
         assert daemon.state["last_sync_result"]["success"] is False
         assert "Sync failed" in daemon.state["last_sync_result"]["errors"][0]
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_perform_sync_skips_if_in_progress(
         self,
         mock_get_config_dir,
@@ -267,7 +267,7 @@ class TestPerformSync:
         mock_sync_engine_class.return_value = mock_sync_engine
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
         daemon._sync_in_progress = True
 
         # Perform sync
@@ -280,12 +280,12 @@ class TestPerformSync:
 class TestSocketCommands:
     """Tests for socket command handling."""
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_cmd_sync_triggers_sync(
         self,
         mock_get_config_dir,
@@ -316,7 +316,7 @@ class TestSocketCommands:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Call sync command
         response = daemon._cmd_sync()
@@ -325,12 +325,12 @@ class TestSocketCommands:
         assert response["success"] is True
         assert "triggered" in response["message"].lower()
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_cmd_status_returns_state(
         self,
         mock_get_config_dir,
@@ -361,7 +361,7 @@ class TestSocketCommands:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
         daemon.ytmusic_client.is_authenticated.return_value = (True, "")
         daemon.state = {
             "last_sync": "2025-10-17T12:00:00Z",
@@ -386,12 +386,12 @@ class TestSocketCommands:
         assert response["tracks_added"] == 100
         assert response["last_sync_success"] is True
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_cmd_list_returns_playlists(
         self,
         mock_get_config_dir,
@@ -437,7 +437,7 @@ class TestSocketCommands:
         mock_ytmusic_class.return_value = mock_ytmusic
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Call list command
         response = daemon._cmd_list()
@@ -453,12 +453,12 @@ class TestSocketCommands:
 class TestStatePersistence:
     """Tests for state persistence."""
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_save_state_creates_file(
         self,
         mock_get_config_dir,
@@ -489,7 +489,7 @@ class TestStatePersistence:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
         daemon.state = {
             "last_sync": "2025-10-17T12:00:00Z",
             "last_sync_result": {"success": True},
@@ -508,12 +508,12 @@ class TestStatePersistence:
             saved_state = json.load(f)
         assert saved_state["last_sync"] == "2025-10-17T12:00:00Z"
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_load_state_reads_file(
         self,
         mock_get_config_dir,
@@ -554,7 +554,7 @@ class TestStatePersistence:
             json.dump(state_data, f)
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Verify state loaded
         assert daemon.state["last_sync"] == "2025-10-17T12:00:00Z"
@@ -564,12 +564,12 @@ class TestStatePersistence:
 class TestSignalHandling:
     """Tests for signal handling."""
 
-    @patch("ytmpd.daemon.YTMusicClient")
-    @patch("ytmpd.daemon.MPDClient")
-    @patch("ytmpd.daemon.StreamResolver")
-    @patch("ytmpd.daemon.SyncEngine")
-    @patch("ytmpd.daemon.load_config")
-    @patch("ytmpd.daemon.get_config_dir")
+    @patch("xmpd.daemon.YTMusicClient")
+    @patch("xmpd.daemon.MPDClient")
+    @patch("xmpd.daemon.StreamResolver")
+    @patch("xmpd.daemon.SyncEngine")
+    @patch("xmpd.daemon.load_config")
+    @patch("xmpd.daemon.get_config_dir")
     def test_sighup_reloads_config(
         self,
         mock_get_config_dir,
@@ -601,7 +601,7 @@ class TestSignalHandling:
         mock_load_config.return_value = initial_config
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Simulate SIGHUP
         new_config = {
@@ -624,12 +624,12 @@ class TestSignalHandling:
         assert daemon.config["sync_interval_minutes"] == 60
 
 
-@patch("ytmpd.daemon.YTMusicClient")
-@patch("ytmpd.daemon.MPDClient")
-@patch("ytmpd.daemon.StreamResolver")
-@patch("ytmpd.daemon.SyncEngine")
-@patch("ytmpd.daemon.load_config")
-@patch("ytmpd.daemon.get_config_dir")
+@patch("xmpd.daemon.YTMusicClient")
+@patch("xmpd.daemon.MPDClient")
+@patch("xmpd.daemon.StreamResolver")
+@patch("xmpd.daemon.SyncEngine")
+@patch("xmpd.daemon.load_config")
+@patch("xmpd.daemon.get_config_dir")
 class TestDaemonRadioSearchCommands:
     """Tests for new radio and search commands (Phase 2 stubs)."""
 
@@ -668,7 +668,7 @@ class TestDaemonRadioSearchCommands:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Call radio command with invalid video ID (too short)
         response = daemon._cmd_radio("short")
@@ -708,7 +708,7 @@ class TestDaemonRadioSearchCommands:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Call radio command with invalid characters
         response = daemon._cmd_radio("invalid!@#$")
@@ -748,7 +748,7 @@ class TestDaemonRadioSearchCommands:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Call search command with empty query
         response = daemon._cmd_search("")
@@ -788,7 +788,7 @@ class TestDaemonRadioSearchCommands:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Call search command with whitespace query
         response = daemon._cmd_search("   ")
@@ -828,7 +828,7 @@ class TestDaemonRadioSearchCommands:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Call search command with None
         response = daemon._cmd_search(None)
@@ -868,7 +868,7 @@ class TestDaemonRadioSearchCommands:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Call play command without video ID
         response = daemon._cmd_play(None)
@@ -908,7 +908,7 @@ class TestDaemonRadioSearchCommands:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Call queue command with invalid video ID
         response = daemon._cmd_queue("toolong12345")
@@ -929,11 +929,11 @@ class TestDaemonRadioSearchCommands:
         monkeypatch,
     ):
         """Test extracting video ID from proxy URL."""
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -948,7 +948,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Test valid proxy URL
         url = "http://localhost:6602/proxy/2xOPkdtFeHM"
@@ -970,11 +970,11 @@ class TestDaemonRadioSearchCommands:
         monkeypatch,
     ):
         """Test extracting video ID from non-proxy URLs returns None."""
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -989,7 +989,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Test empty URL
         assert daemon._extract_video_id_from_url("") is None
@@ -1018,11 +1018,11 @@ class TestDaemonRadioSearchCommands:
         """Test radio command when no track is playing."""
         from unittest.mock import Mock
 
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -1037,7 +1037,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Mock MPD client to return empty current song
         daemon.mpd_client.currentsong = Mock(return_value=None)
@@ -1061,11 +1061,11 @@ class TestDaemonRadioSearchCommands:
         """Test radio command when current track is not a YouTube track."""
         from unittest.mock import Mock
 
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -1080,7 +1080,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Mock MPD client to return non-YouTube track
         daemon.mpd_client.currentsong = Mock(
@@ -1107,7 +1107,7 @@ class TestDaemonRadioSearchCommands:
         """Test successful radio playlist generation."""
         from unittest.mock import Mock
 
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Setup mocks
         config_dir = tmp_path / "config"
@@ -1129,7 +1129,7 @@ class TestDaemonRadioSearchCommands:
         }
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Mock MPD client to return YouTube track
         daemon.mpd_client.currentsong = Mock(
@@ -1203,11 +1203,11 @@ class TestDaemonRadioSearchCommands:
         """Test successful search command."""
         from unittest.mock import Mock
 
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -1222,7 +1222,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Mock ytmusic search results
         daemon.ytmusic_client.search = Mock(
@@ -1271,11 +1271,11 @@ class TestDaemonRadioSearchCommands:
         """Test search command with no results."""
         from unittest.mock import Mock
 
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -1290,7 +1290,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Mock ytmusic search with empty results
         daemon.ytmusic_client.search = Mock(return_value=[])
@@ -1313,11 +1313,11 @@ class TestDaemonRadioSearchCommands:
         monkeypatch,
     ):
         """Test duration formatting helper."""
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -1332,7 +1332,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Test various durations
         assert daemon._format_duration(0) == "Unknown"
@@ -1354,11 +1354,11 @@ class TestDaemonRadioSearchCommands:
         """Test successful play command."""
         from unittest.mock import Mock
 
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -1373,7 +1373,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Set proxy_config explicitly
         daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
@@ -1414,11 +1414,11 @@ class TestDaemonRadioSearchCommands:
         monkeypatch,
     ):
         """Test play command with invalid video ID."""
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -1433,7 +1433,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Call play with invalid video ID
         response = daemon._cmd_play("invalid")
@@ -1454,11 +1454,11 @@ class TestDaemonRadioSearchCommands:
         """Test successful queue command."""
         from unittest.mock import Mock
 
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -1473,7 +1473,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Set proxy_config explicitly
         daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
@@ -1514,11 +1514,11 @@ class TestDaemonRadioSearchCommands:
         """Test track info retrieval helper."""
         from unittest.mock import Mock
 
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -1533,7 +1533,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Mock successful search
         daemon.ytmusic_client.search = Mock(
@@ -1559,11 +1559,11 @@ class TestDaemonRadioSearchCommands:
         """Test track info retrieval fallback when search fails."""
         from unittest.mock import Mock
 
-        from ytmpd.daemon import YTMPDaemon
+        from xmpd.daemon import XMPDaemon
 
         # Mock configuration
         monkeypatch.setattr(
-            "ytmpd.daemon.load_config",
+            "xmpd.daemon.load_config",
             lambda: {
                 "mpd_socket_path": "~/.config/mpd/socket",
                 "playlist_prefix": "YT: ",
@@ -1578,7 +1578,7 @@ class TestDaemonRadioSearchCommands:
         )
 
         # Create daemon
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
 
         # Mock failed search (raises exception)
         daemon.ytmusic_client.search = Mock(side_effect=Exception("API error"))

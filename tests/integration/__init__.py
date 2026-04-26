@@ -1,1 +1,1 @@
-# Integration tests for ytmpd
+# Integration tests for xmpd

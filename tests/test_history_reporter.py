@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ytmpd.history_reporter import HistoryReporter
+from xmpd.history_reporter import HistoryReporter
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -22,7 +22,7 @@ Successfully implemented the complete radio feature for ytmpd:
 - Integrated with YouTube Music API's `get_watch_playlist()` method with `radio=True` parameter
 - Added batch stream URL resolution for radio tracks
 - Created "YT: Radio" playlist in MPD with proper metadata
-- Added `ytmpctl radio` CLI command for user-friendly access
+- Added `xmpctl radio` CLI command for user-friendly access
 - Wrote comprehensive test suite covering all edge cases and happy paths
 
 ### Files Created
@@ -32,7 +32,7 @@ Successfully implemented the complete radio feature for ytmpd:
 ### Files Modified
 
 - `ytmpd/daemon.py` - Added `_extract_video_id_from_url()` helper method (lines 611-628) and replaced `_cmd_radio()` stub with full implementation (lines 630-746)
-- `bin/ytmpctl` - Added `cmd_radio()` function (lines 263-283), updated help text (line 294), and added command dispatcher case (lines 356-357)
+- `bin/xmpctl` - Added `cmd_radio()` function (lines 263-283), updated help text (line 294), and added command dispatcher case (lines 356-357)
 - `tests/test_daemon.py` - Removed 2 obsolete stub tests (lines 640-642), added 5 comprehensive Phase 3 tests covering URL extraction and radio generation (lines 1122-1390)
 
 ### Key Design Decisions
@@ -54,7 +54,7 @@ Successfully implemented the complete radio feature for ytmpd:
 - [x] YouTube Music API integration working (get_watch_playlist with radio=True)
 - [x] Stream URL resolution working for batch of video IDs
 - [x] "YT: Radio" playlist created in MPD successfully
-- [x] `ytmpctl radio --current` command works end-to-end (Note: implemented as `ytmpctl radio`, `--current` optional)
+- [x] `xmpctl radio --current` command works end-to-end (Note: implemented as `xmpctl radio`, `--current` optional)
 - [x] All error cases handled with clear messages
 - [x] Tests written and passing
 - [ ] Manual testing successful with live MPD/YouTube Music (deferred - see below)
@@ -63,7 +63,7 @@ Successfully implemented the complete radio feature for ytmpd:
 
 1. **Method naming**: Implementation uses `_cmd_radio()` (established in Phase 2) rather than `_handle_radio()` from plan. This is more consistent with existing codebase patterns.
 
-2. **CLI flag**: Implemented `ytmpctl radio` without requiring `--current` flag since radio from current track is the only supported use case in Phase 3. Future phases can add video ID argument if needed.
+2. **CLI flag**: Implemented `xmpctl radio` without requiring `--current` flag since radio from current track is the only supported use case in Phase 3. Future phases can add video ID argument if needed.
 
 3. **Manual integration testing**: Deferred manual testing with live MPD/YouTube Music to user validation. All functionality is comprehensively unit tested with mocks. Integration testing would require:
    - Running MPD instance
@@ -177,7 +177,7 @@ Not performed in this phase. Unit tests provide comprehensive coverage with mock
 
 ### Linting
 
-No linting issues. Code follows existing patterns in `ytmpd/daemon.py`, `bin/ytmpctl`, and `tests/test_daemon.py`.
+No linting issues. Code follows existing patterns in `ytmpd/daemon.py`, `bin/xmpctl`, and `tests/test_daemon.py`.
 
 ---
 
@@ -210,7 +210,7 @@ mpc load "YT: Favorites"
 mpc play
 
 # Generate radio playlist from current track
-ytmpctl radio
+xmpctl radio
 
 # Load and play the radio playlist
 mpc load "YT: Radio"
@@ -230,7 +230,7 @@ Phase 4 and 5 can reuse patterns from `_cmd_radio()`:
 
 - `ytmpd/daemon.py:_extract_video_id_from_url()` - Reusable for any proxy URL parsing needs (lines 611-628)
 - `ytmpd/daemon.py:_cmd_radio()` - Full radio command handler (lines 630-746)
-- `bin/ytmpctl:cmd_radio()` - CLI command for radio (lines 263-283)
+- `bin/xmpctl:cmd_radio()` - CLI command for radio (lines 263-283)
 
 ---
 
@@ -270,7 +270,7 @@ None. Implementation is clean and complete.
 4. Reuse video ID validation and stream resolution logic
 
 **Integration Test Ideas for Phase 6:**
-- Test full flow: start daemon → play YouTube track → run `ytmpctl radio` → verify "YT: Radio" playlist appears
+- Test full flow: start daemon → play YouTube track → run `xmpctl radio` → verify "YT: Radio" playlist appears
 - Verify radio playlist contains ~25 tracks matching configured limit
 - Test radio from different genres/tracks produces varied playlists
 - Verify error handling: radio when no track playing, radio from local file
@@ -292,7 +292,7 @@ All deliverables met, all tests passing, no blockers for next phase.
 
 Radio generation from current track:
 ```bash
-$ ytmpctl radio
+$ xmpctl radio
 Generating radio playlist from current track...
 ✓ Radio playlist created: 23 tracks
 
@@ -304,14 +304,14 @@ To load and play:
 
 Error - no track playing:
 ```bash
-$ ytmpctl radio
+$ xmpctl radio
 Generating radio playlist from current track...
 ✗ No track currently playing
 ```
 
 Error - current track not YouTube:
 ```bash
-$ ytmpctl radio
+$ xmpctl radio
 Generating radio playlist from current track...
 ✗ Current track is not a YouTube track
 ```
@@ -349,7 +349,7 @@ def _extract_video_id_from_url(self, url: str) -> str | None:
 - Creates "YT: Radio" playlist via `mpd_client.create_or_replace_playlist()`
 - Returns success response with track count
 
-**CLI Command (ytmpctl:263-283):**
+**CLI Command (xmpctl:263-283):**
 ```python
 def cmd_radio() -> None:
     """Generate radio playlist from currently playing track."""

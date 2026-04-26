@@ -39,7 +39,7 @@ None (all new files for this phase).
 
 1. **Exception Hierarchy**: Created a base `YTMPDError` exception with specific subclasses for different error types, enabling precise error handling throughout the application.
 
-2. **OAuth Credentials Storage**: Store OAuth credentials in `~/.config/ytmpd/oauth.json` as JSON, separate from main config file for security and modularity.
+2. **OAuth Credentials Storage**: Store OAuth credentials in `~/.config/xmpd/oauth.json` as JSON, separate from main config file for security and modularity.
 
 3. **Rate Limiting**: Implemented client-side rate limiting (100ms between requests) to prevent hitting YouTube Music API rate limits and ensure reliable operation.
 
@@ -252,7 +252,7 @@ Future enhancements to consider:
 
 ## Security Considerations
 
-- **OAuth Credentials**: Stored in `~/.config/ytmpd/oauth.json` with default file permissions (follows system umask, typically 0644). In Phase 9 (Polish), consider setting stricter permissions (0600).
+- **OAuth Credentials**: Stored in `~/.config/xmpd/oauth.json` with default file permissions (follows system umask, typically 0644). In Phase 9 (Polish), consider setting stricter permissions (0600).
 
 - **API Key Safety**: The OAuth flow doesn't expose API keys in code. Client credentials are provided by user during setup.
 
@@ -307,13 +307,13 @@ in Google Cloud Console with OAuth credentials for
 
 See: https://ytmusicapi.readthedocs.io/en/stable/setup/oauth.html
 
-Credentials will be saved to: /home/user/.config/ytmpd/oauth.json
+Credentials will be saved to: /home/user/.config/xmpd/oauth.json
 
 [OAuth flow proceeds...]
 
 ============================================================
 OAuth setup complete!
-Credentials saved to: /home/user/.config/ytmpd/oauth.json
+Credentials saved to: /home/user/.config/xmpd/oauth.json
 
 You can now start the ytmpd daemon with:
   python -m ytmpd

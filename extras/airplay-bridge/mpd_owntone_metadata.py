@@ -5,7 +5,7 @@ OwnTone watches `<audio-pipe>.metadata` for shairport-sync's XML+DMAP frames and
 forwards them as DACP metadata to the active AirPlay receiver. This daemon
 subscribes to MPD `idle player playlist` and emits a fresh metadata block on
 every track change containing artist/title/album/track-id/album-art. Album is
-tagged "ytmpd" for YouTube tracks served via ytmpd's proxy, the file's own
+tagged "xmpd" for YouTube tracks served via xmpd's proxy, the file's own
 album tag for local files (falling back to "local"), "stream" otherwise.
 
 Note: progress is NOT supported. OwnTone v29's pipe-input metadata reader
@@ -41,7 +41,7 @@ RECONNECT_DELAY_SEC = 3.0
 # Album-art lookup
 ART_CACHE_DIR = Path.home() / ".cache" / "mpd-owntone-metadata"
 ART_FETCH_TIMEOUT_SEC = 5.0
-# ytmpd serves YouTube tracks via http://localhost:<port>/proxy/<11-char video_id>
+# xmpd serves YouTube tracks via http://localhost:<port>/proxy/<11-char video_id>
 YT_PROXY_RE = re.compile(r"/proxy/([A-Za-z0-9_-]{11})(?:[?#/]|$)")
 
 # Album-art cache for online lookups (iTunes / MusicBrainz+CAA). Keyed on
@@ -51,11 +51,11 @@ ALBUM_CACHE_DIR = ART_CACHE_DIR / "albums"
 NEG_CACHE_TTL_SEC = 30 * 24 * 3600  # 30 days
 
 # Required by MusicBrainz; polite everywhere else.
-ART_HTTP_USER_AGENT = "ytmpd-airplay-bridge/1.0 (+https://github.com/tyildirim/ytmpd)"
+ART_HTTP_USER_AGENT = "xmpd-airplay-bridge/1.0 (+https://github.com/tuncenator/xmpd)"
 
 # Opt-out: set this env var to any non-empty value to disable iTunes/MB lookups.
 # MPD-local resolvers (embedded + folder art) stay active regardless.
-ONLINE_ART_DISABLED = bool(os.environ.get("YTMPD_AIRPLAY_NO_ONLINE_ART"))
+ONLINE_ART_DISABLED = bool(os.environ.get("XMPD_AIRPLAY_NO_ONLINE_ART"))
 
 # DMAP type codes (4 ASCII bytes, hex-encoded for the XML wire format)
 TYPE_CORE = "636f7265"  # 'core' - DAAP standard codes
@@ -342,7 +342,7 @@ def _fetch_musicbrainz(artist: str, album: str) -> bytes | None:
 def _resolve_online(song: dict) -> bytes | None:
     """Cache-aware online lookup: iTunes then MusicBrainz/CAA.
 
-    Skipped if YTMPD_AIRPLAY_NO_ONLINE_ART is set, or if Artist+Album tags
+    Skipped if XMPD_AIRPLAY_NO_ONLINE_ART is set, or if Artist+Album tags
     aren't both present. Writes either the successful blob or a negative
     marker, so a second play of the same album never re-hits the network.
     """
@@ -382,7 +382,7 @@ def _resolve_online(song: dict) -> bytes | None:
 
 
 def _resolve_yt_proxy(song: dict) -> bytes | None:
-    """Fetch YouTube thumbnail for tracks served via ytmpd's proxy URL.
+    """Fetch YouTube thumbnail for tracks served via xmpd's proxy URL.
 
     Cached per-video-id on disk under ART_CACHE_DIR. Cache hits are a local
     Path.read_bytes() so this resolver stays fast even for repeated plays.
@@ -433,13 +433,13 @@ def fetch_album_art(song: dict) -> bytes | None:
 
 
 def derive_album(song: dict) -> str:
-    """Tag album by source: 'ytmpd' for YouTube proxy URLs, MPD's album for
+    """Tag album by source: 'xmpd' for YouTube proxy URLs, MPD's album for
     local files (falling back to 'local' if the file has no album tag),
     'stream' for other HTTP sources.
     """
     file_uri = song.get("file", "")
     if YT_PROXY_RE.search(file_uri):
-        return "ytmpd"
+        return "xmpd-yt"
     if "://" in file_uri:
         return song.get("Album") or "stream"
     return song.get("Album") or "local"

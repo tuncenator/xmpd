@@ -25,7 +25,7 @@ Use the automated script:
 
 This will:
 1. Update `pyproject.toml`
-2. Update `ytmpd/__init__.py`
+2. Update `xmpd/__init__.py`
 3. Create a commit
 4. Create a git tag (`vX.Y.Z`)
 
@@ -39,7 +39,7 @@ git push && git push --tags
 If you prefer to do it manually:
 
 1. Update version in `pyproject.toml`
-2. Update `__version__` in `ytmpd/__init__.py`
+2. Update `__version__` in `xmpd/__init__.py`
 3. Commit: `git commit -m "Bump version to X.Y.Z"`
 4. Tag: `git tag -a vX.Y.Z -m "Release version X.Y.Z"`
 5. Push: `git push && git push --tags`
@@ -61,7 +61,7 @@ The version is stored in two places:
    version = "1.2.0"
    ```
 
-2. **`ytmpd/__init__.py`** (programmatic access)
+2. **`xmpd/__init__.py`** (programmatic access)
    ```python
    __version__ = "1.2.0"
    ```
@@ -92,14 +92,14 @@ Add to your CI pipeline:
 ## Reading Version in Code
 
 ```python
-from ytmpd import __version__
-print(f"ytmpd version: {__version__}")
+from xmpd import __version__
+print(f"xmpd version: {__version__}")
 ```
 
 Or dynamically from installed package:
 ```python
 from importlib.metadata import version
-print(f"ytmpd version: {version('ytmpd')}")
+print(f"xmpd version: {version('xmpd')}")
 ```
 
 ## Release Checklist

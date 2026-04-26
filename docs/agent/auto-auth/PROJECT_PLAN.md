@@ -22,7 +22,7 @@ When you see a path like `ytmpd/cookie_extract.py`, it means `/home/tunc/Sync/Pr
 
 ### Purpose
 
-Automate YouTube Music authentication for ytmpd by extracting cookies directly from the user's Firefox browser. Currently, when browser.json credentials expire (every few days), users must manually open DevTools, copy request headers, and paste them into `ytmpctl auth`. This feature eliminates that manual step entirely by reading cookies from Firefox's SQLite database and rebuilding browser.json automatically.
+Automate YouTube Music authentication for ytmpd by extracting cookies directly from the user's Firefox browser. Currently, when browser.json credentials expire (every few days), users must manually open DevTools, copy request headers, and paste them into `xmpctl auth`. This feature eliminates that manual step entirely by reading cookies from Firefox's SQLite database and rebuilding browser.json automatically.
 
 ### Scope
 
@@ -35,7 +35,7 @@ Automate YouTube Music authentication for ytmpd by extracting cookies directly f
 - Reactive refresh on auth failure
 - Desktop notification via `notify-send` when auto-refresh fails
 - i3blocks widget auth status color indicator
-- `ytmpctl auth --auto` command for manual trigger
+- `xmpctl auth --auto` command for manual trigger
 - Configuration options in config.yaml
 - Unit and integration tests
 
@@ -53,7 +53,7 @@ Automate YouTube Music authentication for ytmpd by extracting cookies directly f
 - [ ] Desktop notification fires when auto-recovery also fails
 - [ ] i3blocks widget shows auth status with appropriate color
 - [ ] Zero manual header-pasting required as long as user has active Firefox session
-- [ ] Existing manual `ytmpctl auth` flow continues to work unchanged
+- [ ] Existing manual `xmpctl auth` flow continues to work unchanged
 
 ---
 
@@ -64,8 +64,8 @@ Automate YouTube Music authentication for ytmpd by extracting cookies directly f
 1. **CookieExtractor** (`ytmpd/cookie_extract.py`): Reads Firefox's cookies.sqlite, filters by domain/container, builds browser.json-compatible headers
 2. **Auto-refresh logic** (in `ytmpd/daemon.py`): Periodic timer + reactive trigger that calls CookieExtractor and reinitializes YTMusicClient
 3. **Notification system**: `notify-send` calls on unrecoverable auth failure
-4. **CLI integration** (`bin/ytmpctl`): `auth --auto` subcommand
-5. **Status integration** (`bin/ytmpd-status`): Auth-aware color output
+4. **CLI integration** (`bin/xmpctl`): `auth --auto` subcommand
+5. **Status integration** (`bin/xmpd-status`): Auth-aware color output
 
 ### Data Flow
 
@@ -273,7 +273,7 @@ This should:
    - New method `_auto_auth_loop()` running as daemon thread
    - Sleeps for `refresh_interval_hours` (from config), then:
      a. Creates `FirefoxCookieExtractor` with config values
-     b. Calls `build_browser_json()` to regenerate `~/.config/ytmpd/browser.json`
+     b. Calls `build_browser_json()` to regenerate `~/.config/xmpd/browser.json`
      c. Calls `self.ytmusic_client.refresh_auth()` to reload
      d. Logs success/failure
    - Only runs if `auto_auth.enabled` is True in config
@@ -348,12 +348,12 @@ This should:
 
 #### Deliverables
 
-1. Modified `bin/ytmpctl` - `auth --auto` command + updated status display
-2. Modified `bin/ytmpd-status` - Auth-aware color coding
+1. Modified `bin/xmpctl` - `auth --auto` command + updated status display
+2. Modified `bin/xmpd-status` - Auth-aware color coding
 3. `ytmpd/notify.py` - Desktop notification helper
 4. Modified `ytmpd/daemon.py` - Notification triggers on auth failure
 5. `tests/test_notify.py` - Notification tests
-6. Updated `bin/ytmpctl` help text
+6. Updated `bin/xmpctl` help text
 
 #### Detailed Requirements
 
@@ -386,9 +386,9 @@ def send_notification(title: str, message: str, urgency: str = "normal", icon: s
 - After proactive refresh fails in `_auto_auth_loop()`, call notification with `urgency="normal"`
 - Rate-limit notifications: maximum one per hour to avoid spam
 
-**CLI changes** (`bin/ytmpctl`):
+**CLI changes** (`bin/xmpctl`):
 
-1. **`ytmpctl auth --auto`** command:
+1. **`xmpctl auth --auto`** command:
    - Directly invoke `FirefoxCookieExtractor.build_browser_json()` with config values
    - Print success/failure message
    - On success, print "browser.json updated. Daemon will pick up new credentials automatically."
@@ -408,7 +408,7 @@ def send_notification(title: str, message: str, urgency: str = "normal", icon: s
 
 3. **Updated help text**: Add `auth --auto` to the help message
 
-**i3blocks integration** (`bin/ytmpd-status`):
+**i3blocks integration** (`bin/xmpd-status`):
 
 - Modify `get_auth_status()` or the main output logic:
   - If `auth_valid` is False: use red color (`#FF0000`) for the entire status line
@@ -426,8 +426,8 @@ def send_notification(title: str, message: str, urgency: str = "normal", icon: s
 
 - [ ] `notify-send` fires on unrecoverable auth failure
 - [ ] Notifications are rate-limited (max 1 per hour)
-- [ ] `ytmpctl auth --auto` extracts cookies and updates browser.json
-- [ ] `ytmpctl status` shows auto-auth information
+- [ ] `xmpctl auth --auto` extracts cookies and updates browser.json
+- [ ] `xmpctl status` shows auto-auth information
 - [ ] i3blocks widget changes color on auth failure
 - [ ] Help text updated
 - [ ] Graceful handling when notify-send is not installed
@@ -437,7 +437,7 @@ def send_notification(title: str, message: str, urgency: str = "normal", icon: s
 
 - Mock `subprocess.run` for notify-send tests
 - Test notification rate limiting
-- Test `ytmpctl auth --auto` with mocked CookieExtractor
+- Test `xmpctl auth --auto` with mocked CookieExtractor
 - Test i3blocks color output with various auth states
 
 #### Notes
@@ -497,7 +497,7 @@ Add a new section "Auto-Authentication" to README.md covering:
 - How to enable it
 - What happens when cookies expire
 - Troubleshooting (Firefox not found, wrong profile, wrong container)
-- Manual trigger: `ytmpctl auth --auto`
+- Manual trigger: `xmpctl auth --auto`
 
 **Config documentation**:
 
@@ -587,7 +587,7 @@ All phases are sequential -- each depends on the previous.
 ### CookieExtractor <-> Daemon
 - Daemon creates `FirefoxCookieExtractor` from config values
 - Calls `build_browser_json()` on schedule and on auth failure
-- Passes output path as `~/.config/ytmpd/browser.json`
+- Passes output path as `~/.config/xmpd/browser.json`
 
 ### Daemon <-> YTMusicClient
 - Daemon calls `ytmusic_client.refresh_auth()` after browser.json is rebuilt
@@ -598,7 +598,7 @@ All phases are sequential -- each depends on the previous.
 - Rate-limited to prevent spam
 
 ### CLI <-> CookieExtractor
-- `ytmpctl auth --auto` creates extractor and calls `build_browser_json()` directly
+- `xmpctl auth --auto` creates extractor and calls `build_browser_json()` directly
 - Does not go through daemon
 
 ---

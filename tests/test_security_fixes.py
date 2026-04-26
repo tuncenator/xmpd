@@ -14,9 +14,9 @@ import time
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from ytmpd.mpd_client import MPDClient, TrackWithMetadata
-from ytmpd.track_store import TrackStore
-from ytmpd.exceptions import MPDPlaylistError
+from xmpd.mpd_client import MPDClient, TrackWithMetadata
+from xmpd.track_store import TrackStore
+from xmpd.exceptions import MPDPlaylistError
 
 
 class TestPathTraversalProtection:
@@ -253,7 +253,7 @@ class TestProxyURLValidation:
     @pytest.mark.asyncio
     async def test_proxy_rejects_none_stream_url(self):
         """Test that proxy rejects None stream URLs."""
-        from ytmpd.icy_proxy import ICYProxyServer
+        from xmpd.icy_proxy import ICYProxyServer
         from aiohttp import web
         from aiohttp.test_utils import TestClient, TestServer
 
@@ -276,7 +276,7 @@ class TestProxyURLValidation:
     @pytest.mark.asyncio
     async def test_proxy_rejects_invalid_stream_url(self):
         """Test that proxy rejects invalid stream URLs."""
-        from ytmpd.icy_proxy import ICYProxyServer
+        from xmpd.icy_proxy import ICYProxyServer
         from aiohttp.test_utils import TestClient, TestServer
 
         # Create store with track that has invalid stream_url
@@ -297,7 +297,7 @@ class TestProxyURLValidation:
     @pytest.mark.asyncio
     async def test_proxy_accepts_valid_stream_url(self):
         """Test that proxy accepts valid stream URLs."""
-        from ytmpd.icy_proxy import ICYProxyServer
+        from xmpd.icy_proxy import ICYProxyServer
         from aiohttp.test_utils import TestClient, TestServer
 
         # Create store with track that has valid stream_url
@@ -335,7 +335,7 @@ class TestSocketTimeout:
         mock_conn.close = Mock()
 
         # Import the daemon module
-        import ytmpd.daemon as daemon_module
+        import xmpd.daemon as daemon_module
 
         # The socket timeout should be set in _handle_socket_connection
         # We can verify the code sets it by checking the implementation

@@ -1,5 +1,5 @@
 """
-Playlist sync engine for ytmpd.
+Playlist sync engine for xmpd.
 
 This module orchestrates the synchronization of YouTube Music playlists to MPD,
 handling playlist fetching, stream URL resolution, and MPD playlist management.
@@ -11,10 +11,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 
-from ytmpd.exceptions import MPDConnectionError, MPDPlaylistError, YTMusicAPIError
-from ytmpd.mpd_client import MPDClient, TrackWithMetadata
-from ytmpd.stream_resolver import StreamResolver
-from ytmpd.ytmusic import Playlist, YTMusicClient
+from xmpd.exceptions import MPDConnectionError, MPDPlaylistError, YTMusicAPIError
+from xmpd.mpd_client import MPDClient, TrackWithMetadata
+from xmpd.stream_resolver import StreamResolver
+from xmpd.ytmusic import Playlist, YTMusicClient
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ class SyncEngine:
     3. Create/update MPD playlists with proper prefixing
 
     Example:
-        ytmusic = YTMusicClient(auth_file=Path("~/.config/ytmpd/browser.json"))
+        ytmusic = YTMusicClient(auth_file=Path("~/.config/xmpd/browser.json"))
         mpd = MPDClient("~/.config/mpd/socket")
         resolver = StreamResolver(cache_hours=5)
         engine = SyncEngine(ytmusic, mpd, resolver, playlist_prefix="YT: ")

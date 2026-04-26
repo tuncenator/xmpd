@@ -4,8 +4,8 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-from ytmpd.daemon import YTMPDaemon
-from ytmpd.history_reporter import HistoryReporter
+from xmpd.daemon import XMPDaemon
+from xmpd.history_reporter import HistoryReporter
 
 
 def _base_config() -> dict:
@@ -37,33 +37,33 @@ def _disabled_config() -> dict:
 
 # Shared decorator stack for mocking daemon dependencies
 _daemon_patches = [
-    "ytmpd.daemon.YTMusicClient",
-    "ytmpd.daemon.MPDClient",
-    "ytmpd.daemon.StreamResolver",
-    "ytmpd.daemon.SyncEngine",
-    "ytmpd.daemon.load_config",
-    "ytmpd.daemon.get_config_dir",
+    "xmpd.daemon.YTMusicClient",
+    "xmpd.daemon.MPDClient",
+    "xmpd.daemon.StreamResolver",
+    "xmpd.daemon.SyncEngine",
+    "xmpd.daemon.load_config",
+    "xmpd.daemon.get_config_dir",
 ]
 
 
 def _make_daemon(tmp_path, config_dict):
-    """Create a YTMPDaemon with full mock stack and given config."""
+    """Create a XMPDaemon with full mock stack and given config."""
     config_dir = tmp_path / "config"
     config_dir.mkdir(exist_ok=True)
     (config_dir / "browser.json").touch()
 
     with (
-        patch("ytmpd.daemon.get_config_dir", return_value=config_dir),
-        patch("ytmpd.daemon.load_config", return_value=config_dict),
-        patch("ytmpd.daemon.YTMusicClient"),
-        patch("ytmpd.daemon.MPDClient"),
-        patch("ytmpd.daemon.StreamResolver"),
-        patch("ytmpd.daemon.SyncEngine"),
-        patch("ytmpd.daemon.ICYProxyServer"),
-        patch("ytmpd.daemon.TrackStore"),
-        patch("ytmpd.daemon.HistoryReporter") as mock_hr_cls,
+        patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+        patch("xmpd.daemon.load_config", return_value=config_dict),
+        patch("xmpd.daemon.YTMusicClient"),
+        patch("xmpd.daemon.MPDClient"),
+        patch("xmpd.daemon.StreamResolver"),
+        patch("xmpd.daemon.SyncEngine"),
+        patch("xmpd.daemon.ICYProxyServer"),
+        patch("xmpd.daemon.TrackStore"),
+        patch("xmpd.daemon.HistoryReporter") as mock_hr_cls,
     ):
-        daemon = YTMPDaemon()
+        daemon = XMPDaemon()
         return daemon, mock_hr_cls
 
 

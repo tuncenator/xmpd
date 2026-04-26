@@ -1,4 +1,4 @@
-"""XSPF playlist generator for ytmpd.
+"""XSPF playlist generator for xmpd.
 
 This module generates XSPF (XML Shareable Playlist Format) playlists that provide
 separate artist/title metadata tags in MPD, enabling proper display in ncmpcpp with

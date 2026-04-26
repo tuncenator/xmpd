@@ -27,7 +27,7 @@ The user has subscribed to Tidal HiFi and wants Tidal alongside YouTube Music in
 - Migrating spec/design docs from prior eras into renamed forms — historical specs stay verbatim under their original names.
 - Changing MPD's role. xmpd remains a feeder; MPD owns playback.
 - Rewriting `airplay-bridge` to be provider-aware as a first-class concept. It only learns enough to fetch art for Tidal-tagged tracks.
-- Maintaining backward compatibility with `ytmpctl` as an installed alias. Hard-cut to `xmpctl`.
+- Maintaining backward compatibility with `xmpctl` as an installed alias. Hard-cut to `xmpctl`.
 
 ## Naming and scope decisions (locked)
 
@@ -35,11 +35,11 @@ The user has subscribed to Tidal HiFi and wants Tidal alongside YouTube Music in
 |---|---|
 | Repo name | `xmpd` |
 | Python package | `xmpd` |
-| CLI binary | `xmpctl` (note: no `d`; matches old `ytmpctl` convention where the daemon is `xmpd`, the controller is `xmpctl`) |
+| CLI binary | `xmpctl` (note: no `d`; matches old `xmpctl` convention where the daemon is `xmpd`, the controller is `xmpctl`) |
 | Status binary | `xmpd-status`, `xmpd-status-preview` |
 | Systemd unit | `xmpd.service` |
 | Config dir | `~/.config/xmpd/` |
-| Log file | `xmpd.log` (was `ytmpd.log`) |
+| Log file | `xmpd.log` (was `xmpd.log`) |
 | Provider canonical names | `yt`, `tidal` |
 | Proxy URL pattern | `http://localhost:8080/proxy/<provider>/<track_id>` |
 | MPD playlist prefixes | `YT: ` for YouTube, `TD: ` for Tidal (configurable in `playlist_prefix.<provider>`) |
@@ -50,7 +50,7 @@ The user has subscribed to Tidal HiFi and wants Tidal alongside YouTube Music in
 | Tidal dislike semantics | maps to "unfavorite" (mirrors YT's broken-toggle pattern documented in old README) |
 | Repo migration path | new repo `tuncenator/xmpd` with full git history; old `tuncenator/ytmpd` archived with notice |
 | CLI alias | none. Hard rename. Old clone left on disk as a fallback, deleted by user when confident. |
-| Config dir migration | `cp -r ~/.config/ytmpd ~/.config/xmpd`, rename `ytmpd.log` → `xmpd.log` inside |
+| Config dir migration | `cp -r ~/.config/ytmpd ~/.config/xmpd`, rename `xmpd.log` → `xmpd.log` inside |
 
 ## Architecture
 
@@ -337,9 +337,9 @@ git remote remove origin
 
 - `ytmpd/` → `xmpd/`
 - `ytmpd.service` → `xmpd.service`
-- `bin/ytmpctl` → `bin/xmpctl`
-- `bin/ytmpd-status` → `bin/xmpd-status`
-- `bin/ytmpd-status-preview` → `bin/xmpd-status-preview`
+- `bin/xmpctl` → `bin/xmpctl`
+- `bin/xmpd-status` → `bin/xmpd-status`
+- `bin/xmpd-status-preview` → `bin/xmpd-status-preview`
 
 Deletions:
 
@@ -355,24 +355,24 @@ Sed across the codebase (use exact-token replacements to avoid mangling unrelate
 | `import ytmpd` | `import xmpd` |
 | `'ytmpd'` (string literals) | `'xmpd'` (audit each; some are user-facing log messages or path defaults) |
 | `"ytmpd"` (string literals) | `"xmpd"` (same audit) |
-| `ytmpctl` | `xmpctl` (in docs, scripts, binaries) |
-| `ytmpd-status` | `xmpd-status` |
+| `xmpctl` | `xmpctl` (in docs, scripts, binaries) |
+| `xmpd-status` | `xmpd-status` |
 | `ytmpd.service` | `xmpd.service` |
-| `~/.config/ytmpd/` | `~/.config/xmpd/` |
-| `ytmpd.log` | `xmpd.log` |
+| `~/.config/xmpd/` | `~/.config/xmpd/` |
+| `xmpd.log` | `xmpd.log` |
 | `ytmpd.egg-info` | `xmpd.egg-info` |
 | `tuncenator/ytmpd` (URLs) | `tuncenator/xmpd` |
 
 Targeted updates:
 
-- `pyproject.toml`: `name`, `[project.scripts]` entries (`ytmpctl = "ytmpd.bin.ytmpctl:main"` → `xmpctl = "xmpd.bin.xmpctl:main"` or however currently structured; verify entry-point shape).
+- `pyproject.toml`: `name`, `[project.scripts]` entries (`xmpctl = "ytmpd.bin.xmpctl:main"` → `xmpctl = "xmpd.bin.xmpctl:main"` or however currently structured; verify entry-point shape).
 - `xmpd.service`: `Description=`, `Documentation=`, `ExecStart=...python -m xmpd`, `ReadWritePaths=%h/.config/xmpd %h/Music`.
 - `install.sh`, `uninstall.sh`: every reference; also see Phase E for migration helper additions.
 - `README.md`: title, command examples, paths. Reframe lead paragraph as "multi-source music daemon (YouTube Music + Tidal)" while preserving honesty about phased rollout.
 - `CHANGELOG.md`: preserve all historical "ytmpd v1.0.0" entries verbatim. Add new top entry: `## Unreleased — renamed to xmpd; multi-source architecture follows`.
 - `examples/config.yaml`: full rewrite per the config layout in this spec; see Phase B/C for shape.
 - `examples/i3blocks.conf`: command path updates.
-- All test files in `tests/`: imports + path string assertions (e.g. test fixtures referencing `~/.config/ytmpd/...`).
+- All test files in `tests/`: imports + path string assertions (e.g. test fixtures referencing `~/.config/xmpd/...`).
 - All docs in `docs/`: `i3blocks-integration.md`, `MIGRATION.md`, `version-management.md`, `SECURITY_FIXES.md`, `agent/mpd-integration/QUICKSTART.md`, prior specs (leave content but update path references where the spec describes file layout).
 - `.pre-commit-config.yaml`: any tool-name configs that key on the package.
 
@@ -396,10 +396,10 @@ and config dir from `ytmpd` to `xmpd`. No behavioral changes; the
 provider abstraction and Tidal integration follow in subsequent commits.
 
 - Python package: ytmpd/ → xmpd/
-- CLI: ytmpctl → xmpctl
-- Status: ytmpd-status → xmpd-status (+ preview)
+- CLI: xmpctl → xmpctl
+- Status: xmpd-status → xmpd-status (+ preview)
 - systemd: ytmpd.service → xmpd.service
-- Default config dir: ~/.config/ytmpd/ → ~/.config/xmpd/
+- Default config dir: ~/.config/xmpd/ → ~/.config/xmpd/
 - airplay-bridge: User-Agent and internal source marker updated
 - Drops superseded docs/agent/icy-refactor/ planning docs
 - Drops docs/ICY_PROXY.md (replaced by docs/STREAM_PROXY.md in Phase B)
@@ -456,7 +456,7 @@ Refactor; no new functionality. Goal: existing YT code routed through a `Provide
 9. Update `xmpd/mpd_client.py` and `xmpd/xspf_generator.py` to use the new proxy URL builder (`build_proxy_url(provider, track_id)`).
 10. Update `xmpd/history_reporter.py` to identify provider from the proxy URL prefix and call `provider.report_play(...)`.
 11. Update `xmpd/rating.py` to dispatch via provider.
-12. Update `bin/xmpctl`: search/radio/like/dislike inferences and the new `auth` subcommand structure. Provider canonical names are used in subcommands: `xmpctl auth yt` (subsumes old `ytmpctl auth --auto`) and, in Phase C, `xmpctl auth tidal`.
+12. Update `bin/xmpctl`: search/radio/like/dislike inferences and the new `auth` subcommand structure. Provider canonical names are used in subcommands: `xmpctl auth yt` (subsumes old `xmpctl auth --auto`) and, in Phase C, `xmpctl auth tidal`.
 13. Update tests. Existing YT-shaped tests should still pass after refactoring; structurally they may need to instantiate `YTMusicProvider` instead of `YTMusicClient` directly.
 
 **Phase B acceptance:** `pytest` passes. Daemon starts, syncs YT, plays tracks. Behavior is indistinguishable from Phase A externally.
@@ -516,11 +516,11 @@ Add the Tidal source.
 
 **`install.sh`:**
 
-- Detects `~/.config/ytmpd/` and offers `cp -r ~/.config/ytmpd ~/.config/xmpd` if `~/.config/xmpd/` doesn't exist. Inside the new dir, rename `ytmpd.log` → `xmpd.log`.
+- Detects `~/.config/xmpd/` and offers `cp -r ~/.config/ytmpd ~/.config/xmpd` if `~/.config/xmpd/` doesn't exist. Inside the new dir, rename `xmpd.log` → `xmpd.log`.
 - Rewrites `~/.config/xmpd/config.yaml` shape: nests existing top-level `auto_auth:` block under a new `yt:` section, adds `yt.enabled: true`, adds a stub `tidal:` section with `enabled: false` and the documented Tidal defaults. Idempotent (skip if already migrated). Implementing AI uses a YAML-aware approach (e.g. `ruamel.yaml` to preserve comments) rather than naive sed, so the user's existing comments survive.
 - Detects existing `~/.config/systemd/user/ytmpd.service` and disables/removes it before installing the new `xmpd.service`.
 - Drops `xmpd.service` into `~/.config/systemd/user/`, runs `systemctl --user daemon-reload`.
-- Note in the install summary that the user should `sed -i 's/\bytmpctl\b/xmpctl/g; s/ytmpd-status/xmpd-status/g' ~/.i3/config && i3-msg reload`.
+- Note in the install summary that the user should `sed -i 's/\bytmpctl\b/xmpctl/g; s/xmpd-status/xmpd-status/g' ~/.i3/config && i3-msg reload`.
 
 **`uninstall.sh`:** updates references; preserves `~/.config/xmpd/` data by default.
 
@@ -555,7 +555,7 @@ After the implementing AI ships and the user pulls the new repo:
 # in ~/Sync/Programs/xmpd
 ./install.sh                   # idempotent; copies config dir, replaces systemd unit
 
-sed -i 's/\bytmpctl\b/xmpctl/g; s/ytmpd-status/xmpd-status/g' ~/.i3/config
+sed -i 's/\bytmpctl\b/xmpctl/g; s/xmpd-status/xmpd-status/g' ~/.i3/config
 i3-msg reload
 
 # optional: enable Tidal
@@ -603,11 +603,11 @@ The implementing AI's work is complete when:
 - The AirPlay bridge displays correct album art for Tidal-served tracks.
 - The user's existing config and track-store data are preserved through migration without manual intervention beyond running `install.sh`.
 - Documentation (README, CHANGELOG, MIGRATION) reflects multi-source reality.
-- All references to `ytmpd`/`ytmpctl`/`ytmpd-status`/`ytmpd.service`/`~/.config/ytmpd/` are gone from active code paths (historical CHANGELOG entries and prior specs may retain them as historical record).
+- All references to `ytmpd`/`xmpctl`/`xmpd-status`/`ytmpd.service`/`~/.config/xmpd/` are gone from active code paths (historical CHANGELOG entries and prior specs may retain them as historical record).
 
 ## Appendix: file-level inventory of the rename
 
-Files with `ytmpd`/`YTMPD`/`ytmpctl` token occurrences as of design time (verified by grep, excluding `.venv`, `.git`, `htmlcov`, caches, `MagicMock`, `.coverage`, `uv.lock`, `.egg-info`):
+Files with `ytmpd`/`YTMPD`/`xmpctl` token occurrences as of design time (verified by grep, excluding `.venv`, `.git`, `htmlcov`, caches, `MagicMock`, `.coverage`, `uv.lock`, `.egg-info`):
 
 - `pyproject.toml`
 - `.pre-commit-config.yaml`
@@ -615,7 +615,7 @@ Files with `ytmpd`/`YTMPD`/`ytmpctl` token occurrences as of design time (verifi
 - `CHANGELOG.md`
 - `install.sh`, `uninstall.sh`
 - `ytmpd.service`
-- `bin/ytmpctl`, `bin/ytmpd-status`, `bin/ytmpd-status-preview`
+- `bin/xmpctl`, `bin/xmpd-status`, `bin/xmpd-status-preview`
 - `examples/config.yaml`, `examples/i3blocks.conf`
 - `docs/i3blocks-integration.md`, `docs/MIGRATION.md`, `docs/SECURITY_FIXES.md`, `docs/version-management.md`
 - `docs/ICY_PROXY.md` (delete; replace with `docs/STREAM_PROXY.md` in Phase B)

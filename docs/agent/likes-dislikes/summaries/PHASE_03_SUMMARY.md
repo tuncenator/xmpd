@@ -241,14 +241,14 @@ Code follows project style guidelines perfectly.
 - **Phase 2: Core Toggle Logic & Rating Manager** - Provides RatingManager for state parsing
 
 ### Unblocked Phases
-- **Phase 4: ytmpctl Command Implementation** - Can now call `get_track_rating()` and `set_track_rating()` methods
+- **Phase 4: xmpctl Command Implementation** - Can now call `get_track_rating()` and `set_track_rating()` methods
 - **Phase 5: End-to-End Testing** - API integration is ready for full workflow testing
 
 ---
 
 ## Notes for Future Phases
 
-### For Phase 4: ytmpctl Command Implementation
+### For Phase 4: xmpctl Command Implementation
 
 **Using the rating methods:**
 
@@ -273,7 +273,7 @@ client.set_track_rating("2xOPkdtFeHM", transition.new_state)
 print(transition.user_message)  # "✓ Liked"
 ```
 
-**Error handling in ytmpctl:**
+**Error handling in xmpctl:**
 
 ```python
 try:
@@ -296,7 +296,7 @@ except YTMusicAPIError as e:
 3. Apply toggle logic with `manager.apply_action(current_rating, action)`
 4. Set new rating with `client.set_track_rating(video_id, transition.new_state)`
 5. Print user feedback: `print(transition.user_message)`
-6. Trigger sync: `subprocess.run(['bin/ytmpctl', 'sync'])`
+6. Trigger sync: `subprocess.run(['bin/xmpctl', 'sync'])`
 
 ### For Phase 5: End-to-End Testing
 
@@ -313,7 +313,7 @@ except YTMusicAPIError as e:
 ## Integration Points
 
 - **Phase 2 (Rating Manager):** Imports `RatingManager` and `RatingState`, uses `parse_api_rating()` method
-- **Phase 4 (ytmpctl Commands):** These methods will be called by `ytmpctl like` and `ytmpctl dislike` commands
+- **Phase 4 (xmpctl Commands):** These methods will be called by `xmpctl like` and `xmpctl dislike` commands
 - **Phase 5 (E2E Testing):** Will test these methods with real API calls and verify against YouTube Music web UI
 - **Existing YTMusicClient:** Seamlessly integrates with existing retry, rate limit, and error handling infrastructure
 
@@ -360,15 +360,15 @@ None. Implementation is complete and production-ready.
 
 ## Next Steps
 
-**Next Phase:** Phase 4: ytmpctl Command Implementation
+**Next Phase:** Phase 4: xmpctl Command Implementation
 
 **Recommended Actions:**
 
-1. Add `like` and `dislike` commands to `bin/ytmpctl`
+1. Add `like` and `dislike` commands to `bin/xmpctl`
 2. Implement current track detection from MPD
 3. Integrate `get_track_rating()` and `set_track_rating()` methods
 4. Use `RatingManager.apply_action()` for toggle logic
-5. Trigger `ytmpctl sync` after rating changes
+5. Trigger `xmpctl sync` after rating changes
 6. Add user feedback messages from `transition.user_message`
 7. Handle errors gracefully (no track playing, not YouTube track, API failures)
 8. Update help text to document new commands

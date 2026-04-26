@@ -8,7 +8,7 @@ This guide helps you migrate from the old ytmpd architecture (socket-based comma
 
 **Old (v1):**
 ```
-ytmpctl → Unix socket → ytmpd daemon → ytmusicapi → YouTube Music
+xmpctl → Unix socket → ytmpd daemon → ytmusicapi → YouTube Music
                               ↓
                         Player State
                               ↓
@@ -39,20 +39,20 @@ YouTube Music Playlists
    - YouTube playlists appear in MPD with "YT: " prefix
    - Leverage MPD's robust audio backend
 
-3. **ytmpctl now focuses on sync operations**, not playback
-   - `ytmpctl sync` - trigger immediate sync
-   - `ytmpctl status` - check sync status and statistics
-   - `ytmpctl list-playlists` - list YouTube playlists
+3. **xmpctl now focuses on sync operations**, not playback
+   - `xmpctl sync` - trigger immediate sync
+   - `xmpctl status` - check sync status and statistics
+   - `xmpctl list-playlists` - list YouTube playlists
    - **Removed**: play, pause, resume, stop, next, prev, queue, search
 
 4. **Socket protocol changed**
-   - Old socket: `~/.config/ytmpd/socket` (removed)
-   - New socket: `~/.config/ytmpd/sync_socket` (sync commands only)
+   - Old socket: `~/.config/xmpd/socket` (removed)
+   - New socket: `~/.config/xmpd/sync_socket` (sync commands only)
    - Simple JSON-based sync protocol
 
 5. **State file format changed**
-   - Old: `~/.config/ytmpd/state.json` (player state)
-   - New: `~/.config/ytmpd/sync_state.json` (sync statistics)
+   - Old: `~/.config/xmpd/state.json` (player state)
+   - New: `~/.config/xmpd/sync_state.json` (sync statistics)
 
 ## Migration Steps
 
@@ -86,7 +86,7 @@ ps aux | grep ytmpd
 kill <PID>
 
 # Clean up old socket
-rm ~/.config/ytmpd/socket
+rm ~/.config/xmpd/socket
 ```
 
 ### 3. Update Dependencies
@@ -103,12 +103,12 @@ This installs new dependencies:
 
 ### 4. Update Configuration
 
-Edit `~/.config/ytmpd/config.yaml` to add MPD settings:
+Edit `~/.config/xmpd/config.yaml` to add MPD settings:
 
 ```yaml
 # Existing settings (keep these)
 log_level: INFO
-log_file: ~/.config/ytmpd/ytmpd.log
+log_file: ~/.config/xmpd/xmpd.log
 
 # New MPD integration settings (add these)
 mpd_socket_path: ~/.config/mpd/socket
@@ -129,7 +129,7 @@ python -m ytmpd &
 
 Watch the logs to verify successful startup:
 ```bash
-tail -f ~/.config/ytmpd/ytmpd.log
+tail -f ~/.config/xmpd/xmpd.log
 ```
 
 Expected output:
@@ -144,15 +144,15 @@ Expected output:
 
 ### 6. Update i3 Keybindings
 
-Edit `~/.config/i3/config` and replace ytmpctl commands with mpc:
+Edit `~/.config/i3/config` and replace xmpctl commands with mpc:
 
 **Old keybindings (remove):**
 ```
-bindsym $mod+Shift+p exec --no-startup-id /path/to/ytmpd/bin/ytmpctl pause
-bindsym $mod+Shift+r exec --no-startup-id /path/to/ytmpd/bin/ytmpctl resume
-bindsym $mod+Shift+s exec --no-startup-id /path/to/ytmpd/bin/ytmpctl stop
-bindsym $mod+Shift+n exec --no-startup-id /path/to/ytmpd/bin/ytmpctl next
-bindsym $mod+Shift+b exec --no-startup-id /path/to/ytmpd/bin/ytmpctl prev
+bindsym $mod+Shift+p exec --no-startup-id /path/to/ytmpd/bin/xmpctl pause
+bindsym $mod+Shift+r exec --no-startup-id /path/to/ytmpd/bin/xmpctl resume
+bindsym $mod+Shift+s exec --no-startup-id /path/to/ytmpd/bin/xmpctl stop
+bindsym $mod+Shift+n exec --no-startup-id /path/to/ytmpd/bin/xmpctl next
+bindsym $mod+Shift+b exec --no-startup-id /path/to/ytmpd/bin/xmpctl prev
 ```
 
 **New keybindings (add):**
@@ -175,13 +175,13 @@ i3-msg reload
 
 ### 7. Update i3blocks Configuration (if applicable)
 
-The `ytmpd-status` script should still work, but now displays MPD status instead of ytmpd player state.
+The `xmpd-status` script should still work, but now displays MPD status instead of ytmpd player state.
 
 If you need to update your i3blocks config:
 
 ```ini
 [ytmpd]
-command=/path/to/ytmpd/bin/ytmpd-status
+command=/path/to/ytmpd/bin/xmpd-status
 interval=5
 separator_block_width=15
 ```
@@ -195,7 +195,7 @@ killall -SIGUSR1 i3blocks
 
 **Check sync status:**
 ```bash
-ytmpctl status
+xmpctl status
 ```
 
 Expected output:
@@ -215,7 +215,7 @@ Tracks failed: 3
 
 **List YouTube playlists:**
 ```bash
-ytmpctl list-playlists
+xmpctl list-playlists
 ```
 
 **List MPD playlists:**
@@ -236,18 +236,18 @@ You should see playback start!
 
 ## Breaking Changes
 
-### Removed ytmpctl Commands
+### Removed xmpctl Commands
 
-The following commands are no longer available in ytmpctl:
+The following commands are no longer available in xmpctl:
 
-- `ytmpctl play <query>` → Use `mpc load "YT: <playlist>"; mpc play`
-- `ytmpctl pause` → Use `mpc pause`
-- `ytmpctl resume` → Use `mpc play` or `mpc toggle`
-- `ytmpctl stop` → Use `mpc stop`
-- `ytmpctl next` → Use `mpc next`
-- `ytmpctl prev` → Use `mpc prev`
-- `ytmpctl queue` → Use `mpc playlist`
-- `ytmpctl search <query>` → Use YouTube Music directly or `mpc search`
+- `xmpctl play <query>` → Use `mpc load "YT: <playlist>"; mpc play`
+- `xmpctl pause` → Use `mpc pause`
+- `xmpctl resume` → Use `mpc play` or `mpc toggle`
+- `xmpctl stop` → Use `mpc stop`
+- `xmpctl next` → Use `mpc next`
+- `xmpctl prev` → Use `mpc prev`
+- `xmpctl queue` → Use `mpc playlist`
+- `xmpctl search <query>` → Use YouTube Music directly or `mpc search`
 
 ### Socket Protocol Changes
 
@@ -267,7 +267,7 @@ If you have scripts that communicate with the old socket, they will need to be u
 
 ### State File Changes
 
-**Old state file (`~/.config/ytmpd/state.json`):**
+**Old state file (`~/.config/xmpd/state.json`):**
 ```json
 {
   "state": "playing",
@@ -277,7 +277,7 @@ If you have scripts that communicate with the old socket, they will need to be u
 }
 ```
 
-**New state file (`~/.config/ytmpd/sync_state.json`):**
+**New state file (`~/.config/xmpd/sync_state.json`):**
 ```json
 {
   "last_sync": "2025-10-17T10:00:05Z",
@@ -299,10 +299,10 @@ Old config files (without MPD settings) will still load. Missing fields use defa
 
 ```yaml
 # Old config (still works)
-socket_path: ~/.config/ytmpd/socket
-state_file: ~/.config/ytmpd/state.json
+socket_path: ~/.config/xmpd/socket
+state_file: ~/.config/xmpd/state.json
 log_level: INFO
-log_file: ~/.config/ytmpd/ytmpd.log
+log_file: ~/.config/xmpd/xmpd.log
 
 # New fields added automatically with defaults
 mpd_socket_path: ~/.config/mpd/socket
@@ -314,7 +314,7 @@ stream_cache_hours: 5
 
 ### Authentication
 
-Browser authentication (`~/.config/ytmpd/browser.json`) remains the same. No need to re-authenticate.
+Browser authentication (`~/.config/xmpd/browser.json`) remains the same. No need to re-authenticate.
 
 ## Troubleshooting
 
@@ -344,20 +344,20 @@ cat ~/.config/mpd/mpd.conf | grep bind_to_address
 **Solution**:
 ```bash
 # Check logs
-tail -f ~/.config/ytmpd/ytmpd.log
+tail -f ~/.config/xmpd/xmpd.log
 
 # Trigger manual sync
-ytmpctl sync
+xmpctl sync
 
 # If authentication errors, refresh browser auth
 python -m ytmpd.ytmusic setup-browser
 ```
 
-### "Old ytmpctl commands don't work"
+### "Old xmpctl commands don't work"
 
 **Cause**: Commands removed in v2.
 
-**Solution**: Use `mpc` commands instead (see "Removed ytmpctl Commands" section above).
+**Solution**: Use `mpc` commands instead (see "Removed xmpctl Commands" section above).
 
 ### "i3blocks status not updating"
 
@@ -366,7 +366,7 @@ python -m ytmpd.ytmusic setup-browser
 **Solution**:
 ```bash
 # Test script directly
-bin/ytmpd-status
+bin/xmpd-status
 
 # Check MPD is accessible
 mpc status
@@ -385,23 +385,23 @@ No, not recommended. They use different architectures and would conflict. Choose
 
 No, the old state file is no longer used. You can delete it:
 ```bash
-rm ~/.config/ytmpd/state.json
+rm ~/.config/xmpd/state.json
 ```
 
 ### Will my YouTube playlists sync automatically?
 
-Yes! By default, ytmpd syncs every 30 minutes. You can also trigger manual sync with `ytmpctl sync`.
+Yes! By default, ytmpd syncs every 30 minutes. You can also trigger manual sync with `xmpctl sync`.
 
 ### What happens if YouTube URLs expire?
 
 YouTube stream URLs expire after ~6 hours. ytmpd:
 - Caches URLs for 5 hours (1-hour buffer)
 - Auto-syncs every 30 minutes to refresh URLs
-- You can manually sync anytime with `ytmpctl sync`
+- You can manually sync anytime with `xmpctl sync`
 
 ### Can I change the "YT: " prefix?
 
-Yes, edit `~/.config/ytmpd/config.yaml`:
+Yes, edit `~/.config/xmpd/config.yaml`:
 ```yaml
 playlist_prefix: "YouTube: "  # or any prefix you want
 ```
@@ -415,13 +415,13 @@ Yes, edit config:
 enable_auto_sync: false
 ```
 
-Then use `ytmpctl sync` for manual syncing.
+Then use `xmpctl sync` for manual syncing.
 
 ## Getting Help
 
 If you encounter issues during migration:
 
-1. Check logs: `tail -f ~/.config/ytmpd/ytmpd.log`
+1. Check logs: `tail -f ~/.config/xmpd/xmpd.log`
 2. Check README troubleshooting section
 3. File an issue on GitHub with:
    - Migration step you're on

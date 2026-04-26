@@ -242,12 +242,12 @@ def main() -> None:
     video_id = sys.argv[1]
 
     # Initialize YTMusic client with browser authentication
-    config_dir = Path.home() / ".config" / "ytmpd"
+    config_dir = Path.home() / ".config" / "xmpd"
     auth_file = config_dir / "browser.json"
 
     if not auth_file.exists():
         print(f"❌ Error: Browser authentication file not found: {auth_file}")
-        print("\nPlease run: python -m ytmpd.ytmusic setup-browser")
+        print("\nPlease run: python -m xmpd.ytmusic setup-browser")
         sys.exit(1)
 
     print("=" * 80)

@@ -203,18 +203,18 @@ The search, play, and queue features are now fully functional daemon-side. Phase
 
 ```bash
 # Search for tracks
-ytmpctl search "miles davis"
+xmpctl search "miles davis"
 
 # Play track immediately
-ytmpctl play <video_id>
+xmpctl play <video_id>
 
 # Add track to queue
-ytmpctl queue <video_id>
+xmpctl queue <video_id>
 ```
 
 ### Code Reuse Opportunities
 
-Phase 5 can reuse patterns from Phase 3's `ytmpctl` commands:
+Phase 5 can reuse patterns from Phase 3's `xmpctl` commands:
 - Command dispatch and argument parsing
 - Result formatting with color and unicode support
 - Error handling and user-friendly messages
@@ -272,13 +272,13 @@ Alternative approaches for future improvement:
 
 **Recommended Actions:**
 1. Proceed to Phase 5 implementation
-2. Implement `ytmpctl search` command with interactive result display
+2. Implement `xmpctl search` command with interactive result display
 3. Implement action selection (play, queue, radio) for search results
 4. Add keyboard navigation and user input handling
-5. Reuse formatting patterns from `ytmpctl radio` output
+5. Reuse formatting patterns from `xmpctl radio` output
 
 **Integration Test Ideas for Phase 6:**
-- Test full flow: `ytmpctl search "miles davis"` → display results → select result → play
+- Test full flow: `xmpctl search "miles davis"` → display results → select result → play
 - Verify search returns relevant tracks
 - Test play/queue actions from search results
 - Verify playback starts correctly in MPD

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Project renamed from `ytmpd` to `xmpd`. The Python package, CLI
+  binaries (`xmpctl`, `xmpd-status`, `xmpd-status-preview`), systemd
+  unit (`xmpd.service`), default config dir (`~/.config/xmpd/`),
+  internal class names (`XMPDaemon`, `XMPDError`), and environment
+  variables (`XMPD_STATUS_*`, `XMPD_AIRPLAY_NO_ONLINE_ART`) all follow
+  the new name. The airplay-bridge `_classify_album` source marker
+  changes from `"ytmpd"` to `"xmpd-yt"` (Tidal will add `"xmpd-tidal"`
+  in plan 2). Users with `YTMPD_STATUS_*` env vars in their i3blocks
+  config or shell profile must rename them to `XMPD_STATUS_*`.
+  The provider abstraction and Tidal integration follow in subsequent
+  commits.
+
+
 All notable changes to ytmpd (YouTube Music MPD) will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),

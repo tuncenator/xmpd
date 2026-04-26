@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# ytmpd Uninstallation Script
+# xmpd Uninstallation Script
 #
-# This script removes ytmpd components installed by install.sh:
+# This script removes xmpd components installed by install.sh:
 # - systemd user service
 # - Binary symlinks from ~/.local/bin
 # - Optionally: configuration data
@@ -31,7 +31,7 @@ error() {
     exit 1
 }
 
-info "Starting ytmpd uninstallation..."
+info "Starting xmpd uninstallation..."
 
 # Step 1: Stop and remove systemd service
 info ""
@@ -40,19 +40,19 @@ info "systemd Service Removal"
 info "=========================================="
 info ""
 
-SERVICE_FILE="$HOME/.config/systemd/user/ytmpd.service"
+SERVICE_FILE="$HOME/.config/systemd/user/xmpd.service"
 if [ -f "$SERVICE_FILE" ]; then
     info "Found systemd service, removing..."
 
     # Stop the service if running
-    if systemctl --user is-active --quiet ytmpd.service; then
-        systemctl --user stop ytmpd.service
+    if systemctl --user is-active --quiet xmpd.service; then
+        systemctl --user stop xmpd.service
         info "Service stopped"
     fi
 
     # Disable the service if enabled
-    if systemctl --user is-enabled --quiet ytmpd.service 2>/dev/null; then
-        systemctl --user disable ytmpd.service
+    if systemctl --user is-enabled --quiet xmpd.service 2>/dev/null; then
+        systemctl --user disable xmpd.service
         info "Service disabled"
     fi
 
@@ -75,15 +75,15 @@ info "=========================================="
 info ""
 
 REMOVED_BINARIES=0
-if [ -L "$HOME/.local/bin/ytmpctl" ]; then
-    rm "$HOME/.local/bin/ytmpctl"
-    info "Removed ytmpctl from ~/.local/bin"
+if [ -L "$HOME/.local/bin/xmpctl" ]; then
+    rm "$HOME/.local/bin/xmpctl"
+    info "Removed xmpctl from ~/.local/bin"
     REMOVED_BINARIES=1
 fi
 
-if [ -L "$HOME/.local/bin/ytmpd-status" ]; then
-    rm "$HOME/.local/bin/ytmpd-status"
-    info "Removed ytmpd-status from ~/.local/bin"
+if [ -L "$HOME/.local/bin/xmpd-status" ]; then
+    rm "$HOME/.local/bin/xmpd-status"
+    info "Removed xmpd-status from ~/.local/bin"
     REMOVED_BINARIES=1
 fi
 
@@ -98,7 +98,7 @@ info "Configuration Data"
 info "=========================================="
 info ""
 
-CONFIG_DIR="$HOME/.config/ytmpd"
+CONFIG_DIR="$HOME/.config/xmpd"
 if [ -d "$CONFIG_DIR" ]; then
     info "Configuration directory found: $CONFIG_DIR"
     info "This contains:"
@@ -124,9 +124,9 @@ info "=========================================="
 info "Uninstallation Complete!"
 info "=========================================="
 info ""
-info "ytmpd components have been removed."
+info "xmpd components have been removed."
 info ""
-info "To completely remove ytmpd:"
+info "To completely remove xmpd:"
 info "  1. Delete the project directory manually"
 info "  2. Remove any i3/i3blocks configuration entries"
 info ""

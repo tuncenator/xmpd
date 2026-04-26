@@ -1,4 +1,4 @@
-"""Configuration management for ytmpd."""
+"""Configuration management for xmpd."""
 
 import logging
 from pathlib import Path
@@ -10,12 +10,12 @@ logger = logging.getLogger(__name__)
 
 
 def get_config_dir() -> Path:
-    """Get the ytmpd configuration directory.
+    """Get the xmpd configuration directory.
 
     Returns:
-        Path to the configuration directory (~/.config/ytmpd/).
+        Path to the configuration directory (~/.config/xmpd/).
     """
-    config_dir = Path.home() / ".config" / "ytmpd"
+    config_dir = Path.home() / ".config" / "xmpd"
     return config_dir
 
 
@@ -38,7 +38,7 @@ def load_config() -> dict[str, Any]:
         "socket_path": str(config_dir / "socket"),
         "state_file": str(config_dir / "state.json"),
         "log_level": "INFO",
-        "log_file": str(config_dir / "ytmpd.log"),
+        "log_file": str(config_dir / "xmpd.log"),
         # MPD integration settings
         "mpd_socket_path": str(Path.home() / ".config" / "mpd" / "socket"),
         "mpd_playlist_directory": str(Path.home() / ".config" / "mpd" / "playlists"),

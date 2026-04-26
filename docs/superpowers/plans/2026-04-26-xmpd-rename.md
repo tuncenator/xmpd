@@ -149,9 +149,9 @@ All operations modify the working tree without committing. The single commit hap
 
 **Files:**
 - Rename: `ytmpd/` → `xmpd/`
-- Rename: `bin/ytmpctl` → `bin/xmpctl`
-- Rename: `bin/ytmpd-status` → `bin/xmpd-status`
-- Rename: `bin/ytmpd-status-preview` → `bin/xmpd-status-preview`
+- Rename: `bin/xmpctl` → `bin/xmpctl`
+- Rename: `bin/xmpd-status` → `bin/xmpd-status`
+- Rename: `bin/xmpd-status-preview` → `bin/xmpd-status-preview`
 - Rename: `ytmpd.service` → `xmpd.service`
 
 - [ ] **Step 1: Run the renames**
@@ -159,9 +159,9 @@ All operations modify the working tree without committing. The single commit hap
 ```bash
 cd ~/Sync/Programs/xmpd
 git mv ytmpd xmpd
-git mv bin/ytmpctl bin/xmpctl
-git mv bin/ytmpd-status bin/xmpd-status
-git mv bin/ytmpd-status-preview bin/xmpd-status-preview
+git mv bin/xmpctl bin/xmpctl
+git mv bin/xmpd-status bin/xmpd-status
+git mv bin/xmpd-status-preview bin/xmpd-status-preview
 git mv ytmpd.service xmpd.service
 ```
 
@@ -173,7 +173,7 @@ Expected: no errors. Each command silently moves the file.
 git status -s
 ```
 
-Expected: many lines like `R  ytmpd/foo.py -> xmpd/foo.py`, plus `R  bin/ytmpctl -> bin/xmpctl` etc. No `??` (untracked) entries from this step.
+Expected: many lines like `R  ytmpd/foo.py -> xmpd/foo.py`, plus `R  bin/xmpctl -> bin/xmpctl` etc. No `??` (untracked) entries from this step.
 
 ### Task 5: Delete superseded artifacts
 
@@ -258,7 +258,7 @@ xargs -0 sed -i \
   -e 's/\bYTMPD\b/XMPD/g'
 ```
 
-- [ ] **Step 3: Replace path-strings `~/.config/ytmpd/` with `~/.config/xmpd/`**
+- [ ] **Step 3: Replace path-strings `~/.config/xmpd/` with `~/.config/xmpd/`**
 
 ```bash
 cd ~/Sync/Programs/xmpd
@@ -266,8 +266,8 @@ find xmpd bin extras tests examples docs \
      -type f \( -name '*.py' -o -name '*.sh' -o -name '*.toml' -o -name '*.service' -o -name '*.yaml' -o -name '*.md' -o -name '*.conf' \) \
      -print0 | \
 xargs -0 sed -i \
-  -e 's|~/.config/ytmpd/|~/.config/xmpd/|g' \
-  -e 's|/.config/ytmpd/|/.config/xmpd/|g' \
+  -e 's|~/.config/xmpd/|~/.config/xmpd/|g' \
+  -e 's|/.config/xmpd/|/.config/xmpd/|g' \
   -e 's|ytmpd\.log|xmpd.log|g'
 ```
 
@@ -295,7 +295,7 @@ find tests -name '*.py' -print0 | \
 xargs -0 sed -i \
   -e 's/\bytmpd\b/xmpd/g' \
   -e 's/\bYTMPD\b/XMPD/g' \
-  -e 's|~/.config/ytmpd/|~/.config/xmpd/|g'
+  -e 's|~/.config/xmpd/|~/.config/xmpd/|g'
 ```
 
 - [ ] **Step 2: Rename test files whose names embed ytmpd**
@@ -315,7 +315,7 @@ Expected: the five renamed test files exist under their new names. Any 2>/dev/nu
 - [ ] **Step 3: Verify no test file still has ytmpd in its name**
 
 ```bash
-find tests -name '*ytmpd*' -o -name '*ytmpctl*'
+find tests -name '*ytmpd*' -o -name '*xmpctl*'
 ```
 
 Expected: no output.
@@ -340,9 +340,9 @@ Note the current `name`, `[project.scripts]` entries, and any other `ytmpd` refe
 cd ~/Sync/Programs/xmpd
 sed -i \
   -e 's/^name = "ytmpd"$/name = "xmpd"/' \
-  -e 's/^ytmpctl = "ytmpd\./xmpctl = "xmpd./' \
-  -e 's/ytmpd-status = "ytmpd\./xmpd-status = "xmpd./' \
-  -e 's/ytmpd-status-preview = "ytmpd\./xmpd-status-preview = "xmpd./' \
+  -e 's/^xmpctl = "ytmpd\./xmpctl = "xmpd./' \
+  -e 's/xmpd-status = "ytmpd\./xmpd-status = "xmpd./' \
+  -e 's/xmpd-status-preview = "ytmpd\./xmpd-status-preview = "xmpd./' \
   -e 's/^\[project\.scripts\]$/[project.scripts]/' \
   pyproject.toml
 ```
@@ -375,7 +375,7 @@ cat xmpd.service
 cd ~/Sync/Programs/xmpd
 sed -i \
   -e 's|YouTube Music MPD daemon|Multi-source music daemon (xmpd)|g' \
-  -e 's|github.com/tuncenator/ytmpd|github.com/tuncenator/xmpd|g' \
+  -e 's|github.com/tuncenator/xmpd|github.com/tuncenator/xmpd|g' \
   -e 's|/path/to/ytmpd/|/path/to/xmpd/|g' \
   -e 's|python -m ytmpd|python -m xmpd|g' \
   -e 's|%h/.config/ytmpd|%h/.config/xmpd|g' \
@@ -404,14 +404,14 @@ sed -i \
   -e 's/\bytmpd\b/xmpd/g' \
   -e 's/\bYTMPD\b/XMPD/g' \
   -e 's/\bytmpctl\b/xmpctl/g' \
-  -e 's/ytmpd-status/xmpd-status/g' \
+  -e 's/xmpd-status/xmpd-status/g' \
   install.sh uninstall.sh
 ```
 
 - [ ] **Step 2: Verify no stale references**
 
 ```bash
-grep -nE "\bytmpd\b|\bytmpctl\b|ytmpd-status" install.sh uninstall.sh
+grep -nE "\bytmpd\b|\bytmpctl\b|xmpd-status" install.sh uninstall.sh
 ```
 
 Expected: no output.
@@ -440,7 +440,7 @@ sed -i \
   -e 's/\bytmpd\b/xmpd/g' \
   -e 's/\bYTMPD\b/XMPD/g' \
   -e 's/\bytmpctl\b/xmpctl/g' \
-  -e 's/ytmpd-status/xmpd-status/g' \
+  -e 's/xmpd-status/xmpd-status/g' \
   bin/xmpctl bin/xmpd-status bin/xmpd-status-preview
 ```
 
@@ -474,8 +474,8 @@ sed -i \
   -e 's/\bytmpd\b/xmpd/g' \
   -e 's/\bYTMPD\b/XMPD/g' \
   -e 's/\bytmpctl\b/xmpctl/g' \
-  -e 's/ytmpd-status/xmpd-status/g' \
-  -e 's|github.com/tuncenator/ytmpd|github.com/tuncenator/xmpd|g' \
+  -e 's/xmpd-status/xmpd-status/g' \
+  -e 's|github.com/tuncenator/xmpd|github.com/tuncenator/xmpd|g' \
   README.md
 ```
 
@@ -559,7 +559,7 @@ cd ~/Sync/Programs/xmpd
 sed -i \
   -e 's|ytmpd-airplay-bridge/1\.0|xmpd-airplay-bridge/1.0|g' \
   -e 's|github.com/tyildirim/ytmpd|github.com/tuncenator/xmpd|g' \
-  -e 's|github.com/tuncenator/ytmpd|github.com/tuncenator/xmpd|g' \
+  -e 's|github.com/tuncenator/xmpd|github.com/tuncenator/xmpd|g' \
   extras/airplay-bridge/mpd_owntone_metadata.py
 ```
 
@@ -614,8 +614,8 @@ cd ~/Sync/Programs/xmpd
 sed -i \
   -e 's/\bytmpd\b/xmpd/g' \
   -e 's/\bytmpctl\b/xmpctl/g' \
-  -e 's/ytmpd-status/xmpd-status/g' \
-  -e 's|~/.config/ytmpd/|~/.config/xmpd/|g' \
+  -e 's/xmpd-status/xmpd-status/g' \
+  -e 's|~/.config/xmpd/|~/.config/xmpd/|g' \
   examples/config.yaml examples/i3blocks.conf
 ```
 
@@ -641,9 +641,9 @@ cd ~/Sync/Programs/xmpd
 find docs -name '*.md' -print0 | \
 xargs -0 sed -i \
   -e 's/\bytmpctl\b/xmpctl/g' \
-  -e 's/ytmpd-status/xmpd-status/g' \
-  -e 's|~/.config/ytmpd/|~/.config/xmpd/|g' \
-  -e 's|github.com/tuncenator/ytmpd|github.com/tuncenator/xmpd|g'
+  -e 's/xmpd-status/xmpd-status/g' \
+  -e 's|~/.config/xmpd/|~/.config/xmpd/|g' \
+  -e 's|github.com/tuncenator/xmpd|github.com/tuncenator/xmpd|g'
 ```
 
 Note: this deliberately does NOT replace the bare `ytmpd` token in docs, preserving historical-narrative references in old specs (e.g. "ytmpd was the YT-only daemon"). Only paths, command names, and the GitHub URL are updated.
@@ -690,7 +690,7 @@ sed -i \
 - [ ] **Step 3: Verify**
 
 ```bash
-grep -n "ytmpd\|ytmpctl" .pre-commit-config.yaml
+grep -n "ytmpd\|xmpctl" .pre-commit-config.yaml
 ```
 
 Expected: no output.
@@ -704,7 +704,7 @@ Expected: no output.
 **Files:**
 - Inspect: entire working tree
 
-- [ ] **Step 1: Grep for any remaining lowercase `ytmpd` or `ytmpctl` tokens**
+- [ ] **Step 1: Grep for any remaining lowercase `ytmpd` or `xmpctl` tokens**
 
 ```bash
 cd ~/Sync/Programs/xmpd
@@ -737,7 +737,7 @@ grep -rn "config/ytmpd" \
   --exclude='uv.lock' . 2>/dev/null
 ```
 
-Expected: only matches inside narrative text in CHANGELOG / migration docs (e.g. "old config dir was `~/.config/ytmpd/`"). No active code paths reference it.
+Expected: only matches inside narrative text in CHANGELOG / migration docs (e.g. "old config dir was `~/.config/xmpd/`"). No active code paths reference it.
 
 - [ ] **Step 3: Verify status looks like a clean rename**
 
@@ -801,10 +801,10 @@ systemctl --user stop ytmpd 2>/dev/null || true
 
 ```bash
 mkdir -p ~/.config/xmpd-test
-cp -n ~/.config/ytmpd/config.yaml ~/.config/xmpd-test/config.yaml 2>/dev/null
-cp -n ~/.config/ytmpd/browser.json ~/.config/xmpd-test/browser.json 2>/dev/null
-cp -n ~/.config/ytmpd/track_mapping.db ~/.config/xmpd-test/track_mapping.db 2>/dev/null
-sed -i 's|~/.config/ytmpd/|~/.config/xmpd-test/|g; s|.config/ytmpd/|.config/xmpd-test/|g' ~/.config/xmpd-test/config.yaml 2>/dev/null
+cp -n ~/.config/xmpd/config.yaml ~/.config/xmpd-test/config.yaml 2>/dev/null
+cp -n ~/.config/xmpd/browser.json ~/.config/xmpd-test/browser.json 2>/dev/null
+cp -n ~/.config/xmpd/track_mapping.db ~/.config/xmpd-test/track_mapping.db 2>/dev/null
+sed -i 's|~/.config/xmpd/|~/.config/xmpd-test/|g; s|.config/ytmpd/|.config/xmpd-test/|g' ~/.config/xmpd-test/config.yaml 2>/dev/null
 ```
 
 - [ ] **Step 3: Run the new daemon briefly with the test config**
@@ -876,10 +876,10 @@ and config dir from ytmpd to xmpd. No behavioral changes; the
 provider abstraction and Tidal integration follow in subsequent commits.
 
 - Python package: ytmpd/ to xmpd/
-- CLI: ytmpctl to xmpctl
-- Status: ytmpd-status to xmpd-status (and -preview)
+- CLI: xmpctl to xmpctl
+- Status: xmpd-status to xmpd-status (and -preview)
 - systemd: ytmpd.service to xmpd.service
-- Default config dir: ~/.config/ytmpd/ to ~/.config/xmpd/
+- Default config dir: ~/.config/xmpd/ to ~/.config/xmpd/
 - airplay-bridge: User-Agent and internal source marker updated
 - Drops superseded docs/agent/icy-refactor/ planning docs
 - Drops docs/ICY_PROXY.md (replaced by docs/STREAM_PROXY.md in plan 2)
@@ -989,7 +989,7 @@ Expected final output: `{"isArchived":true}`.
 
 After all tasks complete, the following are true:
 
-- `~/Sync/Programs/xmpd/` is a working clone of the renamed project. `pytest` passes. `python -m xmpd` starts successfully against a copy of the user's existing config (with `~/.config/ytmpd/` paths swapped to `~/.config/xmpd/`).
+- `~/Sync/Programs/xmpd/` is a working clone of the renamed project. `pytest` passes. `python -m xmpd` starts successfully against a copy of the user's existing config (with `~/.config/xmpd/` paths swapped to `~/.config/xmpd/`).
 - `tuncenator/xmpd` exists on GitHub with the full git history; HEAD is the rename commit. The repo's description reflects the multi-source intent.
 - `tuncenator/ytmpd` is archived. Its README has a redirect notice at the top.
 - `~/Sync/Programs/ytmpd/` (local) still exists as a fallback; the user will delete it manually after confirming xmpd works in plan 2.

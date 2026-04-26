@@ -325,7 +325,7 @@ track_url = f"http://{proxy_config['host']}:{proxy_config['port']}/proxy/{track.
 ## Environment & Configuration
 
 ### Config File
-- Location: `~/.config/ytmpd/config.yaml`
+- Location: `~/.config/xmpd/config.yaml`
 - Auto-created with defaults on first run
 - Loaded via `config.load_config()` -- returns merged dict (defaults + user overrides)
 
@@ -357,7 +357,7 @@ ruff check ytmpd/
 
 ### External Service Dependencies
 - MPD running and accessible via socket/TCP
-- YouTube Music account with browser.json auth file at `~/.config/ytmpd/browser.json`
+- YouTube Music account with browser.json auth file at `~/.config/xmpd/browser.json`
 
 ---
 

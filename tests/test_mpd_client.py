@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from mpd import CommandError, ConnectionError
 
-from ytmpd.exceptions import MPDConnectionError, MPDPlaylistError
-from ytmpd.mpd_client import MPDClient, TrackWithMetadata
+from xmpd.exceptions import MPDConnectionError, MPDPlaylistError
+from xmpd.mpd_client import MPDClient, TrackWithMetadata
 
 
 class TestMPDClientInit:
@@ -33,8 +33,8 @@ class TestMPDClientInit:
 class TestMPDClientConnection:
     """Tests for MPD connection management."""
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_connect_success(self, mock_path, mock_mpd_base):
         """Test successful connection to MPD."""
         # Mock socket exists
@@ -65,8 +65,8 @@ class TestMPDClientConnection:
             assert "socket not found" in str(exc_info.value).lower()
             assert "Is MPD running?" in str(exc_info.value)
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_connect_mpd_not_running(self, mock_path, mock_mpd_base):
         """Test connection fails when MPD is not running."""
         # Mock socket exists
@@ -84,8 +84,8 @@ class TestMPDClientConnection:
 
         assert "Failed to connect" in str(exc_info.value)
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_disconnect(self, mock_path, mock_mpd_base):
         """Test disconnection from MPD."""
         # Mock socket exists
@@ -104,8 +104,8 @@ class TestMPDClientConnection:
         mock_client.disconnect.assert_called_once()
         assert not client.is_connected()
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_disconnect_handles_errors(self, mock_path, mock_mpd_base):
         """Test disconnect handles errors gracefully."""
         # Mock socket exists
@@ -123,8 +123,8 @@ class TestMPDClientConnection:
         client.disconnect()
         assert not client.is_connected()
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_is_connected_pings_mpd(self, mock_path, mock_mpd_base):
         """Test is_connected() verifies connection with ping."""
         # Mock socket exists
@@ -141,8 +141,8 @@ class TestMPDClientConnection:
         assert client.is_connected()
         mock_client.ping.assert_called()
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_is_connected_detects_stale_connection(self, mock_path, mock_mpd_base):
         """Test is_connected() detects stale connections."""
         # Mock socket exists
@@ -164,8 +164,8 @@ class TestMPDClientConnection:
 class TestMPDClientPlaylists:
     """Tests for playlist operations."""
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_list_playlists_success(self, mock_path, mock_mpd_base):
         """Test listing playlists returns correct data."""
         # Mock socket exists
@@ -188,7 +188,7 @@ class TestMPDClientPlaylists:
         assert playlists == ["Favorites", "Workout", "YT: Chill"]
         mock_client.listplaylists.assert_called_once()
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.MPDClientBase")
     def test_list_playlists_not_connected(self, mock_mpd_base):
         """Test listing playlists fails when not connected and reconnect fails."""
         # Make connection fail during reconnect attempt
@@ -201,8 +201,8 @@ class TestMPDClientPlaylists:
 
         assert "MPD socket not found" in str(exc_info.value)
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_playlist_exists_true(self, mock_path, mock_mpd_base):
         """Test playlist_exists returns True for existing playlist."""
         # Mock socket exists
@@ -221,8 +221,8 @@ class TestMPDClientPlaylists:
 
         assert client.playlist_exists("Favorites")
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_playlist_exists_false(self, mock_path, mock_mpd_base):
         """Test playlist_exists returns False for non-existent playlist."""
         # Mock socket exists
@@ -240,8 +240,8 @@ class TestMPDClientPlaylists:
 
         assert not client.playlist_exists("NonExistent")
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_create_or_replace_playlist_new(self, mock_path, mock_mpd_base):
         """Test creating a new playlist."""
         # Mock socket exists
@@ -276,8 +276,8 @@ class TestMPDClientPlaylists:
         assert "#EXTINF:-1,Artist 2 - Track 2" in written_content
         assert "http://example.com/track2.m4a" in written_content
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_create_or_replace_playlist_replaces_existing(
         self, mock_path, mock_mpd_base
     ):
@@ -308,8 +308,8 @@ class TestMPDClientPlaylists:
         assert "#EXTM3U" in written_content
         assert "http://example.com/track1.m4a" in written_content
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_create_or_replace_playlist_empty_urls(self, mock_path, mock_mpd_base):
         """Test creating playlist with empty URL list is skipped."""
         # Mock socket exists
@@ -328,8 +328,8 @@ class TestMPDClientPlaylists:
         # Verify no operations were performed
         mock_client.save.assert_not_called()
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_create_or_replace_playlist_handles_invalid_urls(
         self, mock_path, mock_mpd_base
     ):
@@ -365,8 +365,8 @@ class TestMPDClientPlaylists:
         assert "http://example.com/invalid.m4a" in written_content
         assert "http://example.com/track2.m4a" in written_content
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_create_or_replace_playlist_all_urls_fail(self, mock_path, mock_mpd_base):
         """Test that write errors are properly raised."""
         # Mock socket exists
@@ -394,8 +394,8 @@ class TestMPDClientPlaylists:
 
         assert "Error creating M3U playlist" in str(exc_info.value)
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_clear_playlist_success(self, mock_path, mock_mpd_base):
         """Test deleting a playlist."""
         # Mock socket exists
@@ -412,8 +412,8 @@ class TestMPDClientPlaylists:
 
         mock_client.rm.assert_called_once_with("Test Playlist")
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_clear_playlist_not_found(self, mock_path, mock_mpd_base):
         """Test deleting non-existent playlist logs warning."""
         # Mock socket exists
@@ -430,8 +430,8 @@ class TestMPDClientPlaylists:
         # Should not raise, just log warning
         client.clear_playlist("NonExistent")
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_add_to_playlist_success(self, mock_path, mock_mpd_base):
         """Test adding URL to existing playlist."""
         # Mock socket exists
@@ -450,8 +450,8 @@ class TestMPDClientPlaylists:
             "Test Playlist", "http://example.com/track.m4a"
         )
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_add_to_playlist_not_found(self, mock_path, mock_mpd_base):
         """Test adding to non-existent playlist raises error."""
         # Mock socket exists
@@ -474,8 +474,8 @@ class TestMPDClientPlaylists:
 class TestMPDClientReconnection:
     """Tests for reconnection logic."""
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_is_connected_detects_lost_connection(self, mock_path, mock_mpd_base):
         """Test that is_connected() properly detects when connection is lost."""
         # Mock socket exists
@@ -504,8 +504,8 @@ class TestMPDClientReconnection:
 class TestMPDClientContextManager:
     """Tests for context manager support."""
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_context_manager_connects_and_disconnects(self, mock_path, mock_mpd_base):
         """Test context manager properly connects and disconnects."""
         # Mock socket exists
@@ -523,8 +523,8 @@ class TestMPDClientContextManager:
         mock_client.close.assert_called()
         mock_client.disconnect.assert_called()
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_context_manager_disconnects_on_exception(self, mock_path, mock_mpd_base):
         """Test context manager disconnects even when exception occurs."""
         # Mock socket exists

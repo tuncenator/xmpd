@@ -252,10 +252,10 @@ print(f"Auto-sync enabled: {auto_sync}")
 
 ```yaml
 # Existing ytmpd settings
-socket_path: ~/.config/ytmpd/socket
-state_file: ~/.config/ytmpd/state.json
+socket_path: ~/.config/xmpd/socket
+state_file: ~/.config/xmpd/state.json
 log_level: INFO
-log_file: ~/.config/ytmpd/ytmpd.log
+log_file: ~/.config/xmpd/xmpd.log
 
 # MPD integration settings
 mpd_socket_path: ~/.config/mpd/socket

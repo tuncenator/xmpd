@@ -243,7 +243,7 @@ from ytmpd.ytmusic import YTMusicClient, Playlist, Track
 from pathlib import Path
 
 # Initialize client with auth file
-client = YTMusicClient(auth_file=Path("~/.config/ytmpd/browser.json"))
+client = YTMusicClient(auth_file=Path("~/.config/xmpd/browser.json"))
 
 # Fetch all user playlists
 playlists = client.get_user_playlists()

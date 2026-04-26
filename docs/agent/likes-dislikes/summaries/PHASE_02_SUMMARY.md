@@ -222,7 +222,7 @@ Code follows project style guidelines and passes all quality checks.
 
 ### Unblocked Phases
 - **Phase 3: YouTube Music API Integration** - Can now use `RatingManager` to handle state transitions and parse API responses
-- **Phase 4: ytmpctl Command Implementation** - Can use `RatingManager` to implement like/dislike commands
+- **Phase 4: xmpctl Command Implementation** - Can use `RatingManager` to implement like/dislike commands
 - **Phase 5: End-to-End Testing** - State machine is ready to test in full workflow
 
 ---
@@ -262,12 +262,12 @@ Code follows project style guidelines and passes all quality checks.
 
 4. **The API limitation is already handled:** Phase 3 doesn't need to worry about INDIFFERENT/DISLIKE ambiguity - RatingManager handles it by treating INDIFFERENT as NEUTRAL.
 
-### For Phase 4: ytmpctl Commands
+### For Phase 4: xmpctl Commands
 
 **Command structure:**
 
 ```python
-# ytmpctl like
+# xmpctl like
 def cmd_like():
     # 1. Get current track video_id from MPD
     # 2. Get current rating from YouTube Music API
@@ -278,7 +278,7 @@ def cmd_like():
     # 7. Trigger sync
 ```
 
-Same structure for `ytmpctl dislike` using `RatingAction.DISLIKE`.
+Same structure for `xmpctl dislike` using `RatingAction.DISLIKE`.
 
 ---
 

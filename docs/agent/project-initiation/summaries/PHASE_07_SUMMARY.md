@@ -16,7 +16,7 @@ Create a status script for i3blocks that displays current playback information.
 
 ### What Was Built
 
-- Created complete ytmpd-status script for i3blocks integration
+- Created complete xmpd-status script for i3blocks integration
 - Implemented direct socket communication to query daemon status
 - Built formatted output with icons and colors for different playback states
 - Added text truncation for long titles to fit i3bar
@@ -30,11 +30,11 @@ Create a status script for i3blocks that displays current playback information.
 
 ### Files Modified
 
-- `bin/ytmpd-status` - Complete rewrite from placeholder to full functional i3blocks script (177 lines)
+- `bin/xmpd-status` - Complete rewrite from placeholder to full functional i3blocks script (177 lines)
 
 ### Key Design Decisions
 
-1. **Direct Socket Communication**: Used direct Unix socket connection instead of calling ytmpctl command. This avoids subprocess overhead and is more efficient for scripts that run frequently (every 5 seconds).
+1. **Direct Socket Communication**: Used direct Unix socket connection instead of calling xmpctl command. This avoids subprocess overhead and is more efficient for scripts that run frequently (every 5 seconds).
 
 2. **Output Format**: Following i3blocks protocol, script outputs three lines:
    - Full text (displayed on bar)
@@ -86,10 +86,10 @@ Manual testing performed with all daemon states:
 
 **Test 1: Playing state**
 ```bash
-$ bin/ytmpctl play "hey jude the beatles"
+$ bin/xmpctl play "hey jude the beatles"
 Playing: Hey Jude by The Beatles
 
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ▶ The Beatles - Hey Jude [4:23/7:06]
 ▶ The Beatles - Hey Jude [4:23/7:06]
 #00FF00
@@ -97,10 +97,10 @@ $ bin/ytmpd-status
 
 **Test 2: Paused state**
 ```bash
-$ bin/ytmpctl pause
+$ bin/xmpctl pause
 Paused
 
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ⏸ The Beatles - Hey Jude [4:30/7:06]
 ⏸ The Beatles - Hey Jude [4:30/7:06]
 #FFFF00
@@ -108,10 +108,10 @@ $ bin/ytmpd-status
 
 **Test 3: Stopped state**
 ```bash
-$ bin/ytmpctl stop
+$ bin/xmpctl stop
 Stopped
 
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ⏹ ytmpd
 ⏹ ytmpd
 #808080
@@ -120,7 +120,7 @@ $ bin/ytmpd-status
 **Test 4: Daemon not running**
 ```bash
 $ pkill -f "python -m ytmpd"
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ⏹ ytmpd
 ⏹ ytmpd
 #808080
@@ -128,10 +128,10 @@ $ bin/ytmpd-status
 
 **Test 5: Truncation**
 ```bash
-$ bin/ytmpctl play "bohemian rhapsody queen"
+$ bin/xmpctl play "bohemian rhapsody queen"
 Playing: Bohemian Rhapsody by Queen
 
-$ YTMPD_STATUS_MAX_LENGTH=30 bin/ytmpd-status
+$ YTMPD_STATUS_MAX_LENGTH=30 bin/xmpd-status
 ▶ Queen - Bohemian Rhapsody...
 ▶ Queen - Bohemian Rhapsody...
 #00FF00
@@ -151,7 +151,7 @@ All tests passed successfully:
 
 ## Challenges & Solutions
 
-### Challenge 1: Choosing between calling ytmpctl vs direct socket connection
+### Challenge 1: Choosing between calling xmpctl vs direct socket connection
 **Solution:** Decided to use direct socket connection for better performance. The script runs every few seconds in i3blocks, so avoiding subprocess overhead (fork + exec) is important. Direct socket connection is lightweight and fast.
 
 ### Challenge 2: Handling daemon not running without showing errors
@@ -207,27 +207,27 @@ Code follows project standards:
    - `examples/i3-config` - i3 keybindings
 
 2. **Installation Documentation**: Phase 9 should include instructions for:
-   - Copying ytmpd-status to PATH or using full path in i3blocks config
+   - Copying xmpd-status to PATH or using full path in i3blocks config
    - Adding i3blocks configuration
    - Setting up i3 keybindings
    - Reloading i3blocks after config changes
 
-3. **Script Path**: Users will need to update the path to ytmpd-status in example configs based on their installation location.
+3. **Script Path**: Users will need to update the path to xmpd-status in example configs based on their installation location.
 
 4. **Environment Variables**: Document YTMPD_STATUS_MAX_LENGTH environment variable for users who want to customize truncation length.
 
 5. **i3blocks Refresh**: Remind users that i3blocks can be refreshed with `killall -SIGUSR1 i3blocks` after config changes.
 
-6. **Color Customization**: If users want different colors, they can modify the color codes in ytmpd-status script (lines 156, 159, 162).
+6. **Color Customization**: If users want different colors, they can modify the color codes in xmpd-status script (lines 156, 159, 162).
 
 ---
 
 ## Integration Points
 
-- **Socket Protocol**: Uses same protocol as ytmpctl (status command)
-- **Socket Path**: Hardcoded same default path as ytmpctl (`~/.config/ytmpd/socket`)
+- **Socket Protocol**: Uses same protocol as xmpctl (status command)
+- **Socket Path**: Hardcoded same default path as xmpctl (`~/.config/xmpd/socket`)
 - **Status Parsing**: Parses key:value format from daemon's status response
-- **Time Formatting**: Uses same MM:SS format as ytmpctl
+- **Time Formatting**: Uses same MM:SS format as xmpctl
 - **i3blocks Protocol**: Outputs full text, short text, and color code as required by i3blocks
 
 ---
@@ -235,7 +235,7 @@ Code follows project standards:
 ## Performance Notes
 
 - Script execution time: <50ms (mostly socket communication)
-- Direct socket connection is faster than subprocess call to ytmpctl
+- Direct socket connection is faster than subprocess call to xmpctl
 - Minimal memory footprint (~10MB Python runtime)
 - Efficient for i3blocks typical update interval (5 seconds)
 - No performance concerns for continuous use
@@ -257,7 +257,7 @@ Future enhancements to consider (optional):
 
 ## Security Considerations
 
-- **Socket Path**: Uses standard user-specific path (~/.config/ytmpd/socket)
+- **Socket Path**: Uses standard user-specific path (~/.config/xmpd/socket)
 - **No Authentication**: Relies on Unix socket permissions (user-only access)
 - **No User Input**: Script doesn't accept command-line arguments, reducing attack surface
 - **Error Handling**: All socket errors caught and handled gracefully
@@ -277,7 +277,7 @@ Future enhancements to consider (optional):
 5. Add troubleshooting section for i3blocks issues
 
 **Notes for Phase 8:**
-- ytmpd-status is ready for documentation
+- xmpd-status is ready for documentation
 - Example configs are in `examples/` directory
 - All components (daemon, client, i3blocks) are now complete
 - Full end-to-end workflow can be documented
@@ -325,14 +325,14 @@ All completion criteria met. i3blocks script is fully functional with proper sta
 Minimal configuration:
 ```ini
 [ytmpd]
-command=/path/to/ytmpd/bin/ytmpd-status
+command=/path/to/ytmpd/bin/xmpd-status
 interval=5
 ```
 
 With custom max length:
 ```ini
 [ytmpd]
-command=YTMPD_STATUS_MAX_LENGTH=40 /path/to/ytmpd/bin/ytmpd-status
+command=YTMPD_STATUS_MAX_LENGTH=40 /path/to/ytmpd/bin/xmpd-status
 interval=5
 separator_block_width=15
 ```
@@ -341,10 +341,10 @@ separator_block_width=15
 
 Basic control:
 ```
-bindsym $mod+Shift+p exec --no-startup-id /path/to/ytmpd/bin/ytmpctl pause
-bindsym $mod+Shift+r exec --no-startup-id /path/to/ytmpd/bin/ytmpctl resume
-bindsym $mod+Shift+n exec --no-startup-id /path/to/ytmpd/bin/ytmpctl next
-bindsym $mod+Shift+b exec --no-startup-id /path/to/ytmpd/bin/ytmpctl prev
+bindsym $mod+Shift+p exec --no-startup-id /path/to/ytmpd/bin/xmpctl pause
+bindsym $mod+Shift+r exec --no-startup-id /path/to/ytmpd/bin/xmpctl resume
+bindsym $mod+Shift+n exec --no-startup-id /path/to/ytmpd/bin/xmpctl next
+bindsym $mod+Shift+b exec --no-startup-id /path/to/ytmpd/bin/xmpctl prev
 ```
 
 ### Code Structure

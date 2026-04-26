@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from ytmpd.config import _validate_config, load_config
+from xmpd.config import _validate_config, load_config
 
 
 class TestHistoryReportingDefaults:
@@ -16,8 +16,8 @@ class TestHistoryReportingDefaults:
     def test_defaults_include_history_reporting(self) -> None:
         """Default config has history_reporting section."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            mock_config_dir = Path(tmpdir) / "xmpd"
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
         assert "history_reporting" in config
@@ -27,11 +27,11 @@ class TestHistoryReportingDefaults:
     def test_user_override_merged(self) -> None:
         """User-provided history_reporting values are merged with defaults."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
             config_file = mock_config_dir / "config.yaml"
             config_file.write_text(yaml.dump({"history_reporting": {"enabled": True}}))
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
         assert config["history_reporting"]["enabled"] is True
@@ -41,11 +41,11 @@ class TestHistoryReportingDefaults:
     def test_missing_section_gets_defaults(self) -> None:
         """Config without history_reporting section gets populated with defaults."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
+            mock_config_dir = Path(tmpdir) / "xmpd"
             mock_config_dir.mkdir(parents=True)
             config_file = mock_config_dir / "config.yaml"
             config_file.write_text(yaml.dump({"log_level": "DEBUG"}))
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
         assert "history_reporting" in config

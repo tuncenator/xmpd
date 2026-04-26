@@ -1,7 +1,7 @@
 [project]
-name = "ytmpd"
+name = "xmpd"
 version = "1.4.4"
-description = "YouTube Music MPD - An MPD/MPC-like daemon and client for YouTube Music"
+description = "Multi-source music daemon: syncs YouTube Music and Tidal libraries to MPD"
 authors = [
     {name = "Tunç Yıldırım", email = "tuncenator@gmail.com"}
 ]
@@ -27,7 +27,7 @@ dev = [
 ]
 
 [project.scripts]
-ytmpd = "ytmpd.__main__:main"
+xmpd = "xmpd.__main__:main"
 
 [build-system]
 requires = ["setuptools>=65.0", "wheel"]
@@ -35,7 +35,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ytmpd*"]
+include = ["xmpd*"]
 exclude = ["tests*"]
 
 [tool.ruff]

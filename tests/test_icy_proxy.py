@@ -6,8 +6,8 @@ import pytest
 from aiohttp import ClientError, web
 from aiohttp.test_utils import AioHTTPTestCase
 
-from ytmpd.icy_proxy import ICYProxyServer
-from ytmpd.track_store import TrackStore
+from xmpd.icy_proxy import ICYProxyServer
+from xmpd.track_store import TrackStore
 
 
 class MockStreamContent:
@@ -183,7 +183,7 @@ async def test_video_id_pattern_validation(track_store: TrackStore) -> None:
 
     # We can't directly test the pattern validation without making HTTP requests,
     # but we can test the regex pattern itself
-    from ytmpd.icy_proxy import VIDEO_ID_PATTERN
+    from xmpd.icy_proxy import VIDEO_ID_PATTERN
 
     for vid in valid_ids:
         assert VIDEO_ID_PATTERN.match(vid) is not None, f"Valid ID rejected: {vid}"
@@ -234,7 +234,7 @@ async def test_stream_resolver_integration(track_store: TrackStore) -> None:
 @pytest.mark.asyncio
 async def test_url_refresh_without_resolver(track_store: TrackStore) -> None:
     """Test URL refresh fails gracefully when StreamResolver not configured."""
-    from ytmpd.exceptions import URLRefreshError
+    from xmpd.exceptions import URLRefreshError
 
     proxy = ICYProxyServer(track_store)  # No stream_resolver
 
@@ -245,7 +245,7 @@ async def test_url_refresh_without_resolver(track_store: TrackStore) -> None:
 @pytest.mark.asyncio
 async def test_url_refresh_failure(track_store: TrackStore) -> None:
     """Test URL refresh when StreamResolver returns None."""
-    from ytmpd.exceptions import URLRefreshError
+    from xmpd.exceptions import URLRefreshError
 
     mock_resolver = Mock()
     mock_resolver.resolve_video_id = Mock(return_value=None)
@@ -334,7 +334,7 @@ async def test_connection_tracking() -> None:
 async def test_handle_proxy_request_with_url_refresh(populated_store: TrackStore) -> None:
     """Test _handle_proxy_request with URL expiry and refresh flow."""
     import time
-    from ytmpd.exceptions import URLRefreshError
+    from xmpd.exceptions import URLRefreshError
 
     # Create mock request with match_info for video_id
     mock_request = Mock(spec=web.Request)

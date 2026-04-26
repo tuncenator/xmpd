@@ -30,7 +30,7 @@ No new files created in this phase.
 
 ### Files Modified
 
-- `bin/ytmpd-status` - Fixed 2 critical bugs in render_progress_bar function calls:
+- `bin/xmpd-status` - Fixed 2 critical bugs in render_progress_bar function calls:
   - Lines 813-819: Fixed incorrect function signature (was passing 5 args, should be 3)
   - Lines 862-868: Fixed incorrect function signature (was passing 5 args, should be 3)
   - Applied black formatting to entire file (1251 lines)
@@ -93,13 +93,13 @@ $ pytest tests/
 ======================== 396 passed, 1 warning in 36.40s ========================
 ```
 
-All 396 tests passing across entire test suite (157 ytmpd-status tests + 239 other tests).
+All 396 tests passing across entire test suite (157 xmpd-status tests + 239 other tests).
 
 ### Manual Testing
 
 **Basic functionality**:
 ```bash
-$ bin/ytmpd-status
+$ bin/xmpd-status
 ⏸ Tim van Werd - Believe [0:39 ▰▱▱▱▱▱▱▱▱▱ 4:00]
 ⏸ Tim van Werd - Believe [0:39 ▰▱▱▱▱▱▱▱▱▱ 4:00]
 #FFB84D
@@ -107,7 +107,7 @@ $ bin/ytmpd-status
 
 **Compact mode**:
 ```bash
-$ bin/ytmpd-status --compact
+$ bin/xmpd-status --compact
 ⏸ Tim van Werd - Believe
 ⏸ Tim van Werd - Believe
 #FFB84D
@@ -115,7 +115,7 @@ $ bin/ytmpd-status --compact
 
 **Next/previous track display**:
 ```bash
-$ bin/ytmpd-status --show-next --show-prev
+$ bin/xmpd-status --show-next --show-prev
 ⏸ Tim van Werd - Believe [0:39 ▰▱▱▱▱▱▱▱▱▱ 4:00]
 ↑ MaMan - Solitude
 ↓ Braxton, Lauren L'aimant - Holding On
@@ -125,7 +125,7 @@ $ bin/ytmpd-status --show-next --show-prev
 
 **Custom bar style**:
 ```bash
-$ bin/ytmpd-status --bar-style simple --bar-length 15
+$ bin/xmpd-status --bar-style simple --bar-length 15
 ⏸ Tim van Werd - Believe [0:39 #…---------- 4:00]
 ⏸ Tim van Werd - Believe [0:39 #…---------- 4:00]
 #FFB84D
@@ -133,7 +133,7 @@ $ bin/ytmpd-status --bar-style simple --bar-length 15
 
 **Custom format with bar placeholder**:
 ```bash
-$ bin/ytmpd-status --format "{icon} {artist} - {title} [{elapsed} {bar} {duration}]" --bar-length 5
+$ bin/xmpd-status --format "{icon} {artist} - {title} [{elapsed} {bar} {duration}]" --bar-length 5
 ⏸ Tim van Werd - Believe [0:39 ▱▱▱▱▱ 4:00]
 ⏸ Tim van Werd - Believe [0:39 ▱▱▱▱▱ 4:00]
 #FFB84D
@@ -147,7 +147,7 @@ All features tested and working correctly with live MPD instance.
 
 ### Challenge 1: Code Coverage Measurement
 
-**Problem**: The `pytest --cov` tool couldn't analyze `bin/ytmpd-status` properly because it's a script without .py extension, leading to "module was never imported" warnings.
+**Problem**: The `pytest --cov` tool couldn't analyze `bin/xmpd-status` properly because it's a script without .py extension, leading to "module was never imported" warnings.
 
 **Solution**: Used alternative assessment method:
 - Counted test lines vs code lines (2,262 test lines for 1,251 code lines)
@@ -176,7 +176,7 @@ This matches the pattern used correctly in other parts of the code (lines 1160-1
 
 ### Formatting
 - [x] Black formatting applied to entire script
-- [x] All 157 ytmpd-status tests pass after formatting
+- [x] All 157 xmpd-status tests pass after formatting
 - [x] Manual testing confirms functionality preserved
 
 ### Code Quality Scores
@@ -192,11 +192,11 @@ This matches the pattern used correctly in other parts of the code (lines 1160-1
 ### Documentation
 - [x] Comprehensive i3blocks integration guide (docs/i3blocks-integration.md)
 - [x] Example configurations provided (examples/i3blocks.conf)
-- [x] Main README updated with ytmpd-status information
+- [x] Main README updated with xmpd-status information
 - [x] All functions have docstrings (from previous phases)
 
 ### Test Coverage
-- [x] 396 total tests passing (157 ytmpd-status tests)
+- [x] 396 total tests passing (157 xmpd-status tests)
 - [x] ~1.8:1 test-to-code ratio
 - [x] All core features tested
 - [x] Edge cases covered
@@ -253,7 +253,7 @@ From manual testing and previous phase measurements:
 - **Execution time**: ~160ms per invocation (acceptable for i3blocks)
 - **Idle mode CPU**: ~0.1% (excellent, MPD idle protocol very efficient)
 - **Memory**: ~20MB for idle mode process
-- **Test execution**: 0.96s for 157 ytmpd-status tests (very fast)
+- **Test execution**: 0.96s for 157 xmpd-status tests (very fast)
 
 ---
 
@@ -308,12 +308,12 @@ All completion criteria met (except optional scrolling feature, which was skippe
 ## Summary Statistics
 
 - **Bugs Fixed**: 2 critical render_progress_bar call errors
-- **Tests Passing**: 396 total (157 ytmpd-status tests)
+- **Tests Passing**: 396 total (157 xmpd-status tests)
 - **Test Pass Rate**: 100% (396/396)
 - **Code Quality**: Pylint 8.45/10, Black formatted, Mypy critical errors fixed
-- **Files Modified**: 1 (bin/ytmpd-status)
+- **Files Modified**: 1 (bin/xmpd-status)
 - **Files Created**: 0
-- **Lines of Code**: 1,251 (ytmpd-status script)
+- **Lines of Code**: 1,251 (xmpd-status script)
 - **Lines of Tests**: 2,262 (1.8:1 test-to-code ratio)
 - **Manual Tests Performed**: 5 different feature combinations
 - **Documentation Status**: Complete (README + i3blocks guide + examples)

@@ -12,10 +12,10 @@ from unittest.mock import Mock, patch
 import pytest
 import yaml
 
-from ytmpd.config import _validate_config, load_config
-from ytmpd.mpd_client import MPDClient, TrackWithMetadata
-from ytmpd.sync_engine import SyncEngine
-from ytmpd.ytmusic import Playlist, Track
+from xmpd.config import _validate_config, load_config
+from xmpd.mpd_client import MPDClient, TrackWithMetadata
+from xmpd.sync_engine import SyncEngine
+from xmpd.ytmusic import Playlist, Track
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -24,7 +24,7 @@ from ytmpd.ytmusic import Playlist, Track
 
 def _make_config_dir(tmpdir, user_config=None):
     """Create a temp config dir with optional user config."""
-    mock_config_dir = Path(tmpdir) / "ytmpd"
+    mock_config_dir = Path(tmpdir) / "xmpd"
     mock_config_dir.mkdir(parents=True)
     if user_config is not None:
         config_file = mock_config_dir / "config.yaml"
@@ -50,8 +50,8 @@ class TestLikeIndicatorConfigDefaults:
     def test_default_config_includes_like_indicator(self):
         """Default config should include like_indicator section with correct defaults."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config_dir = Path(tmpdir) / "ytmpd"
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            mock_config_dir = Path(tmpdir) / "xmpd"
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 assert "like_indicator" in config
@@ -73,7 +73,7 @@ class TestLikeIndicatorConfigDefaults:
                     },
                 },
             )
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 li = config["like_indicator"]
@@ -93,7 +93,7 @@ class TestLikeIndicatorConfigDefaults:
                     },
                 },
             )
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 config = load_config()
 
                 li = config["like_indicator"]
@@ -114,7 +114,7 @@ class TestLikeIndicatorConfigValidation:
                     "like_indicator": {"enabled": 1},
                 },
             )
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(ValueError, match="like_indicator.enabled must be a boolean"):
                     load_config()
 
@@ -127,7 +127,7 @@ class TestLikeIndicatorConfigValidation:
                     "like_indicator": {"enabled": "yes"},
                 },
             )
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(ValueError, match="like_indicator.enabled must be a boolean"):
                     load_config()
 
@@ -140,7 +140,7 @@ class TestLikeIndicatorConfigValidation:
                     "like_indicator": {"tag": ""},
                 },
             )
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(
                     ValueError, match="like_indicator.tag must be a non-empty string"
                 ):
@@ -155,7 +155,7 @@ class TestLikeIndicatorConfigValidation:
                     "like_indicator": {"tag": 42},
                 },
             )
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(
                     ValueError, match="like_indicator.tag must be a non-empty string"
                 ):
@@ -170,7 +170,7 @@ class TestLikeIndicatorConfigValidation:
                     "like_indicator": {"tag": None},
                 },
             )
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(
                     ValueError, match="like_indicator.tag must be a non-empty string"
                 ):
@@ -185,7 +185,7 @@ class TestLikeIndicatorConfigValidation:
                     "like_indicator": {"alignment": "center"},
                 },
             )
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(
                     ValueError, match="like_indicator.alignment must be 'left' or 'right'"
                 ):
@@ -200,7 +200,7 @@ class TestLikeIndicatorConfigValidation:
                     "like_indicator": {"alignment": "top"},
                 },
             )
-            with patch("ytmpd.config.get_config_dir", return_value=mock_config_dir):
+            with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
                 with pytest.raises(
                     ValueError, match="like_indicator.alignment must be 'left' or 'right'"
                 ):
@@ -327,8 +327,8 @@ class TestM3ULikeIndicator:
             ),
         ]
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_m3u_liked_track_has_indicator(self, mock_path, mock_mpd_base):
         """EXTINF line for liked track should contain [+1]."""
         mock_path.return_value.expanduser.return_value.exists.return_value = True
@@ -358,8 +358,8 @@ class TestM3ULikeIndicator:
         written = mock_playlist_file.write_text.call_args[0][0]
         assert "#EXTINF:-1,Artist A - Liked Song [+1]" in written
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_m3u_non_liked_track_no_indicator(self, mock_path, mock_mpd_base):
         """EXTINF line for non-liked track should NOT contain indicator."""
         mock_path.return_value.expanduser.return_value.exists.return_value = True
@@ -390,8 +390,8 @@ class TestM3ULikeIndicator:
         assert "#EXTINF:-1,Artist B - Other Song\n" in written
         assert "Other Song [+1]" not in written
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_m3u_left_alignment(self, mock_path, mock_mpd_base):
         """Left-aligned indicator should appear before artist-title."""
         mock_path.return_value.expanduser.return_value.exists.return_value = True
@@ -421,8 +421,8 @@ class TestM3ULikeIndicator:
         written = mock_playlist_file.write_text.call_args[0][0]
         assert "#EXTINF:-1,[+1] Artist A - Liked Song" in written
 
-    @patch("ytmpd.mpd_client.MPDClientBase")
-    @patch("ytmpd.mpd_client.Path")
+    @patch("xmpd.mpd_client.MPDClientBase")
+    @patch("xmpd.mpd_client.Path")
     def test_m3u_indicator_disabled(self, mock_path, mock_mpd_base):
         """Disabled indicator should not modify EXTINF lines."""
         mock_path.return_value.expanduser.return_value.exists.return_value = True

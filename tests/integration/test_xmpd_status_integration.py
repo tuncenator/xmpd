@@ -1,4 +1,4 @@
-"""Integration tests for bin/ytmpd-status script.
+"""Integration tests for bin/xmpd-status script.
 
 Tests complete workflows from MPD connection through track classification,
 progress bar rendering, and final output formatting. Tests scenarios covering
@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 # Import the script module with a unique name to avoid conflicts with unit tests
-script_path = Path(__file__).parent.parent.parent / "bin" / "ytmpd-status"
+script_path = Path(__file__).parent.parent.parent / "bin" / "xmpd-status"
 spec = importlib.util.spec_from_file_location(
     "ytmpd_status_integration",
     script_path,
@@ -32,12 +32,12 @@ class TestIntegrationScenarios:
     def setup_method(self):
         """Set up test fixtures."""
         # Mock sys.argv to prevent argparse from using actual command line args
-        self.argv_patcher = patch("sys.argv", ["ytmpd-status"])
+        self.argv_patcher = patch("sys.argv", ["xmpd-status"])
         self.argv_patcher.start()
 
         # Create temporary database
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = Path(self.temp_dir) / ".config" / "ytmpd"
+        self.db_path = Path(self.temp_dir) / ".config" / "xmpd"
         self.db_path.mkdir(parents=True)
         self.db_file = self.db_path / "track_mapping.db"
 
@@ -469,7 +469,7 @@ class TestIntegrationScenarios:
         mock_get_client.return_value = mock_client
 
         # Set max length to trigger truncation
-        with patch.dict(os.environ, {"YTMPD_STATUS_MAX_LENGTH": "50"}):
+        with patch.dict(os.environ, {"XMPD_STATUS_MAX_LENGTH": "50"}):
             # Capture output
             from io import StringIO
 
@@ -521,7 +521,7 @@ class TestIntegrationScenarios:
         mock_get_client.return_value = mock_client
 
         # Enable next track display
-        with patch.dict(os.environ, {"YTMPD_STATUS_SHOW_NEXT": "true"}):
+        with patch.dict(os.environ, {"XMPD_STATUS_SHOW_NEXT": "true"}):
             # Capture output
             from io import StringIO
 
@@ -649,12 +649,12 @@ class TestEnvironmentVariableIntegration:
     def setup_method(self):
         """Set up test fixtures."""
         # Mock sys.argv to prevent argparse from using actual command line args
-        self.argv_patcher = patch("sys.argv", ["ytmpd-status"])
+        self.argv_patcher = patch("sys.argv", ["xmpd-status"])
         self.argv_patcher.start()
 
         # Create temporary database
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = Path(self.temp_dir) / ".config" / "ytmpd"
+        self.db_path = Path(self.temp_dir) / ".config" / "xmpd"
         self.db_path.mkdir(parents=True)
         self.db_file = self.db_path / "track_mapping.db"
 
@@ -727,12 +727,12 @@ class TestEnvironmentVariableIntegration:
 
         # Set multiple env vars
         env_vars = {
-            "YTMPD_STATUS_MAX_LENGTH": "60",
-            "YTMPD_STATUS_BAR_LENGTH": "15",
-            "YTMPD_STATUS_SHOW_BAR": "true",
-            "YTMPD_STATUS_BAR_STYLE": "simple",
-            "YTMPD_STATUS_SHOW_NEXT": "true",
-            "YTMPD_STATUS_SHOW_PREV": "false",
+            "XMPD_STATUS_MAX_LENGTH": "60",
+            "XMPD_STATUS_BAR_LENGTH": "15",
+            "XMPD_STATUS_SHOW_BAR": "true",
+            "XMPD_STATUS_BAR_STYLE": "simple",
+            "XMPD_STATUS_SHOW_NEXT": "true",
+            "XMPD_STATUS_SHOW_PREV": "false",
         }
 
         with patch.dict(os.environ, env_vars):
@@ -786,7 +786,7 @@ class TestEnvironmentVariableIntegration:
         mock_get_client.return_value = mock_client
 
         # Enable compact mode
-        with patch.dict(os.environ, {"YTMPD_STATUS_COMPACT": "true"}):
+        with patch.dict(os.environ, {"XMPD_STATUS_COMPACT": "true"}):
             # Capture output
             from io import StringIO
 
@@ -840,7 +840,7 @@ class TestEnvironmentVariableIntegration:
         mock_get_client.return_value = mock_client
 
         # Disable progress bar
-        with patch.dict(os.environ, {"YTMPD_STATUS_SHOW_BAR": "false"}):
+        with patch.dict(os.environ, {"XMPD_STATUS_SHOW_BAR": "false"}):
             # Capture output
             from io import StringIO
 
