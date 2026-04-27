@@ -786,3 +786,317 @@ class TestPerProviderStreamCacheHours:
         config = {"log_level": "INFO"}  # no stream_cache_hours, no yt/tidal
         result = resolve_stream_cache_hours(config)
         assert result == {"yt": 5, "tidal": 1}
+
+
+# ---------------------------------------------------------------------------
+# 23. Connection leak stress tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolution_counter_returns_to_zero_after_normal_requests(
+    track_store, yt_provider_mock
+):
+    """Multiple sequential requests leave counters at zero."""
+    for i in range(5):
+        vid = f"vid{i:07d}AAAA"[:11]
+        track_store.add_track(
+            "yt", vid,
+            stream_url=f"https://example.com/{vid}",
+            title=f"Track {i}",
+            artist="Artist",
+        )
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"yt": yt_provider_mock},
+        stream_cache_hours={"yt": 5},
+    )
+    async with TestClient(TestServer(proxy.app)) as client:
+        for i in range(5):
+            vid = f"vid{i:07d}AAAA"[:11]
+            resp = await client.get(f"/proxy/yt/{vid}", allow_redirects=False)
+            assert resp.status == 307
+
+    assert proxy._active_resolutions == 0
+    assert proxy._active_streams == 0
+    assert proxy._resolution_semaphore._value == proxy.max_concurrent_streams
+
+
+@pytest.mark.asyncio
+async def test_resolution_counter_returns_to_zero_after_errors(track_store):
+    """Requests that fail (404, 502) still release semaphore slots."""
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={},
+        stream_resolver=None,
+        max_concurrent_streams=2,
+    )
+    async with TestClient(TestServer(proxy.app)) as client:
+        # 404: track not in store
+        for _ in range(3):
+            resp = await client.get("/proxy/yt/dQw4w9WgXcQ")
+            assert resp.status == 404
+
+    assert proxy._active_resolutions == 0
+    assert proxy._resolution_semaphore._value == 2
+
+
+@pytest.mark.asyncio
+async def test_resolution_limit_concurrent_requests(track_store, yt_provider_mock):
+    """With limit=2, two concurrent resolutions succeed; third gets 503.
+
+    Uses a slow resolver to hold slots during concurrent requests.
+    """
+    import asyncio as aio
+
+    resolve_gate = aio.Event()
+
+    async def slow_resolve(track_id: str) -> str:
+        await resolve_gate.wait()
+        return f"https://example.com/{track_id}"
+
+    for vid in ("AAAAAAAAAAA", "BBBBBBBBBBB", "CCCCCCCCCCC"):
+        track_store.add_track(
+            "yt", vid,
+            stream_url=None,
+            title="Track",
+            artist="Artist",
+        )
+
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"yt": yt_provider_mock},
+        max_concurrent_streams=2,
+    )
+
+    # Make resolve_stream block until gate opens
+    call_count = 0
+
+    def blocking_resolve(track_id: str) -> str:
+        nonlocal call_count
+        call_count += 1
+        # Block in executor thread
+        import threading
+        evt = threading.Event()
+        # Store so we can release
+        blocking_resolve.events.append(evt)  # type: ignore[attr-defined]
+        evt.wait(timeout=5)
+        return f"https://example.com/{track_id}"
+
+    blocking_resolve.events = []  # type: ignore[attr-defined]
+    yt_provider_mock.resolve_stream = blocking_resolve
+
+    async with TestClient(TestServer(proxy.app)) as client:
+        # Fire two requests that will block in resolution
+        task_a = aio.create_task(
+            client.get("/proxy/yt/AAAAAAAAAAA", allow_redirects=False)
+        )
+        task_b = aio.create_task(
+            client.get("/proxy/yt/BBBBBBBBBBB", allow_redirects=False)
+        )
+        # Give tasks time to acquire semaphore slots
+        await aio.sleep(0.1)
+
+        # Third request should get 503 since both slots are taken
+        resp_c = await client.get("/proxy/yt/CCCCCCCCCCC")
+        assert resp_c.status == 503
+
+        # Unblock the resolvers
+        for evt in blocking_resolve.events:  # type: ignore[attr-defined]
+            evt.set()
+
+        resp_a = await task_a
+        resp_b = await task_b
+        assert resp_a.status == 307
+        assert resp_b.status == 307
+
+    # All slots released
+    assert proxy._resolution_semaphore._value == 2
+    assert proxy._active_resolutions == 0
+
+
+@pytest.mark.asyncio
+async def test_resolution_counter_no_negative(track_store, yt_provider_mock):
+    """Rapid requests never drive counters below zero."""
+    import asyncio as aio
+
+    for i in range(10):
+        vid = f"n{i:010d}"[:11]
+        track_store.add_track(
+            "yt", vid,
+            stream_url=f"https://example.com/{vid}",
+            title=f"Track {i}",
+            artist="Artist",
+        )
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"yt": yt_provider_mock},
+        stream_cache_hours={"yt": 5},
+        max_concurrent_streams=3,
+    )
+    async with TestClient(TestServer(proxy.app)) as client:
+        tasks = []
+        for i in range(10):
+            vid = f"n{i:010d}"[:11]
+            tasks.append(
+                aio.create_task(
+                    client.get(f"/proxy/yt/{vid}", allow_redirects=False)
+                )
+            )
+        results = await aio.gather(*tasks)
+        for resp in results:
+            assert resp.status in (307, 503)
+
+    assert proxy._active_resolutions >= 0
+    assert proxy._active_streams >= 0
+    assert proxy._resolution_semaphore._value == 3
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_reports_connection_counts(track_store):
+    """Health endpoint includes active_resolutions and active_streams."""
+    proxy = _make_proxy(track_store, max_concurrent_streams=5)
+    async with TestClient(TestServer(proxy.app)) as client:
+        resp = await client.get("/health")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["active_resolutions"] == 0
+        assert data["active_streams"] == 0
+        assert data["max_concurrent_resolutions"] == 5
+        assert data["resolution_semaphore_free"] == 5
+
+
+@pytest.mark.asyncio
+async def test_dash_stream_does_not_hold_resolution_slot(
+    track_store, tidal_provider_mock
+):
+    """DASH streaming releases the resolution semaphore before piping ffmpeg.
+
+    This is the key regression test for the connection leak fix. With the
+    old code, each DASH stream held a resolution slot for its entire
+    duration (3-5 min), filling all 10 slots permanently.
+    """
+    import asyncio as aio
+
+    track_store.add_track(
+        "tidal", "12345678",
+        stream_url="https://im-fa.manifest.tidal.com/abc.mpd?token=xyz",
+        title="Track",
+        artist="Artist",
+    )
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"tidal": tidal_provider_mock},
+        stream_cache_hours={"tidal": 5},
+        max_concurrent_streams=1,
+    )
+
+    # Gate to control when ffmpeg "finishes"
+    ffmpeg_gate = aio.Event()
+
+    fake_proc = Mock()
+    fake_proc.returncode = 0
+    fake_proc.stdout = AsyncMock()
+
+    async def slow_read(n: int) -> bytes:
+        if not slow_read.sent:  # type: ignore[attr-defined]
+            slow_read.sent = True  # type: ignore[attr-defined]
+            return b"fLaC" + b"\x00" * 1024
+        await ffmpeg_gate.wait()
+        return b""
+
+    slow_read.sent = False  # type: ignore[attr-defined]
+    fake_proc.stdout.read = slow_read
+    fake_proc.stderr = AsyncMock()
+    fake_proc.stderr.read = AsyncMock(return_value=b"")
+    fake_proc.wait = AsyncMock(return_value=0)
+    fake_proc.kill = Mock()
+
+    with patch(
+        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=fake_proc),
+    ):
+        async with TestClient(TestServer(proxy.app)) as client:
+            # Start DASH stream (will block in ffmpeg read)
+            dash_task = aio.create_task(
+                client.get("/proxy/tidal/12345678", allow_redirects=False)
+            )
+            await aio.sleep(0.1)
+
+            # Resolution semaphore should be free even though DASH is streaming.
+            # This is the key assertion: old code would have 0 free slots here.
+            assert proxy._resolution_semaphore._value == 1, (
+                "DASH stream is holding a resolution slot (the bug)"
+            )
+
+            # A second track request should succeed (not 503)
+            track_store.add_track(
+                "tidal", "99999999",
+                stream_url="https://cdn.tidal.com/direct.flac",
+                title="Track 2",
+                artist="Artist",
+            )
+            resp2 = await client.get(
+                "/proxy/tidal/99999999", allow_redirects=False
+            )
+            assert resp2.status == 307, (
+                f"Expected 307 redirect, got {resp2.status} "
+                f"(resolution slot still held by DASH stream)"
+            )
+
+            # Let the DASH stream finish
+            ffmpeg_gate.set()
+            resp1 = await dash_task
+            assert resp1.status == 200
+
+    assert proxy._active_resolutions == 0
+    assert proxy._active_streams == 0
+
+
+@pytest.mark.asyncio
+async def test_cancellation_releases_resolution_slot(track_store):
+    """Cancelled requests release their semaphore slot."""
+    import asyncio as aio
+
+    track_store.add_track(
+        "yt", "AAAAAAAAAAA",
+        stream_url=None,
+        title="Track",
+        artist="Artist",
+    )
+    mock_resolver = Mock()
+
+    def blocking_resolve(track_id: str) -> str:
+        import threading
+        evt = threading.Event()
+        evt.wait(timeout=5)
+        return "https://example.com/url"
+
+    mock_resolver.resolve_video_id = blocking_resolve
+
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={},
+        stream_resolver=mock_resolver,
+        max_concurrent_streams=1,
+    )
+
+    async with TestClient(TestServer(proxy.app)) as client:
+        # Start a request that blocks in resolution
+        task = aio.create_task(
+            client.get("/proxy/yt/AAAAAAAAAAA", allow_redirects=False)
+        )
+        await aio.sleep(0.1)
+
+        # Cancel it
+        task.cancel()
+        try:
+            await task
+        except (aio.CancelledError, Exception):
+            pass
+
+    # Give cleanup a moment
+    await aio.sleep(0.1)
+
+    # Semaphore must be fully released
+    assert proxy._resolution_semaphore._value == 1
