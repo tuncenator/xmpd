@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 2 - Phase 3 (2026-04-28)
+> Last updated by: Checkpoint 3 - Phase 4 (2026-04-28)
 
 ---
 
@@ -39,12 +39,13 @@ xmpd is a Python 3.11 async music daemon proxy that sits between MPD (playback) 
 | `xmpd/proxy_url.py` | Proxy URL builder | `build_proxy_url(provider, track_id)` |
 | `xmpd/xspf_generator.py` | XSPF playlist format generation | Used when `playlist_format: xspf` |
 | `xmpd/exceptions.py` | Custom exceptions | Project-wide exception hierarchy |
-| `bin/xmpctl` | CLI client | Python script, command dispatcher, search UI, socket communication. ANSI constants at module scope (`ANSI_TIDAL`, `ANSI_YT`, `ANSI_RESET`, `ANSI_BOLD`, `ANSI_DIM`). `format_track_fzf()` produces tab-separated fzf lines. `--format fzf` flag on `cmd_search_json()`. |
-| `bin/xmpd-search` | Interactive fzf search launcher | Bash script. Checks for fzf/xmpctl/daemon, launches fzf with `change:reload` calling `xmpctl search-json --format fzf {q}`. Output: `provider\ttrack_id` on selection. |
+| `bin/xmpctl` | CLI client | Python script, command dispatcher, search UI, socket communication. ANSI constants at module scope (`ANSI_TIDAL`, `ANSI_YT`, `ANSI_RESET`, `ANSI_BOLD`, `ANSI_DIM`). `format_track_fzf()` produces tab-separated fzf lines. `--format fzf` flag on `cmd_search_json()`. Commands: `play <provider> <track_id>`, `queue <provider> <track_id>`, `radio [--provider P] [--track-id ID] [--apply]`. |
+| `bin/xmpd-search` | Interactive fzf search launcher | Bash script. Full keybinding support: enter=play, ctrl-q=queue, ctrl-r=radio, tab=multi-select, ctrl-a=queue-all, ctrl-p=play-all. Key help header. Multi-select via `--expect` for ctrl-a/ctrl-p with post-exit shell loop. |
 | `bin/xmpd-status` | i3blocks status widget | Provider colors, quality classification, progress bar |
 | `tests/test_stream_proxy.py` | Stream proxy tests | Connection handling, DASH stitching, cancellation safety |
 | `tests/test_search_json.py` | search-json command tests | 16 daemon unit tests + 5 xmpctl CLI tests + 8 fzf format CLI tests |
 | `tests/test_search_fzf_format.py` | fzf output formatter tests | 26 tests for tab encoding, provider colors, quality badges, liked indicator, edge cases |
+| `tests/test_search_actions.py` | Search action tests | 36 tests: field extraction, multi-select parsing, play/queue/radio CLI validation, script structure |
 | `tests/test_like_indicator.py` | Like indicator tests | [+1] tagging in M3U/XSPF |
 
 ---
@@ -142,6 +143,35 @@ Uses `provider_registry` to search across providers. Liked state populated via `
 
 Returns `set[str]` of liked track IDs across all providers, cached 5 min. Uses `provider.get_favorites()` from the provider registry.
 
+### xmpctl cmd_play() (`bin/xmpctl:614`)
+
+```python
+def cmd_play(provider: str, track_id: str) -> None:
+    # Sends "play {provider} {track_id}" to daemon
+    # Prints colored OK/ERROR, exits 1 on failure
+```
+
+### xmpctl cmd_queue() (`bin/xmpctl:631`)
+
+```python
+def cmd_queue(provider: str, track_id: str) -> None:
+    # Sends "queue {provider} {track_id}" to daemon
+    # Prints colored OK/ERROR, exits 1 on failure
+```
+
+### xmpctl cmd_radio() (`bin/xmpctl:648`)
+
+```python
+def cmd_radio(apply: bool = False, provider: str | None = None, track_id: str | None = None) -> None:
+    # Sends "radio [--provider P] [track_id]" to daemon
+    # With apply=True: also clears MPD, loads radio playlist, starts playback
+    # --track-id flag: seed from specific track instead of current
+```
+
+### Daemon radio dispatch
+
+Daemon `_handle_socket_connection` radio branch uses `_parse_provider_args(args)` to strip `--provider` flag, then treats first remaining positional as track_id. Fixed in phase 4 (previously used `_parse_play_queue_args` which didn't handle `--provider`).
+
 ### xmpctl cmd_search_json()
 
 CLI function: sends `search-json ...` to daemon. Default: prints one `json.dumps(track)` per line (NDJSON). With `--format fzf`: prints ANSI-colored tab-separated lines (`provider\ttrack_id\tvisible_line`) for fzf consumption. Empty/single-char queries exit silently (code 0) in fzf mode.
@@ -199,9 +229,13 @@ Format: `[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s`
 4. Daemon calls `provider.search(query)` for each enabled provider, enriches with quality/liked
 5. xmpctl `format_track_fzf()` produces ANSI-colored tab-separated lines (`provider\ttrack_id\tvisible`)
 6. fzf shows visible part (`--with-nth=3..`), hides provider/track_id fields
-7. User selects track, fzf outputs `provider\ttrack_id\tvisible`
-8. `xmpd-search` extracts provider and track_id via `cut -f1`/`cut -f2`, prints to stdout
-9. (Phase 4 will add action keybindings for play, queue, radio)
+7. User acts on track(s) via keybindings:
+   - enter: `execute-silent(xmpctl play {provider} {track_id})+abort`
+   - ctrl-q: `execute-silent(xmpctl queue {provider} {track_id})` (fzf stays open)
+   - ctrl-r: `execute-silent(xmpctl radio --provider {provider} --track-id {track_id} --apply)+abort`
+   - tab: toggle multi-select
+   - ctrl-a: accept, then shell loop `xmpctl queue` for each selected track
+   - ctrl-p: accept, then `mpc clear`, shell loop `xmpctl queue`, `mpc play`
 
 ---
 
