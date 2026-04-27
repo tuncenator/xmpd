@@ -245,151 +245,265 @@ class TestGetFavorites:
 
 
 class TestResolveStream:
-    def test_clamps_to_lossless(
-        self, wired_provider: tuple[TidalProvider, MagicMock]
-    ) -> None:
-        from tidalapi import Quality
+    """resolve_stream uses openapi.tidal.com v2 trackManifests endpoint."""
 
-        prov, session = wired_provider
-        mock_track = MagicMock()
-        mock_track.get_url.return_value = "https://cdn.tidal.com/stream.flac"
-        session.track.return_value = mock_track
+    @staticmethod
+    def _ok_response(uri: str = "https://im-fa.manifest.tidal.com/foo.mpd") -> MagicMock:
+        r = MagicMock()
+        r.status_code = 200
+        r.json.return_value = {
+            "data": {"id": "12345", "type": "trackManifests", "attributes": {"uri": uri}}
+        }
+        return r
 
-        prov.resolve_stream("12345")
-        assert session.config.quality == Quality.high_lossless
+    @staticmethod
+    def _err_response(status: int, body: str = "", retry_after: str | None = None) -> MagicMock:
+        r = MagicMock()
+        r.status_code = status
+        r.text = body
+        r.headers = {"Retry-After": retry_after} if retry_after is not None else {}
+        return r
 
-    def test_logs_clamp_once_per_session(
-        self, wired_provider: tuple[TidalProvider, MagicMock], caplog: pytest.LogCaptureFixture
-    ) -> None:
-        prov, session = wired_provider
-        prov._config["quality_ceiling"] = "HI_RES_LOSSLESS"
-        mock_track = MagicMock()
-        mock_track.get_url.return_value = "https://cdn.tidal.com/stream.flac"
-        session.track.return_value = mock_track
-
-        with caplog.at_level(logging.INFO, logger="xmpd.providers.tidal"):
-            prov.resolve_stream("1")
-            prov.resolve_stream("2")
-
-        clamp_msgs = [r for r in caplog.records if "clamping to LOSSLESS" in r.message]
-        assert len(clamp_msgs) == 1
-
-    def test_returns_url(
+    def test_returns_manifest_uri(
         self, wired_provider: tuple[TidalProvider, MagicMock]
     ) -> None:
         prov, session = wired_provider
-        mock_track = MagicMock()
-        mock_track.get_url.return_value = "https://cdn.tidal.com/stream.flac"
-        session.track.return_value = mock_track
-
-        url = prov.resolve_stream("12345")
-        assert url == "https://cdn.tidal.com/stream.flac"
-
-    def test_url_not_available_raises_xmpderror(
-        self, wired_provider: tuple[TidalProvider, MagicMock]
-    ) -> None:
-        from tidalapi.exceptions import URLNotAvailable
-
-        prov, session = wired_provider
-        mock_track = MagicMock()
-        mock_track.get_url.side_effect = URLNotAvailable("nope")
-        session.track.return_value = mock_track
-
-        with pytest.raises(XMPDError, match="URL not available"):
-            prov.resolve_stream("12345")
-
-    def test_too_many_requests_retries_once(
-        self, wired_provider: tuple[TidalProvider, MagicMock]
-    ) -> None:
-        from tidalapi.exceptions import TooManyRequests
-
-        prov, session = wired_provider
-
-        err = TooManyRequests("slow down", retry_after=0)
-        mock_track_fail = MagicMock()
-        mock_track_fail.get_url.side_effect = err
-        mock_track_ok = MagicMock()
-        mock_track_ok.get_url.return_value = "https://cdn.tidal.com/ok.flac"
-        session.track.side_effect = [mock_track_fail, mock_track_ok]
-
-        with patch("xmpd.providers.tidal.time.sleep") as mock_sleep:
+        session.access_token = "tok"
+        with patch(
+            "xmpd.providers.tidal.requests.get",
+            return_value=self._ok_response("https://im-fa.manifest.tidal.com/abc.mpd"),
+        ):
             url = prov.resolve_stream("12345")
+        assert url == "https://im-fa.manifest.tidal.com/abc.mpd"
 
-        assert url == "https://cdn.tidal.com/ok.flac"
-        mock_sleep.assert_called_once_with(1)
-
-    def test_too_many_requests_persistent_raises(
+    def test_calls_v2_endpoint_with_correct_params(
         self, wired_provider: tuple[TidalProvider, MagicMock]
     ) -> None:
-        from tidalapi.exceptions import TooManyRequests
-
         prov, session = wired_provider
-
-        err = TooManyRequests("slow down", retry_after=2)
-        mock_track = MagicMock()
-        mock_track.get_url.side_effect = err
-        session.track.return_value = mock_track
-
-        with patch("xmpd.providers.tidal.time.sleep"):
-            with pytest.raises(XMPDError, match="rate-limit persisted"):
-                prov.resolve_stream("12345")
-
-    def test_authentication_error_raises_tidal_auth_required(
-        self, wired_provider: tuple[TidalProvider, MagicMock]
-    ) -> None:
-        from tidalapi.exceptions import AuthenticationError
-
-        prov, session = wired_provider
-        mock_track = MagicMock()
-        mock_track.get_url.side_effect = AuthenticationError("expired")
-        session.track.return_value = mock_track
-
-        with pytest.raises(TidalAuthRequired, match="no longer authenticated"):
+        session.access_token = "tok"
+        with patch(
+            "xmpd.providers.tidal.requests.get", return_value=self._ok_response()
+        ) as mock_get:
             prov.resolve_stream("12345")
 
-    def test_retry_authentication_error_raises_tidal_auth_required(
+        called_url = mock_get.call_args.args[0]
+        assert called_url == "https://openapi.tidal.com/v2/trackManifests/12345"
+
+        params = mock_get.call_args.kwargs["params"]
+        # multi-value params represented as list of tuples
+        format_values = [v for k, v in params if k == "formats"]
+        assert format_values == ["FLAC", "FLAC_HIRES"]
+        params_dict = dict(params)
+        assert params_dict["manifestType"] == "MPEG_DASH"
+        assert params_dict["uriScheme"] == "HTTPS"
+        assert params_dict["usage"] == "PLAYBACK"
+        assert params_dict["adaptive"] == "true"
+
+    def test_passes_bearer_token(
         self, wired_provider: tuple[TidalProvider, MagicMock]
     ) -> None:
-        """First attempt hits TooManyRequests, retry hits AuthenticationError."""
-        from tidalapi.exceptions import AuthenticationError, TooManyRequests
-
         prov, session = wired_provider
+        session.access_token = "secret-token"
+        with patch(
+            "xmpd.providers.tidal.requests.get", return_value=self._ok_response()
+        ) as mock_get:
+            prov.resolve_stream("12345")
+        headers = mock_get.call_args.kwargs["headers"]
+        assert headers["Authorization"] == "Bearer secret-token"
 
-        err_rate = TooManyRequests("slow down", retry_after=0)
-        mock_track_fail = MagicMock()
-        mock_track_fail.get_url.side_effect = err_rate
-
-        err_auth = AuthenticationError("expired between attempts")
-        mock_track_auth = MagicMock()
-        mock_track_auth.get_url.side_effect = err_auth
-
-        session.track.side_effect = [mock_track_fail, mock_track_auth]
-
-        with patch("xmpd.providers.tidal.time.sleep"):
+    def test_401_raises_tidal_auth_required(
+        self, wired_provider: tuple[TidalProvider, MagicMock]
+    ) -> None:
+        prov, _ = wired_provider
+        with patch(
+            "xmpd.providers.tidal.requests.get", return_value=self._err_response(401)
+        ):
             with pytest.raises(TidalAuthRequired, match="no longer authenticated"):
                 prov.resolve_stream("12345")
 
-    def test_retry_url_not_available_raises_xmpderror(
+    def test_401_refreshes_token_and_retries(
+        self, provider: TidalProvider, mock_session: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_session.access_token = "old-tok"
+        mock_session.refresh_token = "refresh-tok"
+        mock_session.token_refresh.return_value = True
+        provider._session = mock_session
+        monkeypatch.setattr(provider, "_ensure_session", lambda: mock_session)
+
+        def refresh_side_effect(rt: str) -> bool:
+            mock_session.access_token = "new-tok"
+            return True
+
+        mock_session.token_refresh.side_effect = refresh_side_effect
+
+        err_401 = self._err_response(401)
+        ok = self._ok_response("https://im-fa.manifest.tidal.com/refreshed.mpd")
+
+        with patch(
+            "xmpd.providers.tidal.requests.get", side_effect=[err_401, ok]
+        ) as mock_get:
+            with patch("xmpd.auth.tidal_oauth.save_session"):
+                url = provider.resolve_stream("12345")
+
+        assert url == "https://im-fa.manifest.tidal.com/refreshed.mpd"
+        mock_session.token_refresh.assert_called_once_with("refresh-tok")
+        retry_headers = mock_get.call_args_list[1].kwargs["headers"]
+        assert retry_headers["Authorization"] == "Bearer new-tok"
+
+    def test_401_refresh_fails_raises(
+        self, provider: TidalProvider, mock_session: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_session.access_token = "tok"
+        mock_session.refresh_token = "refresh-tok"
+        mock_session.token_refresh.return_value = False
+        provider._session = mock_session
+        monkeypatch.setattr(provider, "_ensure_session", lambda: mock_session)
+
+        with patch(
+            "xmpd.providers.tidal.requests.get", return_value=self._err_response(401)
+        ):
+            with pytest.raises(TidalAuthRequired, match="no longer authenticated"):
+                provider.resolve_stream("12345")
+
+    def test_429_retries_then_succeeds(
         self, wired_provider: tuple[TidalProvider, MagicMock]
     ) -> None:
-        """First attempt hits TooManyRequests, retry hits URLNotAvailable."""
-        from tidalapi.exceptions import TooManyRequests, URLNotAvailable
+        prov, _ = wired_provider
+        rate_limited = self._err_response(429, retry_after="0")
+        with patch(
+            "xmpd.providers.tidal.requests.get",
+            side_effect=[rate_limited, self._ok_response("https://im-fa.manifest.tidal.com/ok.mpd")],
+        ):
+            with patch("xmpd.providers.tidal.time.sleep") as mock_sleep:
+                url = prov.resolve_stream("12345")
+        assert url == "https://im-fa.manifest.tidal.com/ok.mpd"
+        mock_sleep.assert_called_once_with(1)
 
-        prov, session = wired_provider
+    def test_429_persistent_raises(
+        self, wired_provider: tuple[TidalProvider, MagicMock]
+    ) -> None:
+        prov, _ = wired_provider
+        rate_limited = self._err_response(429, retry_after="2")
+        with patch(
+            "xmpd.providers.tidal.requests.get", return_value=rate_limited
+        ):
+            with patch("xmpd.providers.tidal.time.sleep"):
+                with pytest.raises(XMPDError, match="rate-limit persisted"):
+                    prov.resolve_stream("12345")
 
-        err_rate = TooManyRequests("slow down", retry_after=0)
-        mock_track_fail = MagicMock()
-        mock_track_fail.get_url.side_effect = err_rate
-
-        err_url = URLNotAvailable("gone")
-        mock_track_url = MagicMock()
-        mock_track_url.get_url.side_effect = err_url
-
-        session.track.side_effect = [mock_track_fail, mock_track_url]
-
-        with patch("xmpd.providers.tidal.time.sleep"):
-            with pytest.raises(XMPDError, match="URL not available"):
+    def test_500_raises_xmpderror(
+        self, wired_provider: tuple[TidalProvider, MagicMock]
+    ) -> None:
+        prov, _ = wired_provider
+        with patch(
+            "xmpd.providers.tidal.requests.get",
+            return_value=self._err_response(500, body="server boom"),
+        ):
+            with pytest.raises(XMPDError, match="manifest unavailable"):
                 prov.resolve_stream("12345")
+
+    def test_malformed_json_raises_xmpderror(
+        self, wired_provider: tuple[TidalProvider, MagicMock]
+    ) -> None:
+        prov, _ = wired_provider
+        bad = MagicMock()
+        bad.status_code = 200
+        bad.json.return_value = {"unexpected": "shape"}
+        with patch("xmpd.providers.tidal.requests.get", return_value=bad):
+            with pytest.raises(XMPDError, match="manifest response malformed"):
+                prov.resolve_stream("12345")
+
+    def test_request_exception_raises_xmpderror(
+        self, wired_provider: tuple[TidalProvider, MagicMock]
+    ) -> None:
+        import requests as rq
+
+        prov, _ = wired_provider
+        with patch(
+            "xmpd.providers.tidal.requests.get",
+            side_effect=rq.ConnectionError("network down"),
+        ):
+            with pytest.raises(XMPDError, match="manifest request failed"):
+                prov.resolve_stream("12345")
+
+
+# ---------------------------------------------------------------------------
+# _try_refresh_session
+# ---------------------------------------------------------------------------
+
+
+class TestTryRefreshSession:
+    def test_refresh_succeeds_and_persists(
+        self, provider: TidalProvider, mock_session: MagicMock
+    ) -> None:
+        mock_session.refresh_token = "refresh-tok"
+        mock_session.token_refresh.return_value = True
+        provider._session = mock_session
+
+        with patch("xmpd.auth.tidal_oauth.save_session") as mock_save:
+            assert provider._try_refresh_session() is True
+        mock_session.token_refresh.assert_called_once_with("refresh-tok")
+        mock_save.assert_called_once_with(mock_session, provider.SESSION_PATH)
+
+    def test_refresh_returns_false_on_failure(
+        self, provider: TidalProvider, mock_session: MagicMock
+    ) -> None:
+        mock_session.refresh_token = "refresh-tok"
+        mock_session.token_refresh.return_value = False
+        provider._session = mock_session
+
+        assert provider._try_refresh_session() is False
+
+    def test_refresh_returns_false_without_session(
+        self, provider: TidalProvider
+    ) -> None:
+        assert provider._try_refresh_session() is False
+
+    def test_refresh_returns_false_without_refresh_token(
+        self, provider: TidalProvider, mock_session: MagicMock
+    ) -> None:
+        mock_session.refresh_token = None
+        provider._session = mock_session
+
+        assert provider._try_refresh_session() is False
+
+    def test_refresh_catches_exception(
+        self, provider: TidalProvider, mock_session: MagicMock
+    ) -> None:
+        mock_session.refresh_token = "refresh-tok"
+        mock_session.token_refresh.side_effect = RuntimeError("network")
+        provider._session = mock_session
+
+        assert provider._try_refresh_session() is False
+
+
+# ---------------------------------------------------------------------------
+# _ensure_session persistence
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureSessionPersistence:
+    def test_persists_after_successful_load(
+        self, provider: TidalProvider, mock_session: MagicMock
+    ) -> None:
+        with (
+            patch("xmpd.auth.tidal_oauth.load_session", return_value=mock_session),
+            patch("xmpd.auth.tidal_oauth.save_session") as mock_save,
+        ):
+            provider._ensure_session()
+
+        mock_save.assert_called_once_with(mock_session, provider.SESSION_PATH)
+
+    def test_persist_failure_does_not_raise(
+        self, provider: TidalProvider, mock_session: MagicMock
+    ) -> None:
+        with (
+            patch("xmpd.auth.tidal_oauth.load_session", return_value=mock_session),
+            patch("xmpd.auth.tidal_oauth.save_session", side_effect=OSError("disk full")),
+        ):
+            result = provider._ensure_session()
+
+        assert result is mock_session
 
 
 # ---------------------------------------------------------------------------

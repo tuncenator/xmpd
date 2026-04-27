@@ -4,8 +4,11 @@ Phase 9 scaffolded this class with auth wiring (name, is_enabled,
 is_authenticated, _ensure_session). Phase 10 implements all 14 Provider
 Protocol methods backed by ``tidalapi>=0.8.11,<0.9``.
 
-Quality is clamped to LOSSLESS for this iteration (see cross-cutting
-concerns in PROJECT_PLAN.md). HiRes/DASH support is deferred.
+Stream resolution uses the openapi.tidal.com v2 ``trackManifests``
+endpoint to obtain a DASH manifest with FLAC/FLAC_HIRES variants. The
+stream proxy stitches the manifest into a single FLAC stream via ffmpeg.
+The legacy ``urlpostpaywall`` path silently downgrades to AAC 320 even
+when LOSSLESS is requested -- see python-tidal issue #404.
 """
 
 from __future__ import annotations
@@ -15,14 +18,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+import requests
 import tidalapi
-from tidalapi import Quality
 from tidalapi.exceptions import (
-    AuthenticationError,
     MetadataNotAvailable,
     ObjectNotFound,
-    TooManyRequests,
-    URLNotAvailable,
 )
 
 from xmpd.exceptions import TidalAuthRequired, XMPDError
@@ -51,8 +51,6 @@ class TidalProvider:
         self._session: Any = None  # tidalapi.Session, lazily loaded
         # Lazy cache for get_like_state; populated on first call.
         self._favorites_ids: set[str] | None = None
-        # One-time log gate for the LOSSLESS quality clamp message.
-        self._hires_warned: bool = False
 
     def is_enabled(self) -> bool:
         return bool(self._config.get("enabled", False))
@@ -83,20 +81,47 @@ class TidalProvider:
         """Lazy-load and validate the session; raise TidalAuthRequired if unavailable.
 
         Cached: the second call returns the same session object.
+        On first load, persists the session back to disk in case tidalapi
+        auto-refreshed the access token during ``load_oauth_session``.
 
         Raises:
             TidalAuthRequired: if the persisted session is missing, malformed,
                 or fails ``check_login()``.
         """
         if self._session is None:
-            from xmpd.auth.tidal_oauth import load_session
+            from xmpd.auth.tidal_oauth import load_session, save_session
 
             self._session = load_session(self.SESSION_PATH)
             if self._session is None:
                 raise TidalAuthRequired(
                     "Tidal session missing or invalid. Run `xmpctl auth tidal`."
                 )
+            try:
+                save_session(self._session, self.SESSION_PATH)
+            except Exception as e:
+                logger.warning("Failed to persist Tidal session after load: %s", e)
         return self._session
+
+    def _try_refresh_session(self) -> bool:
+        """Refresh the access token via the stored refresh token and persist.
+
+        Returns True on success, False if refresh is unavailable or fails.
+        """
+        session = self._session
+        if session is None or not session.refresh_token:
+            return False
+        try:
+            refreshed = session.token_refresh(session.refresh_token)
+        except Exception as e:
+            logger.warning("Tidal token refresh failed: %s", e)
+            return False
+        if not refreshed:
+            return False
+        from xmpd.auth.tidal_oauth import save_session
+
+        save_session(session, self.SESSION_PATH)
+        logger.info("Tidal access token refreshed and persisted")
+        return True
 
     # ------------------------------------------------------------------
     # Track conversion helper
@@ -227,50 +252,86 @@ class TidalProvider:
         return out
 
     def resolve_stream(self, track_id: str) -> str | None:
-        """Return a fresh direct stream URL, clamped to LOSSLESS quality.
+        """Return a fresh DASH manifest URL (.mpd) for the track.
 
-        Retries once on ``TooManyRequests``. Raises ``XMPDError`` on persistent
-        rate-limit or ``URLNotAvailable``. Raises ``TidalAuthRequired`` on
-        ``AuthenticationError``.
+        Uses the openapi.tidal.com v2 ``trackManifests`` endpoint, which
+        returns FLAC (or FLAC_HIRES if available) instead of the legacy
+        ``urlpostpaywall`` endpoint that silently downgrades to AAC 320.
+        See python-tidal issue #404 and the v2 trackManifests contract.
+
+        On HTTP 401, attempts a token refresh via the stored refresh token
+        before raising ``TidalAuthRequired``.
         """
         session = self._ensure_session()
+        try:
+            return self._fetch_manifest(session, track_id)
+        except TidalAuthRequired:
+            if self._try_refresh_session():
+                logger.info("Retrying manifest fetch after token refresh (track %s)", track_id)
+                return self._fetch_manifest(session, track_id)
+            raise
 
-        # Quality clamp (PROJECT_PLAN.md > Tidal HiRes Streaming Constraint)
-        requested = self._config.get("quality_ceiling", "HI_RES_LOSSLESS")
-        if requested == "HI_RES_LOSSLESS" and not self._hires_warned:
-            logger.info(
-                "Tidal HiRes streaming requires DASH/ffmpeg pipeline; "
-                "clamping to LOSSLESS for now"
-            )
-            self._hires_warned = True
-        session.config.quality = Quality.high_lossless
+    def _fetch_manifest(self, session: Any, track_id: str) -> str | None:
+        """Request a DASH manifest URL from the Tidal v2 trackManifests API.
+
+        Retries once on rate-limit (HTTP 429). Raises ``TidalAuthRequired``
+        on HTTP 401 and ``XMPDError`` on other failures.
+        """
+        formats = self._config.get(
+            "tidal_manifest_formats",
+            ["FLAC", "FLAC_HIRES"],
+        )
+
+        url = f"https://openapi.tidal.com/v2/trackManifests/{track_id}"
+        params: list[tuple[str, str]] = [("formats", f) for f in formats]
+        params.extend(
+            [
+                ("manifestType", "MPEG_DASH"),
+                ("uriScheme", "HTTPS"),
+                ("usage", "PLAYBACK"),
+                ("adaptive", "true"),
+            ]
+        )
+        headers = {"Authorization": f"Bearer {session.access_token}"}
 
         for attempt in (1, 2):
             try:
-                track = session.track(track_id)
-                url: str = track.get_url()
-                return url
-            except URLNotAvailable as e:
-                raise XMPDError(
-                    f"Tidal URL not available for track {track_id}: {e}"
-                ) from e
-            except TooManyRequests as e:
+                resp = requests.get(url, headers=headers, params=params, timeout=15)
+            except requests.RequestException as e:
+                raise XMPDError(f"Tidal manifest request failed for {track_id}: {e}") from e
+
+            if resp.status_code == 401:
+                raise TidalAuthRequired(
+                    f"Tidal session no longer authenticated (track {track_id})"
+                )
+            if resp.status_code == 429:
                 if attempt == 2:
                     raise XMPDError(
-                        f"Tidal rate-limit persisted on retry for track {track_id}: {e}"
-                    ) from e
-                retry = max(1, e.retry_after if e.retry_after > 0 else 1)
+                        f"Tidal rate-limit persisted on retry for track {track_id}"
+                    )
+                retry = int(resp.headers.get("Retry-After") or "1")
                 logger.warning(
                     "Tidal rate-limited on resolve_stream(%s); "
                     "sleeping %ss then retrying once",
                     track_id,
                     retry,
                 )
-                time.sleep(retry)
-            except AuthenticationError as e:
-                raise TidalAuthRequired(
-                    f"Tidal session no longer authenticated: {e}"
+                time.sleep(max(1, retry))
+                continue
+            if resp.status_code != 200:
+                raise XMPDError(
+                    f"Tidal manifest unavailable for {track_id}: "
+                    f"HTTP {resp.status_code} {resp.text[:200]}"
+                )
+
+            try:
+                manifest_uri = resp.json()["data"]["attributes"]["uri"]
+            except (KeyError, ValueError) as e:
+                raise XMPDError(
+                    f"Tidal manifest response malformed for {track_id}: {e}"
                 ) from e
+            return manifest_uri  # type: ignore[no-any-return]
+
         return None  # unreachable; keeps mypy happy
 
     def get_track_metadata(self, track_id: str) -> TrackMetadata | None:
