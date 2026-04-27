@@ -400,3 +400,134 @@ class TestXmpctlSearchJson:
         assert parsed["track_id"] == "abc12345678"
         assert parsed["quality"] == "Lo"
         assert parsed["liked"] is False
+
+
+# ---------------------------------------------------------------------------
+# xmpctl search-json --format fzf tests
+# ---------------------------------------------------------------------------
+
+
+def _load_xmpctl_namespace(monkeypatch, fake_response):
+    """Load xmpctl module namespace with mocked send_command.
+
+    Returns the namespace dict with cmd_search_json and format_track_fzf.
+    """
+    import os
+
+    source = XMPCTL.read_text()
+    code = compile(source, str(XMPCTL), "exec")
+
+    namespace: dict = {
+        "__name__": "xmpctl_test_ns",
+        "__file__": str(XMPCTL),
+        "__builtins__": builtins,
+    }
+
+    orig_execv = os.execv
+    monkeypatch.setattr(os, "execv", lambda *a, **kw: None)
+    exec(code, namespace)  # noqa: S102
+    monkeypatch.setattr(os, "execv", orig_execv)
+
+    namespace["send_command"] = lambda cmd: fake_response
+    return namespace
+
+
+_FZF_FAKE_RESPONSE = {
+    "success": True,
+    "results": [
+        {
+            "provider": "tidal",
+            "track_id": "58990486",
+            "title": "Creep",
+            "artist": "Radiohead",
+            "album": "Pablo Honey",
+            "duration": "3:59",
+            "duration_seconds": 239,
+            "quality": "CD",
+            "liked": True,
+        },
+        {
+            "provider": "yt",
+            "track_id": "9RfVp-GhKfs",
+            "title": "Creep",
+            "artist": "Radiohead",
+            "album": None,
+            "duration": "3:59",
+            "duration_seconds": 239,
+            "quality": "Lo",
+            "liked": False,
+        },
+    ],
+}
+
+
+class TestXmpctlSearchJsonFzfFormat:
+    """Tests for xmpctl search-json --format fzf output."""
+
+    def test_fzf_format_outputs_tab_separated_lines(self, monkeypatch, capsys):
+        ns = _load_xmpctl_namespace(monkeypatch, _FZF_FAKE_RESPONSE)
+        ns["cmd_search_json"](["--format", "fzf", "radiohead"])
+        captured = capsys.readouterr()
+        lines = [ln for ln in captured.out.splitlines() if ln.strip()]
+        assert len(lines) == 2
+        for line in lines:
+            parts = line.split("\t")
+            assert len(parts) == 3
+
+    def test_fzf_format_first_field_is_provider(self, monkeypatch, capsys):
+        ns = _load_xmpctl_namespace(monkeypatch, _FZF_FAKE_RESPONSE)
+        ns["cmd_search_json"](["--format", "fzf", "radiohead"])
+        captured = capsys.readouterr()
+        lines = captured.out.strip().splitlines()
+        assert lines[0].split("\t")[0] == "tidal"
+        assert lines[1].split("\t")[0] == "yt"
+
+    def test_fzf_format_second_field_is_track_id(self, monkeypatch, capsys):
+        ns = _load_xmpctl_namespace(monkeypatch, _FZF_FAKE_RESPONSE)
+        ns["cmd_search_json"](["--format", "fzf", "radiohead"])
+        captured = capsys.readouterr()
+        lines = captured.out.strip().splitlines()
+        assert lines[0].split("\t")[1] == "58990486"
+        assert lines[1].split("\t")[1] == "9RfVp-GhKfs"
+
+    def test_fzf_format_visible_has_ansi_colors(self, monkeypatch, capsys):
+        ns = _load_xmpctl_namespace(monkeypatch, _FZF_FAKE_RESPONSE)
+        ns["cmd_search_json"](["--format", "fzf", "radiohead"])
+        captured = capsys.readouterr()
+        lines = captured.out.strip().splitlines()
+        # Tidal line has teal color
+        assert "\033[38;2;115;218;202m" in lines[0].split("\t")[2]
+        # YT line has pink color
+        assert "\033[38;2;247;118;142m" in lines[1].split("\t")[2]
+
+    def test_fzf_format_liked_shows_plus_one(self, monkeypatch, capsys):
+        ns = _load_xmpctl_namespace(monkeypatch, _FZF_FAKE_RESPONSE)
+        ns["cmd_search_json"](["--format", "fzf", "radiohead"])
+        captured = capsys.readouterr()
+        lines = captured.out.strip().splitlines()
+        assert "[+1]" in lines[0]  # tidal track is liked
+        assert "[+1]" not in lines[1]  # yt track is not liked
+
+    def test_fzf_format_empty_query_exits_silently(self, monkeypatch, capsys):
+        ns = _load_xmpctl_namespace(monkeypatch, _FZF_FAKE_RESPONSE)
+        with __import__("pytest").raises(SystemExit) as exc:
+            ns["cmd_search_json"](["--format", "fzf"])
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+    def test_fzf_format_single_char_query_exits_silently(
+        self, monkeypatch, capsys
+    ):
+        ns = _load_xmpctl_namespace(monkeypatch, _FZF_FAKE_RESPONSE)
+        with __import__("pytest").raises(SystemExit) as exc:
+            ns["cmd_search_json"](["--format", "fzf", "a"])
+        assert exc.value.code == 0
+
+    def test_help_mentions_format_fzf(self):
+        result = subprocess.run(
+            [str(XMPCTL), "help"],
+            capture_output=True,
+            text=True,
+        )
+        assert "--format fzf" in result.stdout
