@@ -212,6 +212,9 @@ class YTMusicProvider:
         client = self._ensure_client()
         # Access underlying ytmusicapi client directly (see NOTE above)
         yt = client._client
+        if yt is None:
+            logger.warning("get_radio: YTMusic client not initialized for %s", seed_track_id)
+            return []
         try:
             response = yt.get_watch_playlist(
                 videoId=seed_track_id, radio=True, limit=limit
@@ -220,15 +223,18 @@ class YTMusicProvider:
             logger.warning("get_radio failed for %s: %s", seed_track_id, e)
             return []
 
-        raw_tracks = (response or {}).get("tracks") or []
+        raw_resp: dict[str, Any] = response if isinstance(response, dict) else {}
+        raw_tracks: list[Any] = raw_resp.get("tracks") or []
         tracks: list[ProviderTrack] = []
 
         for t in raw_tracks:
+            if not isinstance(t, dict):
+                continue
             video_id = t.get("videoId")
             if not video_id:
                 continue
 
-            artists = t.get("artists") or []
+            artists: list[Any] = t.get("artists") or []
             artist_name: str | None = artists[0]["name"] if artists else None
             if artist_name == "Unknown Artist":
                 artist_name = None
@@ -244,7 +250,7 @@ class YTMusicProvider:
             if isinstance(album_info, dict):
                 album_name = album_info.get("name") or None
 
-            thumbnails = t.get("thumbnail") or []
+            thumbnails: list[Any] = t.get("thumbnail") or []
             art_url: str | None = thumbnails[-1].get("url") if thumbnails else None
 
             metadata = TrackMetadata(
