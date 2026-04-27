@@ -65,7 +65,7 @@ def mock_mpd_local_file():
 @pytest.fixture
 def mock_ytmusic():
     """Mock YouTube Music client."""
-    with patch("xmpd.ytmusic.YTMusicClient") as mock_client_class:
+    with patch("xmpd.providers.ytmusic.YTMusicClient") as mock_client_class:
         mock_instance = MagicMock()
         # Default: Track is neutral
         mock_instance.get_track_rating.return_value = RatingState.NEUTRAL
@@ -100,7 +100,7 @@ class TestLikeDislikeWorkflow:
         mock_ytmusic.get_track_rating.return_value = RatingState.NEUTRAL
 
         # Import and execute the command logic
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         # Simulate the command flow
         ytmusic = YTMusicClient()
@@ -130,7 +130,7 @@ class TestLikeDislikeWorkflow:
         # Setup: Track is already liked
         mock_ytmusic.get_track_rating.return_value = RatingState.LIKED
 
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
         rating_mgr = RatingManager()
@@ -150,7 +150,7 @@ class TestLikeDislikeWorkflow:
         """Test disliking a neutral track (NEUTRAL -> DISLIKED)."""
         mock_ytmusic.get_track_rating.return_value = RatingState.NEUTRAL
 
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
         rating_mgr = RatingManager()
@@ -169,7 +169,7 @@ class TestLikeDislikeWorkflow:
         """Test switching from dislike to like (DISLIKED -> LIKED)."""
         mock_ytmusic.get_track_rating.return_value = RatingState.DISLIKED
 
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
         rating_mgr = RatingManager()
@@ -188,7 +188,7 @@ class TestLikeDislikeWorkflow:
         """Test switching from like to dislike (LIKED -> DISLIKED)."""
         mock_ytmusic.get_track_rating.return_value = RatingState.LIKED
 
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
         rating_mgr = RatingManager()
@@ -211,7 +211,7 @@ class TestLikeDislikeWorkflow:
         """
         mock_ytmusic.get_track_rating.return_value = RatingState.DISLIKED
 
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
         rating_mgr = RatingManager()
@@ -272,7 +272,7 @@ class TestErrorHandling:
         # Setup: API raises error
         mock_ytmusic.get_track_rating.side_effect = YTMusicAPIError("API Error")
 
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
 
@@ -284,7 +284,7 @@ class TestErrorHandling:
         mock_ytmusic.get_track_rating.return_value = RatingState.NEUTRAL
         mock_ytmusic.set_track_rating.side_effect = YTMusicAPIError("API Error")
 
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
         rating_mgr = RatingManager()
@@ -299,7 +299,7 @@ class TestErrorHandling:
         """Test handling of authentication errors."""
         mock_ytmusic.get_track_rating.side_effect = YTMusicAuthError("Not authenticated")
 
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
 
@@ -310,7 +310,7 @@ class TestErrorHandling:
         """Test handling when track is not found in YouTube Music."""
         mock_ytmusic.get_track_rating.side_effect = YTMusicNotFoundError("Track not found")
 
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
 
@@ -339,7 +339,7 @@ class TestSyncTrigger:
         The actual xmpctl command calls send_command("sync") after liking.
         """
         from xmpd.rating import RatingState
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         mock_ytmusic.get_track_rating.return_value = RatingState.NEUTRAL
 
@@ -363,7 +363,7 @@ class TestSyncTrigger:
         NEUTRAL -> DISLIKED: Song wasn't in Liked Songs, so no sync needed.
         """
         from xmpd.rating import RatingState
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         mock_ytmusic.get_track_rating.return_value = RatingState.NEUTRAL
 
@@ -387,7 +387,7 @@ class TestSyncTrigger:
         LIKED -> DISLIKED: Song removed from Liked Songs, so sync needed.
         """
         from xmpd.rating import RatingState
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         mock_ytmusic.get_track_rating.return_value = RatingState.LIKED
 
@@ -411,7 +411,7 @@ class TestSyncTrigger:
         Song removed from Liked Songs, so sync needed.
         """
         from xmpd.rating import RatingState
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         mock_ytmusic.get_track_rating.return_value = RatingState.LIKED
 
@@ -436,7 +436,7 @@ class TestIntegrationWorkflow:
     def test_full_like_workflow_integration(self, mock_mpd, mock_ytmusic, mock_config):
         """Test complete like workflow from start to finish."""
         from xmpd.rating import RatingState
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         # Setup
         mock_ytmusic.get_track_rating.return_value = RatingState.NEUTRAL
@@ -468,7 +468,7 @@ class TestIntegrationWorkflow:
     def test_full_dislike_workflow_integration(self, mock_mpd, mock_ytmusic, mock_config):
         """Test complete dislike workflow from start to finish."""
         from xmpd.rating import RatingState
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         mock_ytmusic.get_track_rating.return_value = RatingState.LIKED
 
@@ -487,7 +487,7 @@ class TestIntegrationWorkflow:
     def test_toggle_behavior_like_twice(self, mock_mpd, mock_ytmusic, mock_config):
         """Test toggling like twice returns to neutral."""
         from xmpd.rating import RatingState
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
         rating_mgr = RatingManager()
@@ -510,7 +510,7 @@ class TestIntegrationWorkflow:
     def test_switch_from_like_to_dislike_to_like(self, mock_mpd, mock_ytmusic, mock_config):
         """Test switching between like and dislike states."""
         from xmpd.rating import RatingState
-        from xmpd.ytmusic import YTMusicClient
+        from xmpd.providers.ytmusic import YTMusicClient
 
         ytmusic = YTMusicClient()
         rating_mgr = RatingManager()
