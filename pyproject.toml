@@ -46,6 +46,7 @@ exclude = ["tests*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["bin/xmpd-search"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP"]
