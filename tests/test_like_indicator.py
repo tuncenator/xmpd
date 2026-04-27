@@ -7,15 +7,15 @@ and SyncEngine integration for the like indicator.
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 import yaml
 
 from xmpd.config import _validate_config, load_config
 from xmpd.mpd_client import MPDClient, TrackWithMetadata
+from xmpd.providers.base import Playlist, Provider, Track, TrackMetadata
 from xmpd.sync_engine import SyncEngine
-from xmpd.providers.ytmusic import Playlist, Track
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -558,129 +558,145 @@ class TestXSPFLikeIndicator:
 
 
 class TestSyncEngineLikeIndicator:
-    """Tests for SyncEngine like indicator integration."""
+    """Tests for SyncEngine like indicator integration (Phase 6 API)."""
 
-    def _make_engine(self, ytmusic, mpd, resolver, **kwargs):
-        """Create a SyncEngine with sensible defaults + overrides."""
+    def _make_provider(self, playlists, tracks_by_id, favorites=None):
+        """Create a mock Provider with given playlists and tracks."""
+        p = MagicMock(spec=Provider)
+        p.name = "yt"
+        p.list_playlists.return_value = playlists
+        p.get_playlist_tracks.side_effect = lambda pid: tracks_by_id.get(pid, [])
+        p.get_favorites.return_value = favorites or []
+        return p
+
+    def _track(self, tid, title, artist="A"):
+        return Track(
+            provider="yt",
+            track_id=tid,
+            metadata=TrackMetadata(
+                title=title, artist=artist, album=None,
+                duration_seconds=180, art_url=None,
+            ),
+        )
+
+    def _pl(self, pid, name, count=1):
+        return Playlist(
+            provider="yt", playlist_id=pid, name=name,
+            track_count=count, is_owned=True, is_favorites=False,
+        )
+
+    def _make_engine(self, provider, mpd, **kwargs):
+        """Create a SyncEngine with new API and sensible defaults + overrides."""
+        from unittest.mock import MagicMock
+        store = MagicMock()
         defaults = {
-            "sync_liked_songs": True,
+            "sync_favorites": True,
             "like_indicator": {"enabled": True, "tag": "+1", "alignment": "right"},
         }
         defaults.update(kwargs)
-        return SyncEngine(ytmusic, mpd, resolver, **defaults)
+        return SyncEngine(
+            provider_registry={"yt": provider},
+            mpd_client=mpd,
+            track_store=store,
+            playlist_prefix={"yt": "YT: "},
+            **defaults,
+        )
 
     def test_sync_passes_liked_ids_to_playlist_creation(self):
         """sync_all_playlists should pass liked_video_ids to create_or_replace_playlist."""
-        ytmusic = Mock()
-        ytmusic.get_user_playlists.return_value = [
-            Playlist(id="PL1", name="Mix", track_count=1),
-        ]
-        ytmusic.get_liked_songs.return_value = [
-            Track(video_id="liked1", title="Liked", artist="A"),
-            Track(video_id="liked2", title="Liked2", artist="B"),
-        ]
-        ytmusic.get_playlist_tracks.return_value = [
-            Track(video_id="vid1", title="Song", artist="C"),
-        ]
+        provider = self._make_provider(
+            playlists=[self._pl("PL1", "Mix", 1)],
+            tracks_by_id={"PL1": [self._track("vid1_abcde", "Song", "C")]},
+            favorites=[
+                self._track("liked1abcde", "Liked", "A"),
+                self._track("liked2abcde", "Liked2", "B"),
+            ],
+        )
 
         mpd = Mock()
-        resolver = Mock()
-        resolver.resolve_batch.return_value = {"vid1": "http://example.com/1.m4a"}
 
-        engine = self._make_engine(ytmusic, mpd, resolver)
+        engine = self._make_engine(provider, mpd)
         engine.sync_all_playlists()
 
         # Find the call for the regular playlist (not "Liked Songs")
         calls = mpd.create_or_replace_playlist.call_args_list
-        mix_call = [c for c in calls if c[0][0] == "YT: Mix"]
+        mix_call = [c for c in calls if c.args[0] == "YT: Mix"]
         assert len(mix_call) == 1
 
-        kwargs = mix_call[0][1]
-        assert kwargs["liked_video_ids"] == {"liked1", "liked2"}
-        assert kwargs["like_indicator"] == {"enabled": True, "tag": "+1", "alignment": "right"}
-        assert kwargs["is_liked_playlist"] is False
+        kw = mix_call[0].kwargs
+        assert kw["liked_video_ids"] == {"liked1abcde", "liked2abcde"}
+        assert kw["like_indicator"] == {"enabled": True, "tag": "+1", "alignment": "right"}
+        assert kw["is_liked_playlist"] is False
 
     def test_liked_playlist_gets_is_liked_flag(self):
-        """The liked songs playlist should be passed is_liked_playlist=True."""
-        ytmusic = Mock()
-        ytmusic.get_user_playlists.return_value = []
-        ytmusic.get_liked_songs.return_value = [
-            Track(video_id="liked1", title="Liked", artist="A"),
-        ]
+        """The favorites playlist should be passed is_liked_playlist=True."""
+        provider = self._make_provider(
+            playlists=[],
+            tracks_by_id={},
+            favorites=[self._track("liked1abcde", "Liked", "A")],
+        )
 
         mpd = Mock()
-        resolver = Mock()
-        resolver.resolve_batch.return_value = {"liked1": "http://example.com/liked1.m4a"}
 
-        engine = self._make_engine(ytmusic, mpd, resolver)
+        engine = self._make_engine(provider, mpd)
         engine.sync_all_playlists()
 
         calls = mpd.create_or_replace_playlist.call_args_list
-        liked_call = [c for c in calls if "Liked Songs" in c[0][0]]
+        liked_call = [c for c in calls if "Liked Songs" in c.args[0]]
         assert len(liked_call) == 1
-        assert liked_call[0][1]["is_liked_playlist"] is True
+        assert liked_call[0].kwargs["is_liked_playlist"] is True
 
-    def test_indicator_disabled_passes_empty_liked_set(self):
-        """When like_indicator is disabled, liked_video_ids should be empty."""
-        ytmusic = Mock()
-        ytmusic.get_user_playlists.return_value = [
-            Playlist(id="PL1", name="Mix", track_count=1),
-        ]
-        ytmusic.get_liked_songs.return_value = [
-            Track(video_id="liked1", title="Liked", artist="A"),
-        ]
-        ytmusic.get_playlist_tracks.return_value = [
-            Track(video_id="vid1", title="Song", artist="C"),
-        ]
+    def test_indicator_disabled_like_indicator_not_applied(self):
+        """When like_indicator is disabled, the indicator tag is not applied to titles.
+
+        The liked_video_ids set is still passed through to mpd_client (which
+        checks like_indicator.enabled internally and skips the tag). This test
+        verifies the correct like_indicator config reaches mpd_client.
+        """
+        provider = self._make_provider(
+            playlists=[self._pl("PL1", "Mix", 1)],
+            tracks_by_id={"PL1": [self._track("vid1_abcde", "Song", "C")]},
+            favorites=[self._track("liked1abcde", "Liked", "A")],
+        )
 
         mpd = Mock()
-        resolver = Mock()
-        resolver.resolve_batch.return_value = {"vid1": "http://example.com/1.m4a"}
+        disabled_indicator = {"enabled": False, "tag": "+1", "alignment": "right"}
 
         engine = self._make_engine(
-            ytmusic,
-            mpd,
-            resolver,
-            like_indicator={"enabled": False, "tag": "+1", "alignment": "right"},
+            provider, mpd,
+            like_indicator=disabled_indicator,
         )
         engine.sync_all_playlists()
 
         calls = mpd.create_or_replace_playlist.call_args_list
-        mix_call = [c for c in calls if c[0][0] == "YT: Mix"]
+        mix_call = [c for c in calls if c.args[0] == "YT: Mix"]
         assert len(mix_call) == 1
-        assert mix_call[0][1]["liked_video_ids"] == set()
+        # The disabled indicator config is forwarded; mpd_client skips the tag itself.
+        assert mix_call[0].kwargs["like_indicator"] == disabled_indicator
 
     def test_sync_liked_false_indicator_enabled_fetches_separately(self):
-        """When sync_liked_songs=False but indicator enabled, liked songs fetched for set only."""
-        ytmusic = Mock()
-        ytmusic.get_user_playlists.return_value = [
-            Playlist(id="PL1", name="Mix", track_count=1),
-        ]
-        ytmusic.get_liked_songs.return_value = [
-            Track(video_id="liked1", title="Liked", artist="A"),
-        ]
-        ytmusic.get_playlist_tracks.return_value = [
-            Track(video_id="vid1", title="Song", artist="C"),
-        ]
+        """When sync_favorites=False but indicator enabled, favorites fetched for set only."""
+        provider = self._make_provider(
+            playlists=[self._pl("PL1", "Mix", 1)],
+            tracks_by_id={"PL1": [self._track("vid1_abcde", "Song", "C")]},
+            favorites=[self._track("liked1abcde", "Liked", "A")],
+        )
 
         mpd = Mock()
-        resolver = Mock()
-        resolver.resolve_batch.return_value = {"vid1": "http://example.com/1.m4a"}
 
         engine = self._make_engine(
-            ytmusic,
-            mpd,
-            resolver,
-            sync_liked_songs=False,
+            provider, mpd,
+            sync_favorites=False,
             like_indicator={"enabled": True, "tag": "+1", "alignment": "right"},
         )
         engine.sync_all_playlists()
 
-        # get_liked_songs should have been called (for indicator set)
-        ytmusic.get_liked_songs.assert_called_once()
+        # get_favorites should have been called (for indicator set)
+        provider.get_favorites.assert_called_once()
 
-        # But no liked songs playlist should be created (only Mix)
+        # But no favorites playlist should be created (only Mix)
         calls = mpd.create_or_replace_playlist.call_args_list
         assert len(calls) == 1
-        assert calls[0][0][0] == "YT: Mix"
-        assert calls[0][1]["liked_video_ids"] == {"liked1"}
+        assert calls[0].args[0] == "YT: Mix"
+        # liked_track_ids is passed through; it contains the fetched favorite id
+        assert calls[0].kwargs["liked_video_ids"] == {"liked1abcde"}
