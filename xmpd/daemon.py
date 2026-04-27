@@ -111,7 +111,7 @@ class XMPDaemon:
             registry_config = dict(self.config)
             registry_config["yt"] = _build_yt_config(self.config)
 
-            raw_registry = build_registry(registry_config)
+            raw_registry = build_registry(registry_config, stream_resolver=self.stream_resolver)
 
             self.provider_registry: dict[str, Provider] = {}
             for name, provider in raw_registry.items():

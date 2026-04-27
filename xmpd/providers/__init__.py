@@ -35,11 +35,23 @@ def get_enabled_provider_names(config: dict[str, Any]) -> list[str]:
     return names
 
 
-def build_registry(config: dict[str, Any]) -> dict[str, Provider]:
+def build_registry(
+    config: dict[str, Any],
+    stream_resolver: Any = None,
+) -> dict[str, Provider]:
     """Build the provider registry from config.
 
     Lazy-imports each concrete provider module so unselected providers do not
     pull in their upstream library at import time.
+
+    Args:
+        config: Loaded config dict (must contain `yt` / `tidal` sections per
+            the post-Phase-11 schema).
+        stream_resolver: Optional `StreamResolver` instance to inject into
+            `YTMusicProvider`. Required for YT playback through the proxy --
+            without it, `YTMusicProvider.resolve_stream()` raises and proxy
+            URL refresh returns HTTP 500 on every request. The Tidal provider
+            does not use it (Tidal resolves URLs via tidalapi directly).
     """
     registry: dict[str, Provider] = {}
     enabled = get_enabled_provider_names(config)
@@ -47,7 +59,10 @@ def build_registry(config: dict[str, Any]) -> dict[str, Provider]:
     if "yt" in enabled:
         from xmpd.providers.ytmusic import YTMusicProvider
 
-        registry["yt"] = YTMusicProvider(config["yt"])  # type: ignore[assignment]  # Phase 3 completes Provider Protocol surface
+        registry["yt"] = YTMusicProvider(  # type: ignore[assignment]  # Phase 3 completes Provider Protocol surface
+            config["yt"],
+            stream_resolver=stream_resolver,
+        )
 
     if "tidal" in enabled:
         from xmpd.providers.tidal import TidalProvider
