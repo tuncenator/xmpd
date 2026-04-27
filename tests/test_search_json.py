@@ -5,7 +5,9 @@ import json
 import subprocess
 import time
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, patch
+
+from xmpd.providers.base import Track, TrackMetadata
 
 XMPCTL = Path(__file__).parent.parent / "bin" / "xmpctl"
 
@@ -19,19 +21,63 @@ _DAEMON_MOCK_CONFIG = {
     "proxy_host": "localhost",
     "proxy_port": 8080,
     "proxy_track_mapping_db": "/tmp/track_mapping.db",
+    "radio_playlist_limit": 25,
 }
 
 
-def _make_daemon(tmp_path, mock_get_config_dir, mock_load_config):
-    """Create a daemon instance with standard mocks."""
-    from xmpd.daemon import XMPDaemon
+def _make_yt_provider(authenticated: bool = True) -> MagicMock:
+    prov = MagicMock(name="yt_provider")
+    prov.name = "yt"
+    prov.is_authenticated.return_value = (authenticated, "" if authenticated else "no creds")
+    prov.is_enabled.return_value = True
+    return prov
 
+
+def _make_track(
+    provider: str = "yt",
+    track_id: str = "abc12345678",
+    title: str = "Test Track",
+    artist: str = "Test Artist",
+    album: str | None = None,
+    duration_seconds: int | None = 180,
+) -> Track:
+    return Track(
+        provider=provider,
+        track_id=track_id,
+        metadata=TrackMetadata(
+            title=title,
+            artist=artist,
+            album=album,
+            duration_seconds=duration_seconds,
+            art_url=None,
+        ),
+    )
+
+
+def _make_daemon(tmp_path, registry=None, config=None):
+    """Create a daemon with standard mocks, using provider registry pattern."""
     config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    (config_dir / "browser.json").touch()
-    mock_get_config_dir.return_value = config_dir
-    mock_load_config.return_value = dict(_DAEMON_MOCK_CONFIG)
-    return XMPDaemon()
+    config_dir.mkdir(exist_ok=True)
+
+    cfg = dict(_DAEMON_MOCK_CONFIG)
+    if config:
+        cfg.update(config)
+
+    if registry is None:
+        registry = {"yt": _make_yt_provider()}
+
+    with (
+        patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+        patch("xmpd.daemon.load_config", return_value=cfg),
+        patch("xmpd.daemon.build_registry", return_value=registry),
+        patch("xmpd.daemon.MPDClient"),
+        patch("xmpd.daemon.StreamResolver"),
+        patch("xmpd.daemon.SyncEngine"),
+        patch("xmpd.daemon.StreamRedirectProxy"),
+        patch("xmpd.daemon.TrackStore"),
+    ):
+        daemon = __import__("xmpd.daemon", fromlist=["XMPDaemon"]).XMPDaemon()
+    return daemon
 
 
 # ---------------------------------------------------------------------------
@@ -39,69 +85,35 @@ def _make_daemon(tmp_path, mock_get_config_dir, mock_load_config):
 # ---------------------------------------------------------------------------
 
 
-@patch("xmpd.daemon.YTMusicClient")
-@patch("xmpd.daemon.MPDClient")
-@patch("xmpd.daemon.StreamResolver")
-@patch("xmpd.daemon.SyncEngine")
-@patch("xmpd.daemon.load_config")
-@patch("xmpd.daemon.get_config_dir")
 class TestCmdSearchJson:
     """Tests for XMPDaemon._cmd_search_json()."""
 
-    def test_empty_query_returns_error(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
+    def test_empty_query_returns_error(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
         response = daemon._cmd_search_json([])
         assert response["success"] is False
         assert "Empty search query" in response["error"]
 
-    def test_whitespace_only_query_returns_error(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
+    def test_whitespace_only_query_returns_error(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
         response = daemon._cmd_search_json(["   "])
         assert response["success"] is False
         assert "Empty search query" in response["error"]
 
-    def test_returns_ndjson_fields(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
+    def test_returns_ndjson_fields(self, tmp_path):
         """Verify all required fields are present in each result."""
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.search = Mock(
-            return_value=[
-                {
-                    "video_id": "abc12345678",
-                    "title": "Creep",
-                    "artist": "Radiohead",
-                    "duration": 239,
-                }
-            ]
-        )
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[])
+        yt = _make_yt_provider()
+        yt.search.return_value = [
+            _make_track(
+                track_id="abc12345678",
+                title="Creep",
+                artist="Radiohead",
+                duration_seconds=239,
+            )
+        ]
+        yt.get_favorites.return_value = []
 
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         response = daemon._cmd_search_json(["radiohead"])
         assert response["success"] is True
         assert len(response["results"]) == 1
@@ -117,75 +129,34 @@ class TestCmdSearchJson:
         assert track["quality"] == "Lo"
         assert track["liked"] is False
 
-    def test_all_yt_tracks_have_quality_lo(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
+    def test_all_yt_tracks_have_quality_lo(self, tmp_path):
         """YT Music tracks always get quality='Lo'."""
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.search = Mock(
-            return_value=[
-                {
-                    "video_id": "aaaaaaaaaa1",
-                    "title": "Track A",
-                    "artist": "Artist",
-                    "duration": 180,
-                },
-                {
-                    "video_id": "bbbbbbbbbbb",
-                    "title": "Track B",
-                    "artist": "Artist",
-                    "duration": 240,
-                },
-            ]
-        )
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[])
+        yt = _make_yt_provider()
+        yt.search.return_value = [
+            _make_track(track_id="aaaaaaaaaa1", title="Track A", duration_seconds=180),
+            _make_track(track_id="bbbbbbbbbbb", title="Track B", duration_seconds=240),
+        ]
+        yt.get_favorites.return_value = []
 
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         response = daemon._cmd_search_json(["test"])
         assert response["success"] is True
         for track in response["results"]:
             assert track["quality"] == "Lo"
 
-    def test_liked_track_has_liked_true(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
+    def test_liked_track_has_liked_true(self, tmp_path):
         """Liked tracks show liked=True."""
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
+        liked_track = _make_track(track_id="abc12345678", title="Liked Song")
+        search_tracks = [
+            _make_track(track_id="abc12345678", title="Liked Song", duration_seconds=200),
+            _make_track(track_id="zzz12345678", title="Other Song", duration_seconds=180),
+        ]
 
-        liked_track = Mock()
-        liked_track.video_id = "abc12345678"
+        yt = _make_yt_provider()
+        yt.search.return_value = search_tracks
+        yt.get_favorites.return_value = [liked_track]
 
-        daemon.ytmusic_client.search = Mock(
-            return_value=[
-                {
-                    "video_id": "abc12345678",
-                    "title": "Liked Song",
-                    "artist": "Artist",
-                    "duration": 200,
-                },
-                {
-                    "video_id": "zzz12345678",
-                    "title": "Other Song",
-                    "artist": "Artist",
-                    "duration": 180,
-                },
-            ]
-        )
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[liked_track])
-
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         response = daemon._cmd_search_json(["test"])
         assert response["success"] is True
 
@@ -195,94 +166,61 @@ class TestCmdSearchJson:
         assert liked_result["liked"] is True
         assert unloved_result["liked"] is False
 
-    def test_no_results_returns_empty_list(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.search = Mock(return_value=[])
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[])
+    def test_no_results_returns_empty_list(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.search.return_value = []
+        yt.get_favorites.return_value = []
 
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         response = daemon._cmd_search_json(["nonexistent xyz 999"])
         assert response["success"] is True
         assert response["results"] == []
 
-    def test_limit_flag_passed_to_search(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.search = Mock(return_value=[])
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[])
+    def test_limit_flag_passed_to_search(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.search.return_value = []
+        yt.get_favorites.return_value = []
 
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         daemon._cmd_search_json(["--limit", "5", "radiohead"])
-        daemon.ytmusic_client.search.assert_called_once_with("radiohead", limit=5)
+        yt.search.assert_called_once_with("radiohead", limit=5)
 
-    def test_provider_flag_accepted(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """--provider flag is parsed without error."""
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.search = Mock(return_value=[])
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[])
+    def test_provider_flag_accepted(self, tmp_path):
+        """--provider flag restricts to named provider."""
+        yt = _make_yt_provider()
+        yt.search.return_value = []
+        yt.get_favorites.return_value = []
 
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         response = daemon._cmd_search_json(["--provider", "yt", "radiohead"])
         assert response["success"] is True
 
-    def test_search_api_failure_returns_error(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.search = Mock(side_effect=Exception("API timeout"))
-
-        response = daemon._cmd_search_json(["radiohead"])
+    def test_unknown_provider_returns_error(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        response = daemon._cmd_search_json(["--provider", "spotify", "radiohead"])
         assert response["success"] is False
-        assert "Search failed" in response["error"]
+        assert "Unknown provider" in response["error"]
 
-    def test_liked_ids_cache_is_used(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """get_liked_songs is only called once when cache is warm."""
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.search = Mock(
-            return_value=[
-                {"video_id": "abc12345678", "title": "Song", "artist": "Artist", "duration": 180}
-            ]
-        )
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[])
+    def test_search_api_failure_returns_error(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.search.side_effect = Exception("API timeout")
+        yt.get_favorites.return_value = []
+
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        response = daemon._cmd_search_json(["radiohead"])
+        # Search failures for individual providers are caught; returns empty
+        assert response["success"] is True
+        assert response["results"] == []
+
+    def test_liked_ids_cache_is_used(self, tmp_path):
+        """get_favorites is only called once when cache is warm."""
+        yt = _make_yt_provider()
+        yt.search.return_value = [
+            _make_track(track_id="abc12345678", title="Song", duration_seconds=180),
+        ]
+        yt.get_favorites.return_value = []
+
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
 
         # Prime cache then mark fresh
         daemon._get_liked_ids()
@@ -292,27 +230,17 @@ class TestCmdSearchJson:
         daemon._cmd_search_json(["radiohead"])
         daemon._cmd_search_json(["radiohead"])
 
-        assert daemon.ytmusic_client.get_liked_songs.call_count == 1
+        assert yt.get_favorites.call_count == 1
 
-    def test_duration_formatted_correctly(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
+    def test_duration_formatted_correctly(self, tmp_path):
         """Duration field is formatted as M:SS."""
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.search = Mock(
-            return_value=[
-                {"video_id": "abc12345678", "title": "Track", "artist": "Artist", "duration": 65}
-            ]
-        )
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[])
+        yt = _make_yt_provider()
+        yt.search.return_value = [
+            _make_track(track_id="abc12345678", title="Track", duration_seconds=65),
+        ]
+        yt.get_favorites.return_value = []
 
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         response = daemon._cmd_search_json(["test"])
         assert response["results"][0]["duration"] == "1:05"
         assert response["results"][0]["duration_seconds"] == 65
@@ -323,85 +251,45 @@ class TestCmdSearchJson:
 # ---------------------------------------------------------------------------
 
 
-@patch("xmpd.daemon.YTMusicClient")
-@patch("xmpd.daemon.MPDClient")
-@patch("xmpd.daemon.StreamResolver")
-@patch("xmpd.daemon.SyncEngine")
-@patch("xmpd.daemon.load_config")
-@patch("xmpd.daemon.get_config_dir")
 class TestGetLikedIds:
     """Tests for XMPDaemon._get_liked_ids()."""
 
-    def test_returns_empty_set_when_no_liked_songs(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[])
+    def test_returns_empty_set_when_no_liked_songs(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.get_favorites.return_value = []
 
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         result = daemon._get_liked_ids()
         assert result == set()
 
-    def test_returns_video_ids_from_liked_songs(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
+    def test_returns_track_ids_from_favorites(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.get_favorites.return_value = [
+            _make_track(track_id="abc12345678"),
+            _make_track(track_id="def12345678"),
+        ]
 
-        t1 = Mock()
-        t1.video_id = "abc12345678"
-        t2 = Mock()
-        t2.video_id = "def12345678"
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[t1, t2])
-
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         result = daemon._get_liked_ids()
         assert result == {"abc12345678", "def12345678"}
 
-    def test_cache_avoids_repeated_api_calls(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.get_liked_songs = Mock(return_value=[])
+    def test_cache_avoids_repeated_api_calls(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.get_favorites.return_value = []
 
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         daemon._get_liked_ids()
         daemon._liked_ids_cache_time = time.time()  # Mark fresh
         daemon._get_liked_ids()
         daemon._get_liked_ids()
 
-        assert daemon.ytmusic_client.get_liked_songs.call_count == 1
+        assert yt.get_favorites.call_count == 1
 
-    def test_failed_fetch_returns_empty_on_first_call(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        daemon = _make_daemon(tmp_path, mock_get_config_dir, mock_load_config)
-        daemon.ytmusic_client.get_liked_songs = Mock(side_effect=Exception("Network error"))
+    def test_failed_fetch_returns_empty_on_first_call(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.get_favorites.side_effect = Exception("Network error")
 
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
         result = daemon._get_liked_ids()
         assert result == set()
 

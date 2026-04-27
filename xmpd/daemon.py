@@ -1014,28 +1014,43 @@ class XMPDaemon:
             return {"success": False, "error": f"Radio generation failed: {e}"}
 
     def _get_liked_ids(self) -> set[str]:
-        """Return the cached set of liked video IDs, refreshing if stale.
+        """Return the cached set of liked track IDs across all providers.
+
+        Uses provider_registry.get_favorites() to collect liked IDs.
+        Results are cached for 5 minutes to avoid repeated API calls.
 
         Returns:
-            Set of liked video IDs. Empty set if fetch fails.
+            Set of liked track IDs (compound: "provider:track_id"). Empty set
+            if fetch fails.
         """
         now = time.time()
         if now - self._liked_ids_cache_time < self._liked_ids_cache_ttl:
             return self._liked_ids_cache
 
-        try:
-            liked_tracks = self.ytmusic_client.get_liked_songs()
-            self._liked_ids_cache = {t.video_id for t in liked_tracks} if liked_tracks else set()
-            self._liked_ids_cache_time = now
-            logger.debug(f"Refreshed liked IDs cache: {len(self._liked_ids_cache)} tracks")
-        except Exception as e:
-            logger.warning(f"Failed to refresh liked IDs cache: {e}")
-            # Keep stale cache rather than returning empty on transient errors,
-            # but only if we have something cached already.
-            if not self._liked_ids_cache_time:
-                self._liked_ids_cache = set()
+        liked: set[str] = set()
+        for pname, prov in self.provider_registry.items():
+            try:
+                is_auth, _ = prov.is_authenticated()
+                if not is_auth:
+                    continue
+                favorites = prov.get_favorites()
+                for track in favorites:
+                    liked.add(track.track_id)
+            except Exception as e:
+                logger.warning("Failed to fetch favorites for %s: %s", pname, e)
+
+        self._liked_ids_cache = liked
+        self._liked_ids_cache_time = now
+        logger.debug("Refreshed liked IDs cache: %d tracks", len(liked))
 
         return self._liked_ids_cache
+
+    @staticmethod
+    def _quality_for_provider(provider_name: str) -> str:
+        """Return default quality label for a provider's search results."""
+        if provider_name == "tidal":
+            return "CD"
+        return "Lo"
 
     def _cmd_search_json(self, args: list[str]) -> dict[str, Any]:
         """Handle 'search-json' command - return structured JSON search results.
@@ -1071,43 +1086,54 @@ class XMPDaemon:
 
         query = " ".join(remaining).strip()
         logger.info(
-            f"search-json command: query={query!r}, provider={provider_filter}, limit={limit}"
+            "search-json command: query=%r, provider=%s, limit=%d",
+            query, provider_filter, limit,
         )
 
         if not query:
             return {"success": False, "error": "Empty search query"}
 
-        try:
-            raw_results = self.ytmusic_client.search(query, limit=limit)
-        except Exception as e:
-            logger.error(f"search-json: search failed: {e}")
-            return {"success": False, "error": f"Search failed: {str(e)}"}
-
-        if not raw_results:
-            return {"success": True, "results": []}
+        # Determine which providers to search
+        if provider_filter and provider_filter != "all":
+            if provider_filter not in self.provider_registry:
+                return {"success": False, "error": f"Unknown provider: {provider_filter}"}
+            targets = {provider_filter: self.provider_registry[provider_filter]}
+        else:
+            targets = self.provider_registry
 
         # Get liked IDs for like-state population
         liked_ids = self._get_liked_ids()
 
-        results = []
-        for track in raw_results:
-            video_id = track.get("video_id", "")
-            duration_secs = track.get("duration", 0) or 0
-            results.append(
-                {
-                    "provider": "yt",
-                    "track_id": video_id,
-                    "title": track.get("title", "Unknown"),
-                    "artist": track.get("artist", "Unknown Artist"),
-                    "album": track.get("album") or None,
-                    "duration": self._format_duration(int(duration_secs)),
-                    "duration_seconds": int(duration_secs),
-                    "quality": "Lo",
-                    "liked": video_id in liked_ids if video_id else None,
-                }
-            )
+        results: list[dict[str, Any]] = []
+        for pname, prov in targets.items():
+            try:
+                is_auth, _ = prov.is_authenticated()
+                if not is_auth:
+                    continue
+                search_results = prov.search(query, limit=limit)
+            except Exception as e:
+                logger.warning("search-json: search failed for %s: %s", pname, e)
+                continue
 
-        logger.info(f"search-json: returning {len(results)} results for {query!r}")
+            quality = self._quality_for_provider(pname)
+            for track in search_results:
+                duration_secs = track.metadata.duration_seconds or 0
+                results.append(
+                    {
+                        "provider": track.provider,
+                        "track_id": track.track_id,
+                        "title": track.metadata.title,
+                        "artist": track.metadata.artist or "Unknown Artist",
+                        "album": track.metadata.album or None,
+                        "duration": self._format_duration(duration_secs),
+                        "duration_seconds": duration_secs,
+                        "quality": quality,
+                        "liked": track.track_id in liked_ids
+                        if track.track_id else None,
+                    }
+                )
+
+        logger.info("search-json: returning %d results for %r", len(results), query)
         return {"success": True, "results": results}
 
     def _cmd_play(self, provider: str, track_id: str | None) -> dict[str, Any]:

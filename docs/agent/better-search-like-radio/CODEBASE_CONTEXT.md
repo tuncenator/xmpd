@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Phase 0 - Initial Setup (2026-04-28)
+> Last updated by: Checkpoint 1 - Phases 1-2 (2026-04-28)
 
 ---
 
@@ -26,7 +26,7 @@ xmpd is a Python 3.11 async music daemon proxy that sits between MPD (playback) 
 | File Path | Purpose | Notes |
 |-----------|---------|-------|
 | `xmpd/daemon.py` | Core daemon, socket listener, command routing | `XMPDaemon` class, handles `search`, `play`, `queue`, `radio`, `like` commands |
-| `xmpd/stream_proxy.py` | HTTP proxy for lazy stream URL resolution | `StreamRedirectProxy` class, `MAX_CONCURRENT_STREAMS = 10`, connection counter with lock |
+| `xmpd/stream_proxy.py` | HTTP proxy for lazy stream URL resolution | `StreamRedirectProxy` class, semaphore-gated resolution (max 10), uncapped streaming |
 | `xmpd/sync_engine.py` | Playlist sync orchestrator | `SyncEngine` class, `_sync_provider_playlist()` handles M3U/XSPF generation |
 | `xmpd/mpd_client.py` | MPD communication wrapper | `MPDClient` class, playlist creation, like indicator application |
 | `xmpd/providers/base.py` | Provider Protocol definition | `Provider` Protocol with `search()`, `get_radio()`, `like()`, `resolve_stream()`, etc. |
@@ -42,6 +42,7 @@ xmpd is a Python 3.11 async music daemon proxy that sits between MPD (playback) 
 | `bin/xmpctl` | CLI client | Python script, command dispatcher, search UI, socket communication |
 | `bin/xmpd-status` | i3blocks status widget | Provider colors, quality classification, progress bar |
 | `tests/test_stream_proxy.py` | Stream proxy tests | Connection handling, DASH stitching, cancellation safety |
+| `tests/test_search_json.py` | search-json command tests | 16 daemon unit tests + 5 xmpctl CLI tests |
 | `tests/test_like_indicator.py` | Like indicator tests | [+1] tagging in M3U/XSPF |
 
 ---
@@ -94,15 +95,19 @@ Raw ytmusicapi results have: `videoId`, `title`, `artists`, `album`, `duration`,
 
 ```python
 class StreamRedirectProxy:
-    MAX_CONCURRENT_STREAMS = 10
+    MAX_CONCURRENT_RESOLUTIONS = 10
     def __init__(self, ...):
-        self._active_connections = 0
-        self._connection_lock = asyncio.Lock()
+        self._resolution_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RESOLUTIONS)
+        self._active_resolutions = 0
+        self._active_streams = 0
+        self._counter_lock = asyncio.Lock()
     async def _handle_proxy_request(self, request: web.Request) -> web.StreamResponse: ...
+    async def _resolve_stream_url(self, provider, track_id, req_id) -> tuple[str, bool]: ...
+    async def _do_resolve(self, provider, track_id, req_id) -> tuple[str, bool]: ...
     async def _stream_dash_via_ffmpeg(self, request, manifest_url, provider, track_id) -> web.StreamResponse: ...
 ```
 
-Connection counter incremented under lock, decremented in finally block with CancelledError fallback. Known to still leak (see Phase 1).
+Concurrency model: semaphore-gated resolution phase, uncapped DASH streaming. Resolution slot released immediately after URL resolution, before streaming starts. Health endpoint reports `active_resolutions`, `active_streams`, `max_concurrent_resolutions`, `resolution_semaphore_free`. Per-request tracing via `[PROXY:8charhex]` log prefix.
 
 ### MPDClient._apply_like_indicator() (`xmpd/mpd_client.py:201`)
 
@@ -120,6 +125,24 @@ def send_command(command: str) -> dict[str, Any]:
     # Sends command string over Unix socket to daemon
     # Returns parsed JSON response
 ```
+
+### XMPDaemon socket command: search-json
+
+```
+search-json [--provider yt|all] [--limit N] QUERY
+```
+
+Returns `{"success": true, "results": [...]}` where each result has: `provider`, `track_id`, `title`, `artist`, `album`, `duration` (M:SS), `duration_seconds`, `quality` ("Lo" for YT, "CD" for Tidal), `liked` (bool or null).
+
+Uses `provider_registry` to search across providers. Liked state populated via `_get_liked_ids()` which caches favorites for 5 minutes.
+
+### XMPDaemon._get_liked_ids()
+
+Returns `set[str]` of liked track IDs across all providers, cached 5 min. Uses `provider.get_favorites()` from the provider registry.
+
+### xmpctl cmd_search_json()
+
+CLI function: sends `search-json ...` to daemon, prints one `json.dumps(track)` per line (NDJSON) to stdout. Used by Phase 3's fzf integration.
 
 ### Quality Classification (`bin/xmpd-status:168`)
 
