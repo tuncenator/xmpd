@@ -47,7 +47,7 @@
 
 - **Conductor Mode**: enabled
 - **Total Batches**: 4
-- **Current Batch**: 2
+- **Current Batch**: 3
 - **Pacing**: full-auto
 - **Batches Per Session**: N/A
 - **Execution Plan**: docs/agent/better-search-like-radio/EXECUTION_PLAN.md
@@ -55,16 +55,16 @@
 ---
 
 **Last Updated:** 2026-04-28
-**Current Phase:** 3 of 5
-**Phase Name:** Interactive fzf Search
-**Progress:** 40% (2/5 phases complete)
+**Current Phase:** 4 of 5
+**Phase Name:** Search Actions
+**Progress:** 60% (3/5 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[########------------] 40% (2/5)
+[############--------] 60% (3/5)
 ```
 
 ---
@@ -75,22 +75,22 @@
 |-------|------|--------|
 | 1 | Fix Proxy Connection Leak | `[Complete]` |
 | 2 | Search API Enhancement | `[Complete]` |
-| 3 | Interactive fzf Search | `[Current]` |
-| 4 | Search Actions | `[Pending]` |
+| 3 | Interactive fzf Search | `[Complete]` |
+| 4 | Search Actions | `[Current]` |
 | 5 | Real-time Like Updates | `[Pending]` |
 
 ---
 
 ## Instructions for Agents
 
-1. Read `phase_plans/PHASE_03.md` for detailed requirements for Phase 3
-2. Read recent summaries: `summaries/PHASE_01_SUMMARY.md`, `summaries/PHASE_02_SUMMARY.md`
+1. Read `phase_plans/PHASE_04.md` for detailed requirements for Phase 4
+2. Read recent summaries: `summaries/PHASE_02_SUMMARY.md`, `summaries/PHASE_03_SUMMARY.md`
 3. Complete the phase following the build-verify-commit cycle
-4. Create `summaries/PHASE_03_SUMMARY.md`
+4. Create `summaries/PHASE_04_SUMMARY.md`
 5. Update this file:
-   - Mark Phase 3 as `[Complete]`
-   - Set Phase 4 as `[Current]`
-   - Update "Current Phase" to "4 of 5"
+   - Mark Phase 4 as `[Complete]`
+   - Set Phase 5 as `[Current]`
+   - Update "Current Phase" to "5 of 5"
    - Update "Progress" percentage and count
    - Update progress bar (each `#` = completed phase, each `-` = remaining phase)
 
