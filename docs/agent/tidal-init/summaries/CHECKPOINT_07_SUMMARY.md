@@ -78,30 +78,38 @@ No helpers were required or used by Phase 10. No helper issues reported.
 
 ## Code Review Results
 
-**Result**: REVIEW FAILED (2 Important + 2 Minor)
-**Reviewer**: spark-code-reviewer (claude-opus-4-6)
-**Diff range**: `a6e8cd6..df7d165`
+**Result**: REVIEW PASSED WITH NOTES (3 Minor) -- after one fix cycle
+**Reviewer**: spark-code-reviewer (claude-opus-4-6), 2 passes
+**Diff range (final)**: `a6e8cd6..cebf18c`
 
-### Findings
+### Pass 1 (REVIEW FAILED, 2 Important + 2 Minor)
 
 | Severity | # | File / Line | Description |
 |----------|---|-------------|-------------|
-| Important | 1 | `xmpd/providers/tidal.py:278-279` | `get_track_metadata` raises `XMPDError` on `ObjectNotFound` instead of returning `None` per Protocol contract (`base.py:83`: `get_track_metadata(track_id: str) -> TrackMetadata \| None`). The docstring even says "or None on not-found." but the code raises. YTMusic implementation returns `None` on not-found. Callers using `if meta is None:` get an unexpected exception. |
-| Important | 2 | `xmpd/providers/tidal.py:262-269` | `resolve_stream` retry block after `TooManyRequests` only catches `TooManyRequests` on the second attempt. If the retry call raises `AuthenticationError` (token expired between attempts) or `URLNotAvailable`, raw `tidalapi` exceptions leak past the provider boundary. Outer `except AuthenticationError` doesn't cover the inner `try` block. |
-| Minor | 3 | `xmpd/providers/tidal.py:158, 179` | `pl.num_tracks if pl.num_tracks is not None and pl.num_tracks >= 0 else 0` duplicated. Could be a helper. |
-| Minor | 4 | `xmpd/providers/tidal.py:111-117, 281-286` | Album art-URL extraction try/except duplicated between `_to_shared_track` and `get_track_metadata`. |
+| Important | 1 | `xmpd/providers/tidal.py:278-279` | `get_track_metadata` raised `XMPDError` on `ObjectNotFound` instead of returning `None` per Protocol contract (`base.py:83`: `TrackMetadata \| None`). |
+| Important | 2 | `xmpd/providers/tidal.py:262-269` | `resolve_stream` retry block after `TooManyRequests` only caught `TooManyRequests` on the second attempt. `AuthenticationError` / `URLNotAvailable` leaked as raw `tidalapi` exceptions. |
+| Minor | 3 | `xmpd/providers/tidal.py:158, 179` | `num_tracks` coercion duplicated. (Carried over.) |
+| Minor | 4 | `xmpd/providers/tidal.py:111-117, 281-286` | Art-URL extraction duplicated between `_to_shared_track` and `get_track_metadata`. (Carried over.) |
 
-### Notes (review pass items)
+### Fix applied (commit `cebf18c`)
 
-- All 10 external interfaces in the phase plan have captured samples in PHASE_10_SUMMARY.md.
-- No token leaks in committed diff. `get_url()` evidence redacted to scheme+host+path-prefix.
-- HARD GUARDRAIL discipline correct in both live tests: sentinel selection skip, `try`/`finally` cleanup, `pre_count == post_count` RuntimeError on mismatch.
-- Quality clamp logic correct: `session.config.quality = Quality.high_lossless` set before every `track.get_url()`. One-time INFO log fires when `quality_ceiling == "HI_RES_LOSSLESS"` and `_hires_warned` is False; flag set after.
-- `_favorites_ids` cache invariants all correct (no lazy populate on write; lazy populate on first read; correct add/discard on like/unlike).
-- `dislike` correctly aliases `unlike` (no duplicated logic).
-- `report_play` correctly best-effort: catches `Exception`, logs warning, never raises.
-- No helper edits in the diff (no `scripts/spark-*.sh` changes).
-- Track id boundary discipline correct: `str(t.id)` everywhere.
+`[Checkpoint 7/9] fix: get_track_metadata returns None on not-found, resolve_stream retry handles all exception types`
+
+- `get_track_metadata` now catches `ObjectNotFound`, logs warning, returns `None`. Test renamed: `test_get_track_metadata_object_not_found_returns_none`.
+- `resolve_stream` refactored to a `for attempt in (1, 2):` loop. Both attempts share identical handlers: `URLNotAvailable -> XMPDError`, `TooManyRequests -> sleep+retry-or-raise`, `AuthenticationError -> TidalAuthRequired`. Two new tests: `test_retry_authentication_error_raises_tidal_auth_required`, `test_retry_url_not_available_raises_xmpderror`. Total unit tests now 35 (was 33).
+- mypy / ruff clean; full suite 778 passed (modulo 2 pre-existing).
+
+### Pass 2 (REVIEW PASSED WITH NOTES)
+
+Both Important findings RESOLVED. The retry loop's second-attempt branch raises XMPDError ("rate-limit persisted"), no infinite loop. `return None` sentinel after the loop is unreachable but keeps mypy satisfied. Token scan clean; helper edits zero (no `scripts/spark-*.sh`); HARD GUARDRAIL discipline in live tests untouched by the fix; evidence-vs-types drift clean across all 10 captured interfaces.
+
+| Severity | # | Description |
+|----------|---|-------------|
+| Minor | 1 | `num_tracks` coercion duplicated in `list_playlists` (lines 160, 181). Could be a one-line helper. (Carried over from Pass 1.) |
+| Minor | 2 | Album art extraction duplicated between `_to_shared_track` and `get_track_metadata`. (Carried over from Pass 1.) |
+| Minor | 3 | PHASE_10_SUMMARY.md says "33 unit tests"; actual after fix is 35. Cosmetic-only documentation drift. |
+
+The 3 Minor issues are cosmetic / documentation-only and do not block the checkpoint. They can be addressed opportunistically in a future cleanup pass.
 
 ---
 
