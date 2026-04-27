@@ -59,7 +59,7 @@ def _make_daemon(tmp_path, config_dict):
         patch("xmpd.daemon.MPDClient"),
         patch("xmpd.daemon.StreamResolver"),
         patch("xmpd.daemon.SyncEngine"),
-        patch("xmpd.daemon.ICYProxyServer"),
+        patch("xmpd.daemon.StreamRedirectProxy"),
         patch("xmpd.daemon.TrackStore"),
         patch("xmpd.daemon.HistoryReporter") as mock_hr_cls,
     ):

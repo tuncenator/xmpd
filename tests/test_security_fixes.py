@@ -3,20 +3,20 @@
 This module tests the critical security and stability fixes:
 1. Path traversal vulnerability in playlist names
 2. Thread safety in TrackStore
-3. URL validation in ICY proxy
+3. URL validation in stream proxy
 4. Socket timeout handling
 """
 
-import pytest
-import tempfile
+import socket
 import threading
 import time
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 
+import pytest
+
+from xmpd.exceptions import MPDPlaylistError
 from xmpd.mpd_client import MPDClient, TrackWithMetadata
 from xmpd.track_store import TrackStore
-from xmpd.exceptions import MPDPlaylistError
 
 
 class TestPathTraversalProtection:
@@ -248,14 +248,14 @@ class TestTrackStoreThreadSafety:
 
 
 class TestProxyURLValidation:
-    """Test URL validation in ICY proxy server."""
+    """Test URL validation in stream proxy server."""
 
     @pytest.mark.asyncio
     async def test_proxy_rejects_none_stream_url(self):
         """Test that proxy rejects None stream URLs."""
-        from xmpd.icy_proxy import ICYProxyServer
-        from aiohttp import web
         from aiohttp.test_utils import TestClient, TestServer
+
+        from xmpd.stream_proxy import StreamRedirectProxy
 
         # Create store with track that has None stream_url
         store = TrackStore(":memory:")
@@ -267,17 +267,18 @@ class TestProxyURLValidation:
         )
 
         # Create proxy without resolver (so it can't resolve URLs)
-        proxy = ICYProxyServer(track_store=store, stream_resolver=None)
+        proxy = StreamRedirectProxy(track_store=store, provider_registry={}, stream_resolver=None)
 
         async with TestClient(TestServer(proxy.app)) as client:
-            resp = await client.get("/proxy/test1234567")
+            resp = await client.get("/proxy/yt/test1234567")
             assert resp.status == 502  # Bad Gateway
 
     @pytest.mark.asyncio
     async def test_proxy_rejects_invalid_stream_url(self):
         """Test that proxy rejects invalid stream URLs."""
-        from xmpd.icy_proxy import ICYProxyServer
         from aiohttp.test_utils import TestClient, TestServer
+
+        from xmpd.stream_proxy import StreamRedirectProxy
 
         # Create store with track that has invalid stream_url
         store = TrackStore(":memory:")
@@ -288,17 +289,18 @@ class TestProxyURLValidation:
             artist="Test Artist",
         )
 
-        proxy = ICYProxyServer(track_store=store)
+        proxy = StreamRedirectProxy(track_store=store, provider_registry={})
 
         async with TestClient(TestServer(proxy.app)) as client:
-            resp = await client.get("/proxy/test1234567")
+            resp = await client.get("/proxy/yt/test1234567")
             assert resp.status == 502  # Bad Gateway
 
     @pytest.mark.asyncio
     async def test_proxy_accepts_valid_stream_url(self):
         """Test that proxy accepts valid stream URLs."""
-        from xmpd.icy_proxy import ICYProxyServer
         from aiohttp.test_utils import TestClient, TestServer
+
+        from xmpd.stream_proxy import StreamRedirectProxy
 
         # Create store with track that has valid stream_url
         store = TrackStore(":memory:")
@@ -309,11 +311,11 @@ class TestProxyURLValidation:
             artist="Test Artist",
         )
 
-        proxy = ICYProxyServer(track_store=store)
+        proxy = StreamRedirectProxy(track_store=store, provider_registry={})
 
         async with TestClient(TestServer(proxy.app)) as client:
             # Don't follow redirects so we can verify the 307 response
-            resp = await client.get("/proxy/test1234567", allow_redirects=False)
+            resp = await client.get("/proxy/yt/test1234567", allow_redirects=False)
             # Should be 307 redirect
             assert resp.status == 307
             assert resp.headers["Location"] == "https://example.com/stream"
@@ -324,8 +326,6 @@ class TestSocketTimeout:
 
     def test_socket_has_timeout_set(self):
         """Test that socket timeout is configured when handling connection."""
-        import socket
-
         # Test that timeout is set to 5.0 seconds
         # This is a simpler unit test that doesn't require full daemon initialization
         mock_conn = Mock(spec=socket.socket)
@@ -333,9 +333,6 @@ class TestSocketTimeout:
         mock_conn.recv.return_value = b"status"
         mock_conn.sendall = Mock()
         mock_conn.close = Mock()
-
-        # Import the daemon module
-        import xmpd.daemon as daemon_module
 
         # The socket timeout should be set in _handle_socket_connection
         # We can verify the code sets it by checking the implementation

@@ -7,6 +7,7 @@ playlist syncing to MPD, with support for periodic auto-sync and manual triggers
 import asyncio
 import json
 import logging
+import re
 import signal
 import socket
 import threading
@@ -14,17 +15,17 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from xmpd.config import get_config_dir, load_config
 from xmpd.auth.ytmusic_cookie import FirefoxCookieExtractor
+from xmpd.config import get_config_dir, load_config
 from xmpd.exceptions import CookieExtractionError, MPDConnectionError
 from xmpd.history_reporter import HistoryReporter
-from xmpd.icy_proxy import ICYProxyServer
 from xmpd.mpd_client import MPDClient
 from xmpd.notify import send_notification
+from xmpd.providers.ytmusic import YTMusicClient
+from xmpd.stream_proxy import StreamRedirectProxy
 from xmpd.stream_resolver import StreamResolver
 from xmpd.sync_engine import SyncEngine
 from xmpd.track_store import TrackStore
-from xmpd.providers.ytmusic import YTMusicClient
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +86,20 @@ class XMPDaemon:
 
             # Initialize proxy components if enabled
             self.track_store: TrackStore | None = None
-            self.proxy_server: ICYProxyServer | None = None
+            self.proxy_server: StreamRedirectProxy | None = None
             self.proxy_config: dict[str, Any] | None = None
 
             if self.config.get("proxy_enabled", True):
-                logger.info("Initializing ICY proxy server...")
+                logger.info("Initializing stream proxy server...")
                 self.track_store = TrackStore(self.config["proxy_track_mapping_db"])
-                self.proxy_server = ICYProxyServer(
+                # TODO(phase-8): build provider_registry from config; drop stream_resolver kwarg.
+                self.proxy_server = StreamRedirectProxy(
                     track_store=self.track_store,
-                    stream_resolver=self.stream_resolver,
+                    provider_registry={},  # placeholder; Phase 8 wires the real registry
+                    stream_resolver=self.stream_resolver,  # legacy YT path until Phase 8
                     host=self.config["proxy_host"],
                     port=self.config["proxy_port"],
+                    stream_cache_hours={"yt": self.config["stream_cache_hours"]},
                 )
                 self.proxy_config = {
                     "enabled": True,
@@ -214,7 +218,7 @@ class XMPDaemon:
 
         # Start proxy server if enabled
         if self.proxy_server:
-            logger.info("Starting ICY proxy server...")
+            logger.info("Starting stream proxy server...")
             self._proxy_thread = threading.Thread(target=self._run_proxy_server, daemon=True)
             self._proxy_thread.start()
 
@@ -298,7 +302,7 @@ class XMPDaemon:
 
         # Stop proxy server if enabled
         if self.proxy_server and self._proxy_loop:
-            logger.info("Stopping ICY proxy server...")
+            logger.info("Stopping stream proxy server...")
             try:
                 # Signal the proxy server to shut down
                 if self._proxy_shutdown_event:
@@ -845,7 +849,7 @@ class XMPDaemon:
     def _extract_video_id_from_url(self, url: str) -> str | None:
         """Extract YouTube video ID from proxy URL.
 
-        Proxy URLs follow pattern: http://localhost:PORT/proxy/VIDEO_ID
+        Proxy URLs follow pattern: http://localhost:PORT/proxy/yt/VIDEO_ID
 
         Args:
             url: URL to extract video ID from.
@@ -856,10 +860,8 @@ class XMPDaemon:
         if not url:
             return None
 
-        # Match pattern: */proxy/{video_id}
-        import re
-
-        match = re.search(r"/proxy/([A-Za-z0-9_-]{11})$", url)
+        # Match pattern: */proxy/yt/{video_id} or legacy */proxy/{video_id}
+        match = re.search(r"/proxy/(?:yt/)?([A-Za-z0-9_-]{11})$", url)
         return match.group(1) if match else None
 
     def _cmd_radio(self, video_id: str | None) -> dict[str, Any]:
@@ -961,7 +963,8 @@ class XMPDaemon:
                         if lazy_resolution and self.track_store:
                             try:
                                 self.track_store.add_track(
-                                    video_id=vid,
+                                    provider="yt",
+                                    track_id=vid,
                                     stream_url=None,  # Will be resolved on-demand by proxy
                                     title=title,
                                     artist=artist,
@@ -1092,7 +1095,7 @@ class XMPDaemon:
             if lazy_resolution:
                 # Use proxy URL directly (stream will be resolved on-demand)
                 proxy_port = self.proxy_config.get("port", 6602)
-                proxy_url = f"http://localhost:{proxy_port}/proxy/{video_id}"
+                proxy_url = f"http://localhost:{proxy_port}/proxy/yt/{video_id}"
                 logger.info(f"Using proxy URL for on-demand resolution: {proxy_url}")
             else:
                 # Resolve stream URL now
@@ -1146,7 +1149,7 @@ class XMPDaemon:
             if lazy_resolution:
                 # Use proxy URL directly (stream will be resolved on-demand)
                 proxy_port = self.proxy_config.get("port", 6602)
-                proxy_url = f"http://localhost:{proxy_port}/proxy/{video_id}"
+                proxy_url = f"http://localhost:{proxy_port}/proxy/yt/{video_id}"
                 logger.info(f"Using proxy URL for on-demand resolution: {proxy_url}")
             else:
                 # Resolve stream URL now

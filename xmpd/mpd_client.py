@@ -14,6 +14,7 @@ from mpd import CommandError, ConnectionError
 from mpd import MPDClient as MPDClientBase
 
 from xmpd.exceptions import MPDConnectionError, MPDPlaylistError
+from xmpd.proxy_url import build_proxy_url
 from xmpd.xspf_generator import XSPFTrack, generate_xspf
 
 logger = logging.getLogger(__name__)
@@ -330,7 +331,9 @@ class MPDClient:
 
                 # Use proxy URL if proxy is enabled, otherwise use direct URL
                 if proxy_config and proxy_config.get("enabled", False):
-                    track_url = f"http://{proxy_config['host']}:{proxy_config['port']}/proxy/{track.video_id}"
+                    track_url = build_proxy_url(
+                        "yt", track.video_id, proxy_config["host"], proxy_config["port"]
+                    )
                 else:
                     track_url = track.url
 
@@ -386,7 +389,9 @@ class MPDClient:
             for track in tracks:
                 # Use proxy URL if proxy is enabled, otherwise use direct URL
                 if proxy_config and proxy_config.get("enabled", False):
-                    track_url = f"http://{proxy_config['host']}:{proxy_config['port']}/proxy/{track.video_id}"
+                    track_url = build_proxy_url(
+                        "yt", track.video_id, proxy_config["host"], proxy_config["port"]
+                    )
                 else:
                     track_url = track.url
 
