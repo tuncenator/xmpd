@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from ytmusicapi import YTMusic
 
 from xmpd.config import get_config_dir
-from xmpd.exceptions import ProxyError, YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
+from xmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
 from xmpd.providers.base import Playlist as ProviderPlaylist
 from xmpd.providers.base import Track as ProviderTrack
 from xmpd.providers.base import TrackMetadata
@@ -123,13 +123,19 @@ class YTMusicProvider:
         raw_tracks = client.get_liked_songs(limit=None)
         return [self._local_track_to_provider(t, liked=True) for t in raw_tracks]
 
-    def resolve_stream(self, track_id: str) -> str:
-        """Resolve a direct stream URL via the injected StreamResolver."""
+    def resolve_stream(self, track_id: str) -> str | None:
+        """Resolve a direct stream URL via the injected StreamResolver.
+
+        Returns the URL string on success, or None if the resolver could not
+        produce a URL. Raises YTMusicAPIError only when no StreamResolver has
+        been injected (programmer error).
+        """
         if self._stream_resolver is None:
             raise YTMusicAPIError("YTMusicProvider has no StreamResolver injected")
         url = self._stream_resolver.resolve_video_id(track_id)
         if url is None:
-            raise ProxyError(f"Failed to resolve YT stream URL for {track_id}")
+            logger.warning("resolve_stream: resolver returned None for %s", track_id)
+            return None
         return url
 
     def get_track_metadata(self, track_id: str) -> TrackMetadata | None:
@@ -270,24 +276,56 @@ class YTMusicProvider:
 
         return tracks
 
-    def like(self, track_id: str) -> None:
-        self._ensure_client().set_track_rating(track_id, RatingState.LIKED)
+    def like(self, track_id: str) -> bool:
+        try:
+            self._ensure_client().set_track_rating(track_id, RatingState.LIKED)
+            return True
+        except (YTMusicAPIError, YTMusicAuthError) as e:
+            logger.warning("like failed for %s: %s", track_id, e)
+            return False
+        except Exception as e:
+            logger.warning("like: unexpected error for %s: %s", track_id, e)
+            return False
 
-    def dislike(self, track_id: str) -> None:
-        self._ensure_client().set_track_rating(track_id, RatingState.DISLIKED)
+    def dislike(self, track_id: str) -> bool:
+        try:
+            self._ensure_client().set_track_rating(track_id, RatingState.DISLIKED)
+            return True
+        except (YTMusicAPIError, YTMusicAuthError) as e:
+            logger.warning("dislike failed for %s: %s", track_id, e)
+            return False
+        except Exception as e:
+            logger.warning("dislike: unexpected error for %s: %s", track_id, e)
+            return False
 
-    def unlike(self, track_id: str) -> None:
-        self._ensure_client().set_track_rating(track_id, RatingState.NEUTRAL)
+    def unlike(self, track_id: str) -> bool:
+        try:
+            self._ensure_client().set_track_rating(track_id, RatingState.NEUTRAL)
+            return True
+        except (YTMusicAPIError, YTMusicAuthError) as e:
+            logger.warning("unlike failed for %s: %s", track_id, e)
+            return False
+        except Exception as e:
+            logger.warning("unlike: unexpected error for %s: %s", track_id, e)
+            return False
 
-    def get_like_state(self, track_id: str) -> bool:
+    def get_like_state(self, track_id: str) -> str:
+        """Return one of 'LIKED', 'DISLIKED', 'NEUTRAL'."""
+        _state_to_str = {
+            RatingState.LIKED: "LIKED",
+            RatingState.DISLIKED: "DISLIKED",
+            RatingState.NEUTRAL: "NEUTRAL",
+        }
         state = self._ensure_client().get_track_rating(track_id)
-        return state == RatingState.LIKED
+        return _state_to_str.get(state, "NEUTRAL")
 
-    def report_play(self, track_id: str, duration_seconds: int) -> None:
+    def report_play(self, track_id: str, duration_seconds: int) -> bool:
         """Report a play to YouTube Music history. Best-effort; never raises.
 
         duration_seconds is part of the Provider contract but is unused by
         ytmusicapi's add_history_item() implementation.
+
+        Returns True on success, False on failure.
         """
         try:
             client = self._ensure_client()
@@ -297,8 +335,11 @@ class YTMusicProvider:
                 logger.warning(
                     "report_play: YT history report returned False for %s", track_id
                 )
+                return False
+            return True
         except Exception as e:
             logger.warning("report_play: unexpected error for %s: %s", track_id, e)
+            return False
 
     # -----------------------------------------------------------------------
     # Internal helpers

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from xmpd.exceptions import ProxyError, YTMusicAPIError, YTMusicNotFoundError
+from xmpd.exceptions import YTMusicAPIError, YTMusicNotFoundError
 from xmpd.providers.base import Provider
 from xmpd.providers.base import Track as ProviderTrack
 from xmpd.providers.ytmusic import Playlist as LocalPlaylist
@@ -196,12 +196,12 @@ def test_resolve_stream_delegates_to_resolver(
     mock_resolver.resolve_video_id.assert_called_once_with("vid1")
 
 
-def test_resolve_stream_raises_on_none(
+def test_resolve_stream_returns_none_when_resolver_returns_none(
     provider_with_resolver: YTMusicProvider, mock_resolver: MagicMock
 ) -> None:
     mock_resolver.resolve_video_id.return_value = None
-    with pytest.raises(ProxyError):
-        provider_with_resolver.resolve_stream("vid1")
+    result = provider_with_resolver.resolve_stream("vid1")
+    assert result is None
 
 
 def test_resolve_stream_raises_when_resolver_missing() -> None:
@@ -394,25 +394,60 @@ def test_get_radio_returns_empty_on_api_exception(
 # ---------------------------------------------------------------------------
 
 
-def test_like_sets_state_liked(
+def test_like_returns_true_on_success(
     provider: YTMusicProvider, mock_client: MagicMock
 ) -> None:
-    provider.like("vid1")
+    result = provider.like("vid1")
+    assert result is True
     mock_client.set_track_rating.assert_called_once_with("vid1", RatingState.LIKED)
 
 
-def test_dislike_sets_state_disliked(
+def test_like_returns_false_on_api_error(
     provider: YTMusicProvider, mock_client: MagicMock
 ) -> None:
-    provider.dislike("vid1")
+    mock_client.set_track_rating.side_effect = YTMusicAPIError("fail")
+    result = provider.like("vid1")
+    assert result is False
+
+
+def test_like_returns_false_on_unexpected_error(
+    provider: YTMusicProvider, mock_client: MagicMock
+) -> None:
+    mock_client.set_track_rating.side_effect = RuntimeError("boom")
+    result = provider.like("vid1")
+    assert result is False
+
+
+def test_dislike_returns_true_on_success(
+    provider: YTMusicProvider, mock_client: MagicMock
+) -> None:
+    result = provider.dislike("vid1")
+    assert result is True
     mock_client.set_track_rating.assert_called_once_with("vid1", RatingState.DISLIKED)
 
 
-def test_unlike_sets_state_neutral(
+def test_dislike_returns_false_on_api_error(
     provider: YTMusicProvider, mock_client: MagicMock
 ) -> None:
-    provider.unlike("vid1")
+    mock_client.set_track_rating.side_effect = YTMusicAPIError("fail")
+    result = provider.dislike("vid1")
+    assert result is False
+
+
+def test_unlike_returns_true_on_success(
+    provider: YTMusicProvider, mock_client: MagicMock
+) -> None:
+    result = provider.unlike("vid1")
+    assert result is True
     mock_client.set_track_rating.assert_called_once_with("vid1", RatingState.NEUTRAL)
+
+
+def test_unlike_returns_false_on_api_error(
+    provider: YTMusicProvider, mock_client: MagicMock
+) -> None:
+    mock_client.set_track_rating.side_effect = YTMusicAPIError("fail")
+    result = provider.unlike("vid1")
+    assert result is False
 
 
 # ---------------------------------------------------------------------------
@@ -420,25 +455,25 @@ def test_unlike_sets_state_neutral(
 # ---------------------------------------------------------------------------
 
 
-def test_get_like_state_true_when_liked(
+def test_get_like_state_returns_liked(
     provider: YTMusicProvider, mock_client: MagicMock
 ) -> None:
     mock_client.get_track_rating.return_value = RatingState.LIKED
-    assert provider.get_like_state("vid1") is True
+    assert provider.get_like_state("vid1") == "LIKED"
 
 
-def test_get_like_state_false_when_neutral(
+def test_get_like_state_returns_neutral(
     provider: YTMusicProvider, mock_client: MagicMock
 ) -> None:
     mock_client.get_track_rating.return_value = RatingState.NEUTRAL
-    assert provider.get_like_state("vid1") is False
+    assert provider.get_like_state("vid1") == "NEUTRAL"
 
 
-def test_get_like_state_false_when_disliked(
+def test_get_like_state_returns_disliked(
     provider: YTMusicProvider, mock_client: MagicMock
 ) -> None:
     mock_client.get_track_rating.return_value = RatingState.DISLIKED
-    assert provider.get_like_state("vid1") is False
+    assert provider.get_like_state("vid1") == "DISLIKED"
 
 
 # ---------------------------------------------------------------------------
@@ -446,31 +481,33 @@ def test_get_like_state_false_when_disliked(
 # ---------------------------------------------------------------------------
 
 
-def test_report_play_swallows_exceptions(
+def test_report_play_returns_false_on_exception(
     provider: YTMusicProvider, mock_client: MagicMock
 ) -> None:
     mock_client.get_song.side_effect = Exception("Network error")
-    # Must not raise
-    provider.report_play("vid1", 180)
+    # Must not raise; returns False
+    result = provider.report_play("vid1", 180)
+    assert result is False
 
 
-def test_report_play_logs_when_report_returns_false(
+def test_report_play_returns_false_when_report_returns_false(
     provider: YTMusicProvider, mock_client: MagicMock
 ) -> None:
     mock_client.get_song.return_value = {"fake": "song"}
     mock_client.report_history.return_value = False
-    # Must not raise; just logs a warning
-    provider.report_play("vid1", 180)
+    result = provider.report_play("vid1", 180)
+    assert result is False
     mock_client.get_song.assert_called_once_with("vid1")
     mock_client.report_history.assert_called_once()
 
 
-def test_report_play_succeeds_normally(
+def test_report_play_returns_true_on_success(
     provider: YTMusicProvider, mock_client: MagicMock
 ) -> None:
     mock_client.get_song.return_value = {"fake": "song"}
     mock_client.report_history.return_value = True
-    provider.report_play("vid1", 200)
+    result = provider.report_play("vid1", 200)
+    assert result is True
     mock_client.report_history.assert_called_once()
 
 
