@@ -484,10 +484,63 @@ def cmd_search(query: str | None = None, provider: str | None = None) -> None:
         sys.exit(1)
 
 
-def cmd_search_json(args: list[str]) -> None:
-    """Output search results as NDJSON (one JSON object per line) for fzf consumption.
+def format_track_fzf(track: dict[str, Any]) -> str:
+    """Format a track dict as an ANSI-colored fzf display line.
 
-    Usage: search-json [--provider yt|all] [--limit N] QUERY
+    Output format: {provider}\\t{track_id}\\t{visible_colored_line}
+    fzf uses --with-nth=3.. to show only the visible part.
+
+    Args:
+        track: Track dict with provider, track_id, title, artist, duration,
+               quality, liked fields.
+
+    Returns:
+        Tab-separated line: provider, track_id, ANSI-colored display text.
+    """
+    provider = track.get("provider", "yt")
+    track_id = track.get("track_id", "")
+    title = track.get("title", "Unknown")
+    artist = track.get("artist", "Unknown Artist")
+    duration = track.get("duration", "0:00")
+    quality = track.get("quality")
+    liked = track.get("liked", False)
+
+    # Provider tag and color
+    TIDAL_COLOR = "\033[38;2;115;218;202m"
+    YT_COLOR = "\033[38;2;247;118;142m"
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+
+    if provider == "tidal":
+        color = TIDAL_COLOR
+        tag = "[TD]"
+    else:
+        color = YT_COLOR
+        tag = "[YT]"
+
+    # Quality badge
+    badge = ""
+    if quality == "HR":
+        badge = f" {BOLD}HR{RESET}{color}"
+    elif quality == "CD":
+        badge = " CD"
+    elif quality == "Lo":
+        badge = f" {DIM}Lo{RESET}{color}"
+
+    # Liked indicator
+    liked_str = " [+1]" if liked is True else ""
+
+    # Build visible line: [TD] CD [+1] Artist - Title (3:59)
+    visible = f"{color}{tag}{badge}{liked_str} {artist} - {title} ({duration}){RESET}"
+
+    return f"{provider}\t{track_id}\t{visible}"
+
+
+def cmd_search_json(args: list[str]) -> None:
+    """Output search results as NDJSON or fzf-formatted lines.
+
+    Usage: search-json [--provider yt|all] [--limit N] [--format fzf] QUERY
 
     Args:
         args: Arguments after 'search-json' from sys.argv.
@@ -495,6 +548,7 @@ def cmd_search_json(args: list[str]) -> None:
     # Extract query and flags from args
     provider = "all"
     limit = 25
+    output_format = "json"
     query_parts: list[str] = []
     i = 0
     while i < len(args):
@@ -507,15 +561,25 @@ def cmd_search_json(args: list[str]) -> None:
             except ValueError:
                 pass
             i += 2
+        elif args[i] == "--format" and i + 1 < len(args):
+            output_format = args[i + 1]
+            i += 2
         else:
             query_parts.append(args[i])
             i += 1
 
     query = " ".join(query_parts).strip()
     if not query:
+        # For fzf format, exit silently on empty query (fzf sends empty on start)
+        if output_format == "fzf":
+            sys.exit(0)
         print("Error: search-json requires a query", file=sys.stderr)
         print("Usage: xmpctl search-json [--provider yt|all] [--limit N] QUERY", file=sys.stderr)
         sys.exit(1)
+
+    # Skip single-char queries for fzf (debounce: too short to be useful)
+    if output_format == "fzf" and len(query) < 2:
+        sys.exit(0)
 
     # Build command string for daemon
     cmd_parts = ["search-json"]
@@ -533,8 +597,12 @@ def cmd_search_json(args: list[str]) -> None:
         sys.exit(1)
 
     tracks = result.get("results", [])
-    for track in tracks:
-        print(json.dumps(track))
+    if output_format == "fzf":
+        for track in tracks:
+            print(format_track_fzf(track))
+    else:
+        for track in tracks:
+            print(json.dumps(track))
 
 
 def cmd_radio(apply: bool = False, provider: str | None = None) -> None:
@@ -900,6 +968,7 @@ def show_help() -> None:
   xmpctl search-json QUERY       Search and output NDJSON (for fzf integration)
                                   --provider yt|all  Restrict provider (default: all)
                                   --limit N          Max results (default: 25)
+                                  --format fzf       ANSI-colored tab-separated fzf lines
   xmpctl radio [--apply]         Generate radio from current track (provider inferred)
                                   --provider <name>  Force provider
                                   --apply            Load and play immediately
