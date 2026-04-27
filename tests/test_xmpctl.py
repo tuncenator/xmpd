@@ -134,16 +134,19 @@ class TestYtmpctlSearch:
 class TestXmpctlAuth:
     """Tests for the restructured auth subcommand."""
 
-    def test_xmpctl_auth_tidal_prints_stub(self):
-        """xmpctl auth tidal prints the stub and exits 0."""
-        result = subprocess.run(
-            [str(XMPCTL), "auth", "tidal"],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "tidal" in result.stdout.lower()
-        assert "future" in result.stdout.lower()
+    def test_xmpctl_auth_tidal_no_longer_prints_stub(self):
+        """xmpctl auth tidal no longer prints the old stub message.
+
+        The stub said 'future release'. Phase 11 replaces it with the real
+        OAuth flow. We verify the stub text is gone by checking the source.
+        We do NOT invoke the live OAuth flow in this unit test.
+        """
+        xmpctl_src = Path(XMPCTL).read_text()
+        # The old stub message contained these phrases:
+        assert "future xmpd release" not in xmpctl_src
+        assert "future release" not in xmpctl_src
+        # The real implementation calls run_oauth_flow
+        assert "run_oauth_flow" in xmpctl_src
 
     def test_xmpctl_auth_unknown_provider(self):
         """xmpctl auth spotify exits 1."""

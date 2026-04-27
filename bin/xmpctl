@@ -684,6 +684,40 @@ def cmd_dislike() -> None:
         sys.exit(1)
 
 
+def cmd_auth_tidal() -> None:
+    """Run Tidal OAuth device flow and persist session token."""
+    from xmpd.auth.tidal_oauth import run_oauth_flow
+    from xmpd.exceptions import TidalAuthRequired
+
+    session_path = Path.home() / ".config" / "xmpd" / "tidal_session.json"
+    try:
+        run_oauth_flow(session_path)
+        check = "OK" if not has_unicode_support() else "✓"
+        print(colorize(f"{check} Tidal authentication successful.", "green"))
+        print(f"Token saved to: {session_path}")
+        print()
+        print("Next steps:")
+        print(
+            f"  1. Edit ~/.config/xmpd/config.yaml and set "
+            f"{colorize('tidal.enabled: true', 'blue')}"
+        )
+        print(
+            f"  2. Restart the daemon: "
+            f"{colorize('systemctl --user restart xmpd', 'blue')}"
+        )
+    except TidalAuthRequired as e:
+        cross = "ERROR" if not has_unicode_support() else "✗"
+        print(colorize(f"{cross} Tidal authentication failed: {e}", "red"), file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\nAuthentication cancelled", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        cross = "ERROR" if not has_unicode_support() else "✗"
+        print(colorize(f"{cross} Unexpected error: {e}", "red"), file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_auth(provider: str, manual: bool = False) -> None:
     """Set up or refresh authentication for a provider.
 
@@ -715,7 +749,7 @@ def cmd_auth(provider: str, manual: bool = False) -> None:
 
             try:
                 config = load_config()
-                auto_auth = config.get("auto_auth", {})
+                auto_auth = config.get("yt", {}).get("auto_auth", {})
 
                 extractor = FirefoxCookieExtractor(
                     browser=auto_auth.get("browser", "firefox-dev"),
@@ -751,12 +785,7 @@ def cmd_auth(provider: str, manual: bool = False) -> None:
                 sys.exit(1)
 
     elif provider == "tidal":
-        print(
-            "Tidal authentication will be available in a future xmpd release.\n"
-            "This release introduces the multi-source provider abstraction with YouTube\n"
-            "Music as the only enabled provider. To preview Tidal config keys, see\n"
-            "examples/config.yaml."
-        )
+        cmd_auth_tidal()
 
     else:
         print(f"Unknown provider: {provider}", file=sys.stderr)
@@ -776,7 +805,7 @@ def show_help() -> None:
                                   Providers: yt, tidal
   xmpctl auth yt                 Auto-extract YouTube Music cookies from Firefox
   xmpctl auth yt --manual        Manual ytmusicapi browser-headers setup
-  xmpctl auth tidal              (Coming in a future release)
+  xmpctl auth tidal              Run Tidal OAuth device flow; persists token
 
   xmpctl search [query]          Search across providers (interactive if no query)
                                   --provider <name>  Restrict to one provider
@@ -832,6 +861,12 @@ def main() -> NoReturn:
         cmd_radio(apply=apply, provider=provider)
     elif command == "search":
         provider, remaining = parse_provider_flag(args)
+        if provider is not None and provider not in ("yt", "tidal", "all"):
+            print(
+                f"Error: --provider must be 'yt', 'tidal', or 'all', got: {provider}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         query = " ".join(remaining) if remaining else None
         cmd_search(query=query, provider=provider)
     elif command == "like":

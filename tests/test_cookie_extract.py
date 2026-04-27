@@ -382,61 +382,67 @@ class TestBuildBrowserJson:
 
 
 class TestAutoAuthConfig:
+    """Tests for yt.auto_auth config validation (migrated from top-level auto_auth)."""
+
     def test_default_config_has_auto_auth(self) -> None:
         from xmpd.config import _validate_config
 
-        config = _validate_config({"auto_auth": {"enabled": False, "browser": "firefox-dev"}})
-        assert config["auto_auth"]["enabled"] is False
+        config = _validate_config(
+            {"yt": {"auto_auth": {"enabled": False, "browser": "firefox-dev"}}}
+        )
+        assert config["yt"]["auto_auth"]["enabled"] is False
 
     def test_invalid_browser(self) -> None:
         from xmpd.config import _validate_config
 
-        with pytest.raises(ValueError, match="auto_auth.browser"):
-            _validate_config({"auto_auth": {"browser": "chrome"}})
+        with pytest.raises(ValueError, match="yt.auto_auth.browser"):
+            _validate_config({"yt": {"auto_auth": {"browser": "chrome"}}})
 
     def test_invalid_enabled(self) -> None:
         from xmpd.config import _validate_config
 
-        with pytest.raises(ValueError, match="auto_auth.enabled"):
-            _validate_config({"auto_auth": {"enabled": "yes"}})
+        with pytest.raises(ValueError, match="yt.auto_auth.enabled"):
+            _validate_config({"yt": {"auto_auth": {"enabled": "yes"}}})
 
     def test_invalid_container_type(self) -> None:
         from xmpd.config import _validate_config
 
-        with pytest.raises(ValueError, match="auto_auth.container"):
-            _validate_config({"auto_auth": {"container": 123}})
+        with pytest.raises(ValueError, match="yt.auto_auth.container"):
+            _validate_config({"yt": {"auto_auth": {"container": 123}}})
 
     def test_invalid_profile_type(self) -> None:
         from xmpd.config import _validate_config
 
-        with pytest.raises(ValueError, match="auto_auth.profile"):
-            _validate_config({"auto_auth": {"profile": 123}})
+        with pytest.raises(ValueError, match="yt.auto_auth.profile"):
+            _validate_config({"yt": {"auto_auth": {"profile": 123}}})
 
     def test_invalid_refresh_interval(self) -> None:
         from xmpd.config import _validate_config
 
-        with pytest.raises(ValueError, match="auto_auth.refresh_interval_hours"):
-            _validate_config({"auto_auth": {"refresh_interval_hours": -1}})
+        with pytest.raises(ValueError, match="yt.auto_auth.refresh_interval_hours"):
+            _validate_config({"yt": {"auto_auth": {"refresh_interval_hours": -1}}})
 
     def test_valid_full_config(self) -> None:
         from xmpd.config import _validate_config
 
         config = _validate_config(
             {
-                "auto_auth": {
-                    "enabled": True,
-                    "browser": "firefox",
-                    "container": "Personal",
-                    "profile": "abc.default",
-                    "refresh_interval_hours": 6,
+                "yt": {
+                    "auto_auth": {
+                        "enabled": True,
+                        "browser": "firefox",
+                        "container": "Personal",
+                        "profile": "abc.default",
+                        "refresh_interval_hours": 6,
+                    }
                 }
             }
         )
-        assert config["auto_auth"]["enabled"] is True
-        assert config["auto_auth"]["container"] == "Personal"
+        assert config["yt"]["auto_auth"]["enabled"] is True
+        assert config["yt"]["auto_auth"]["container"] == "Personal"
 
     def test_null_container_is_valid(self) -> None:
         from xmpd.config import _validate_config
 
-        config = _validate_config({"auto_auth": {"container": None}})
-        assert config["auto_auth"]["container"] is None
+        config = _validate_config({"yt": {"auto_auth": {"container": None}}})
+        assert config["yt"]["auto_auth"]["container"] is None
