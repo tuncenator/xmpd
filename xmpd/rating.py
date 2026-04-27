@@ -27,6 +27,8 @@ State Machine:
 from dataclasses import dataclass
 from enum import Enum
 
+from xmpd.providers.base import Provider
+
 
 class RatingState(Enum):
     """Represents the current rating state of a track.
@@ -178,3 +180,33 @@ class RatingManager:
                 f"Unknown API rating value: '{api_rating}'. "
                 f"Expected 'LIKE', 'DISLIKE', or 'INDIFFERENT'."
             )
+
+
+# ---------------------------------------------------------------------------
+# Provider dispatch helper
+# ---------------------------------------------------------------------------
+
+
+def apply_to_provider(
+    provider: Provider,
+    transition: RatingTransition,
+    track_id: str,
+) -> None:
+    """Translate a state-machine transition into a provider call.
+
+    api_value == "LIKE"        -> provider.like(track_id)
+    api_value == "DISLIKE"     -> provider.dislike(track_id)
+    api_value == "INDIFFERENT" -> provider.unlike(track_id)
+
+    Note: "INDIFFERENT" maps to ``unlike`` regardless of whether the
+    transition came from LIKED -> NEUTRAL or DISLIKED -> NEUTRAL.
+    """
+    api_value = transition.api_value
+    if api_value == "LIKE":
+        provider.like(track_id)
+    elif api_value == "DISLIKE":
+        provider.dislike(track_id)
+    elif api_value == "INDIFFERENT":
+        provider.unlike(track_id)
+    else:
+        raise ValueError(f"Unknown api_value: {api_value!r}")

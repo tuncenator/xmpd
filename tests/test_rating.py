@@ -3,9 +3,18 @@
 Tests the RatingManager state machine and all state transitions.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 
-from xmpd.rating import RatingAction, RatingManager, RatingState, RatingTransition
+from xmpd.providers.base import Provider
+from xmpd.rating import (
+    RatingAction,
+    RatingManager,
+    RatingState,
+    RatingTransition,
+    apply_to_provider,
+)
 
 
 class TestRatingStateEnum:
@@ -313,3 +322,66 @@ class TestRatingManagerIntegration:
         # Or user can dislike from this state
         result_dislike = manager.apply_action(current_state, RatingAction.DISLIKE)
         assert result_dislike.new_state == RatingState.DISLIKED
+
+
+# ---------------------------------------------------------------------------
+# apply_to_provider tests
+# ---------------------------------------------------------------------------
+
+
+class TestApplyToProvider:
+    def test_like_calls_provider_like(self):
+        p = MagicMock(spec=Provider)
+        transition = RatingTransition(
+            current_state=RatingState.NEUTRAL,
+            action=RatingAction.LIKE,
+            new_state=RatingState.LIKED,
+            api_value="LIKE",
+            user_message="Liked",
+        )
+        apply_to_provider(p, transition, "track123")
+        p.like.assert_called_once_with("track123")
+        p.dislike.assert_not_called()
+        p.unlike.assert_not_called()
+
+    def test_dislike_calls_provider_dislike(self):
+        p = MagicMock(spec=Provider)
+        transition = RatingTransition(
+            current_state=RatingState.NEUTRAL,
+            action=RatingAction.DISLIKE,
+            new_state=RatingState.DISLIKED,
+            api_value="DISLIKE",
+            user_message="Disliked",
+        )
+        apply_to_provider(p, transition, "track123")
+        p.dislike.assert_called_once_with("track123")
+        p.like.assert_not_called()
+        p.unlike.assert_not_called()
+
+    def test_remove_like_calls_provider_unlike(self):
+        p = MagicMock(spec=Provider)
+        transition = RatingManager().apply_action(RatingState.LIKED, RatingAction.LIKE)
+        assert transition.api_value == "INDIFFERENT"
+        apply_to_provider(p, transition, "track123")
+        p.unlike.assert_called_once_with("track123")
+        p.like.assert_not_called()
+        p.dislike.assert_not_called()
+
+    def test_remove_dislike_calls_provider_unlike(self):
+        p = MagicMock(spec=Provider)
+        transition = RatingManager().apply_action(RatingState.DISLIKED, RatingAction.DISLIKE)
+        assert transition.api_value == "INDIFFERENT"
+        apply_to_provider(p, transition, "track123")
+        p.unlike.assert_called_once_with("track123")
+
+    def test_unknown_api_value_raises(self):
+        p = MagicMock(spec=Provider)
+        bogus = RatingTransition(
+            current_state=RatingState.NEUTRAL,
+            action=RatingAction.LIKE,
+            new_state=RatingState.LIKED,
+            api_value="WAT",
+            user_message="",
+        )
+        with pytest.raises(ValueError, match="Unknown api_value"):
+            apply_to_provider(p, bogus, "track123")
