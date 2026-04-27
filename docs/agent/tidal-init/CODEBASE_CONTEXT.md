@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 3 (Phase 3 + Phase 4 + Phase 7), 2026-04-27
+> Last updated by: Checkpoint 4 (Phase 6), 2026-04-27
 
 ---
 
@@ -13,7 +13,7 @@ xmpd is a personal daemon that syncs music from YouTube Music (and, after this f
 
 1. **CLI controllers** (`bin/xmpctl`, `bin/xmpd-status`, `bin/xmpd-status-preview`) talk to the daemon over a Unix socket using a JSON request/response protocol. `xmpctl sync`, `xmpctl status`, `xmpctl stop` are the existing daemon-routed commands.
 2. **XMPDaemon** (`xmpd/daemon.py`) is the orchestrator. Its `__init__` builds every component and injects deps; the main thread listens on the Unix control socket while a background thread runs `SyncEngine.sync_all_playlists()` on `sync_interval_minutes`. Two more background threads run `HistoryReporter.run()` (MPD idle watcher) and the asyncio loop hosting `StreamRedirectProxy`.
-3. **SyncEngine** (`xmpd/sync_engine.py`) fetches playlists from YouTube via `YTMusicClient`, resolves video IDs to stream URLs via `StreamResolver`, persists `(video_id, stream_url, title, artist)` rows to `TrackStore`, and writes M3U/XSPF playlists into MPD's playlist dir via `MPDClient`.
+3. **SyncEngine** (`xmpd/sync_engine.py`, LIVE Phase 6) iterates a `dict[str, Provider]` registry, fetching playlists and favorites from every enabled provider, persists `(provider, track_id, ...)` rows to `TrackStore`, and writes per-provider-prefixed M3U/XSPF playlists into MPD's playlist dir via `MPDClient`. Per-provider failure isolation: a flaky provider never stops other providers from syncing.
 4. **StreamRedirectProxy** (`xmpd/stream_proxy.py`, LIVE Phase 4) is an aiohttp app on `localhost:8080`; route `GET /proxy/{provider}/{track_id}` issues HTTP 307 to a fresh stream URL. Per-provider regex validation (`yt`: 11-char alphanumeric, `tidal`: 1-20 digits). Per-provider TTL via `stream_cache_hours` dict, DEFAULT_TTL_HOURS=5. Registry-aware `_refresh_stream_url` with legacy `stream_resolver` fallback for yt through Phase 8.
 5. **TrackStore** (`xmpd/track_store.py`) is the single SQLite store at `~/.config/xmpd/track_mapping.db`. Compound-key `(provider, track_id)` with PRAGMA user_version migration (Phase 5). `SCHEMA_VERSION = 1`.
 
@@ -38,7 +38,7 @@ External AirPlay surface lives in `extras/airplay-bridge/`, a separate sub-proje
 | `xmpd/auth/__init__.py` | Auth package marker | Package marker. Contains `ytmusic_cookie.py` (Phase 2); Phase 9 adds `tidal_oauth.py`. |
 | `xmpd/auth/ytmusic_cookie.py` | FirefoxCookieExtractor | Relocated from `xmpd/cookie_extract.py` in Phase 2. Browser cookie extraction for YT auth. `prefix="xmpd_cookies_"` (fixed from ytmpd). |
 | `xmpd/providers/ytmusic.py` | YTMusicProvider + YTMusicClient | LIVE (Phase 3): full 14-method Provider Protocol. `YTMusicProvider(config, stream_resolver=None)`. `isinstance(YTMusicProvider({}), Provider)` is True. `_local_track_to_provider` helper DRYs LocalTrack->ProviderTrack conversion. `get_radio` accesses `self._client._client` directly (only abstraction breach). `YTMusicClient` wraps `ytmusicapi` (unchanged). |
-| `xmpd/sync_engine.py` | SyncEngine | Currently single-source (YT only). **Phase 6 makes it iterate the provider registry and write `(provider, track_id)` rows.** |
+| `xmpd/sync_engine.py` | SyncEngine | LIVE (Phase 6): registry-iterating multi-provider sync. Constructor takes `provider_registry: dict[str, Provider]`, `track_store` (required), `playlist_prefix: dict[str, str]`. New methods: `_sync_one_provider`, `_sync_provider_playlist`. `DEFAULT_FAVORITES_NAMES` module-level constant. No imports of `ytmusic_client`, `stream_resolver`, `sync_liked_songs`, or `liked_songs_playlist_name`. **Phase 8 must wire into `daemon.py`.** |
 | `xmpd/track_store.py` | TrackStore (SQLite) | Compound-key `(provider, track_id)` with PRAGMA user_version migration (Phase 5). `SCHEMA_VERSION = 1`. All methods take `(provider, track_id)`. New `update_metadata` method for sparse writes. Logging via `logging.getLogger(__name__)`. |
 | `xmpd/stream_proxy.py` | StreamRedirectProxy (aiohttp) | LIVE (Phase 4). Route `/proxy/{provider}/{track_id}` with TRACK_ID_PATTERNS (`yt`: 11-char alphanumeric, `tidal`: 1-20 digits). Per-provider TTL via `stream_cache_hours` dict. Registry-aware `_refresh_stream_url` with legacy `stream_resolver` fallback for yt through Phase 8. Successor of `ICYProxyServer` (deleted `icy_proxy.py`). |
 | `xmpd/proxy_url.py` | `build_proxy_url` helper | LIVE (Phase 4). `build_proxy_url(provider, track_id, host="localhost", port=8080) -> str`. No aiohttp dependency. Used by `mpd_client.py` and `xspf_generator.py`. |
@@ -53,6 +53,9 @@ External AirPlay surface lives in `extras/airplay-bridge/`, a separate sub-proje
 | `tests/test_stream_proxy.py` | StreamRedirectProxy tests | 32 tests (Phase 4). Replaced `test_icy_proxy.py`. |
 | `tests/test_history_reporter.py` | HistoryReporter tests | 24 tests (Phase 7 rewrite). URL regex, dispatch, threshold, state machine, pause exclusion, error recovery, shutdown. |
 | `tests/test_rating.py` | Rating tests | 34 pre-existing + 5 `TestApplyToProvider` (Phase 7). |
+| `tests/test_sync_engine.py` | SyncEngine tests | 19 tests (Phase 6 rewrite). Multi-provider sync, failure isolation, favorites naming, proxy URL, preview, single-playlist. Uses `MagicMock(spec=Provider)`. |
+| `tests/test_like_indicator.py` | Like indicator tests | `TestSyncEngineLikeIndicator` ported to Phase 6 API; module-level imports. |
+| `tests/integration/test_full_workflow.py` | Full sync workflow integration | `TestFullSyncWorkflow` and `TestPerformanceScenarios` ported to mock Provider registry (Phase 6). No longer imports `StreamResolver` or `YTMusicClient`. |
 | `tests/fixtures/ytmusic_samples.json` | YTMusic API samples | Real search results + fallback shapes (Phase 3). |
 | `xmpd/notify.py` | Desktop notify wrapper | `send_notification(title, body, urgency)`. |
 | `xmpd/exceptions.py` | Exception hierarchy | Base `XMPDError`; YTMusic, MPD, Proxy, Config, CookieExtraction subtrees. **Phase 9 adds `TidalAuthRequired` here.** |
@@ -126,7 +129,7 @@ Notes:
 - Migration from v0 to v1 runs automatically on TrackStore construction; idempotent.
 - `add_track` upsert does NOT overwrite non-NULL `album`/`duration_seconds`/`art_url` with NULL. Use `update_metadata` for explicit overwrites.
 - `update_metadata` builds UPDATE dynamically from non-None kwargs; does NOT bump `updated_at`.
-- Downstream callers updated: `stream_proxy.py` (Phase 4), `daemon.py` (Phase 4 partial, Phase 8 completes). `sync_engine.py` still uses old API (Phase 6).
+- Downstream callers updated: `stream_proxy.py` (Phase 4), `sync_engine.py` (Phase 6), `daemon.py` (Phase 4 partial, Phase 8 completes).
 
 ### StreamRedirectProxy (`xmpd/stream_proxy.py`) -- LIVE Phase 4
 
@@ -165,30 +168,36 @@ def build_proxy_url(provider: str, track_id: str,
 
 Lightweight helper, no aiohttp dependency. Used by `mpd_client.py` (2 call sites) and available to `xspf_generator.py`.
 
-### SyncEngine (`xmpd/sync_engine.py`)
+### SyncEngine (`xmpd/sync_engine.py`) -- LIVE Phase 6
 
 ```python
+DEFAULT_FAVORITES_NAMES: dict[str, str]  # {"yt": "Liked Songs", "tidal": "My Collection"}
+
 class SyncEngine:
     def __init__(self,
-                 ytmusic_client: YTMusicClient,
+                 provider_registry: dict[str, Provider],
                  mpd_client: MPDClient,
-                 stream_resolver: StreamResolver,
-                 playlist_prefix: str = "YT: ",
-                 track_store: Optional[TrackStore] = None,
+                 track_store: TrackStore,
+                 playlist_prefix: dict[str, str],
                  proxy_config: dict | None = None,
-                 should_stop_callback: Callable | None = None,
+                 should_stop_callback: Callable[[], bool] | None = None,
                  playlist_format: str = "m3u",
                  mpd_music_directory: str | None = None,
-                 sync_liked_songs: bool = True,
-                 liked_songs_playlist_name: str = "Liked Songs",
+                 sync_favorites: bool = True,
+                 favorites_playlist_name_per_provider: dict[str, str] | None = None,
                  like_indicator: dict | None = None) -> None
     def sync_all_playlists(self) -> SyncResult
     def get_sync_preview(self) -> SyncPreview
+    def sync_single_playlist(self, playlist_name: str) -> SyncResult
+    def _sync_one_provider(self, name: str, provider: Provider) -> SyncResult
+    def _sync_provider_playlist(self, ...) -> tuple[int, int]
 ```
 
 Returns `SyncResult(success, playlists_synced, playlists_failed, tracks_added, tracks_failed, duration_seconds, errors)`.
 
-Phase 6 changes the constructor: instead of `ytmusic_client + playlist_prefix + sync_liked_songs`, it takes `provider_registry: dict[str, Provider]` plus a config-supplied `playlist_prefix: dict[str, str]` keyed by provider canonical name (`yt`, `tidal`). One `playlist_format`, one `mpd_music_directory`, one `like_indicator` -- those stay shared. Per-cycle: iterate `registry.values()`, fetch playlists+favorites, write playlists with `playlist_prefix[provider.name]`. Failures of one provider must not stop others.
+BREAKING CHANGE from Phase 6: constructor takes `provider_registry: dict[str, Provider]` instead of `ytmusic_client`; `track_store` is required (not Optional); `playlist_prefix` is `dict[str, str]` keyed by provider canonical name (`yt`, `tidal`); `sync_liked_songs` renamed to `sync_favorites`; `liked_songs_playlist_name` replaced by `favorites_playlist_name_per_provider: dict[str, str]`; `stream_resolver` removed. Per-cycle: iterates `registry.values()`, fetches playlists+favorites from each provider, writes per-provider-prefixed MPD playlists, persists `(provider, track_id, ...)` rows to TrackStore. Failures of one provider do not stop others. `build_proxy_url` imported from `xmpd.proxy_url` (not `xmpd.stream_proxy`).
+
+**Phase 8 must update `daemon.py`** to pass the new constructor arguments.
 
 ### StreamResolver (`xmpd/stream_resolver.py`)
 
@@ -368,7 +377,7 @@ daemon.py
   +-- auth/                                   [Phase 1+]
   |   +-- ytmusic_cookie.py (FirefoxCookieExtractor)  [LIVE, relocated Phase 2]
   |   +-- tidal_oauth.py                              [Phase 9]
-  +-- sync_engine.py (SyncEngine)             [Phase 6: registry-aware]
+  +-- sync_engine.py (SyncEngine)             [LIVE Phase 6: registry-aware, provider_registry ctor]
   +-- stream_proxy.py (StreamRedirectProxy)   [LIVE Phase 4: /proxy/{provider}/{track_id}]
   +-- proxy_url.py (build_proxy_url)          [LIVE Phase 4]
   +-- mpd_client.py (MPDClient)               [LIVE Phase 4: uses build_proxy_url]
