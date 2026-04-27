@@ -85,7 +85,13 @@ No helpers listed for phase 4. No helper issues reported.
 
 ## Code Review Results
 
-> Pending code review.
+**Result**: PASSED WITH NOTES (3 minor issues)
+
+| # | Severity | File | Issue | Status |
+|---|----------|------|-------|--------|
+| 1 | Minor | bin/xmpd-search | Config parsing duplication: bash ctrl-p doesn't handle mpd_host/mpd_port fallback | Accepted |
+| 2 | Minor | bin/xmpd-search | execute-silent suppresses error feedback on failed play/queue | Accepted |
+| 3 | Minor | bin/xmpd-search | $BOLD variable defined but unused (pre-existing) | Accepted |
 
 ---
 
