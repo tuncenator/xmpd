@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 1 (Phase 1), 2026-04-27
+> Last updated by: Checkpoint 2 (Phase 2 + Phase 5), 2026-04-27
 
 ---
 
@@ -33,19 +33,22 @@ External AirPlay surface lives in `extras/airplay-bridge/`, a separate sub-proje
 | `xmpd/__main__.py` | CLI entry | `python -m xmpd` runs the daemon. |
 | `xmpd/daemon.py` | XMPDaemon orchestrator | Builds every component in `__init__`, runs main control-socket loop, hosts background sync/history/proxy threads. **Phase 8 rewires this to use a provider registry.** |
 | `xmpd/config.py` | Config loader | `load_config()` deep-merges YAML at `~/.config/xmpd/config.yaml` with hardcoded defaults; `get_config_dir()` returns `~/.config/xmpd/`. **Phase 11 must accept the new nested `yt:` / `tidal:` shape and reject the legacy top-level `auto_auth:` shape with a clear error.** |
-| `xmpd/providers/__init__.py` | Provider registry | `get_enabled_provider_names(config)` + `build_registry(config)` skeleton. Returns `{}` in Phase 1; Phase 2 fills `yt`, Phase 9 fills `tidal`. Re-exports all shared types via `__all__`. |
+| `xmpd/providers/__init__.py` | Provider registry | `get_enabled_provider_names(config)` + `build_registry(config)`. Instantiates `YTMusicProvider` when `yt` enabled (Phase 2); Phase 9 fills `tidal`. `get_enabled_provider_names` returns insertion order (yt before tidal). Re-exports all shared types via `__all__`. |
 | `xmpd/providers/base.py` | Shared provider types | `TrackMetadata`, `Track`, `Playlist` frozen dataclasses + 14-method `@runtime_checkable Provider` Protocol. Cross-provider exchange shape. |
-| `xmpd/auth/__init__.py` | Auth package marker | Package marker; Phase 2 adds `ytmusic_cookie.py`, Phase 9 adds `tidal_oauth.py`. |
-| `xmpd/ytmusic.py` | YTMusicClient | Wraps `ytmusicapi`. **Phase 2 moves this to `xmpd/providers/ytmusic.py`; Phase 3 prepends a `YTMusicProvider` Protocol-conformant wrapper.** |
+| `xmpd/auth/__init__.py` | Auth package marker | Package marker. Contains `ytmusic_cookie.py` (Phase 2); Phase 9 adds `tidal_oauth.py`. |
+| `xmpd/auth/ytmusic_cookie.py` | FirefoxCookieExtractor | Relocated from `xmpd/cookie_extract.py` in Phase 2. Browser cookie extraction for YT auth. `prefix="xmpd_cookies_"` (fixed from ytmpd). |
+| `xmpd/providers/ytmusic.py` | YTMusicProvider + YTMusicClient | Relocated from `xmpd/ytmusic.py` in Phase 2. `YTMusicProvider` scaffold added (Phase 2): `name="yt"`, `is_enabled`, `is_authenticated`, `_ensure_client`. Full Provider Protocol methods arrive in Phase 3. `YTMusicClient` wraps `ytmusicapi` (unchanged). |
 | `xmpd/sync_engine.py` | SyncEngine | Currently single-source (YT only). **Phase 6 makes it iterate the provider registry and write `(provider, track_id)` rows.** |
-| `xmpd/track_store.py` | TrackStore (SQLite) | Single-key `video_id` schema today. **Phase 5 migrates to compound `(provider, track_id)` + adds nullable `album`, `duration_seconds`, `art_url` columns.** |
+| `xmpd/track_store.py` | TrackStore (SQLite) | Compound-key `(provider, track_id)` with PRAGMA user_version migration (Phase 5). `SCHEMA_VERSION = 1`. All methods take `(provider, track_id)`. New `update_metadata` method for sparse writes. Logging via `logging.getLogger(__name__)`. |
 | `xmpd/icy_proxy.py` | ICYProxyServer (aiohttp) | Route `/proxy/{video_id}`. **Phase 4 renames file to `xmpd/stream_proxy.py`, class to `StreamRedirectProxy`, route to `/proxy/{provider}/{track_id}`, with per-provider track-id regex validation.** |
 | `xmpd/stream_resolver.py` | StreamResolver | yt-dlp-backed URL extractor. Stays YT-specific; provider-internal in Phase 3. |
 | `xmpd/mpd_client.py` | MPDClient | python-mpd2 wrapper; writes playlists. **Phase 4 also updates this to use `build_proxy_url(provider, track_id)`.** |
 | `xmpd/history_reporter.py` | HistoryReporter | MPD idle watcher; reports plays back to YT. **Phase 7 makes it provider-aware via URL regex `r"/proxy/(yt|tidal)/(\w+)"` and `provider.report_play()` dispatch.** |
 | `xmpd/rating.py` | RatingManager + RatingState | Like/dislike state machine. **Phase 7 makes the dispatch provider-aware via `registry[provider].like(...)`.** |
 | `xmpd/xspf_generator.py` | XSPF playlist generator | Pure function; **Phase 4 updates to use `build_proxy_url`.** |
-| `xmpd/cookie_extract.py` | FirefoxCookieExtractor | Browser cookie extraction for YT auth. **Phase 2 moves to `xmpd/auth/ytmusic_cookie.py`.** |
+| `tests/fixtures/legacy_track_db_v0.sql` | v0 schema fixture | 10-row fixture for migration tests (Phase 5). |
+| `tests/test_track_store_migration.py` | Migration tests | 15 tests for v0->v1, idempotency, fresh-DB, compound-key (Phase 5). |
+| `tests/test_providers_ytmusic.py` | YTMusicProvider tests | 4 scaffold tests for Phase 2; Phase 3 extends. |
 | `xmpd/notify.py` | Desktop notify wrapper | `send_notification(title, body, urgency)`. |
 | `xmpd/exceptions.py` | Exception hierarchy | Base `XMPDError`; YTMusic, MPD, Proxy, Config, CookieExtraction subtrees. **Phase 9 adds `TidalAuthRequired` here.** |
 | `bin/xmpctl` | CLI controller | Talks to daemon over Unix socket, JSON protocol. Existing subcommands: `sync`, `status`, `stop`. **Phase 8 adds the `auth <provider>` subcommand structure plus provider-aware `like|dislike|search|radio` (these may not all exist yet -- Phase 8 audits and fills gaps).** |
@@ -63,7 +66,7 @@ External AirPlay surface lives in `extras/airplay-bridge/`, a separate sub-proje
 
 ## Important APIs & Interfaces
 
-### YTMusicClient (`xmpd/ytmusic.py`)
+### YTMusicClient (`xmpd/providers/ytmusic.py`)
 
 ```python
 class YTMusicClient:
@@ -81,35 +84,44 @@ class YTMusicClient:
 
 ### TrackStore (`xmpd/track_store.py`)
 
-CURRENT (pre-Phase-5):
+CURRENT (post-Phase-5, LIVE):
 
 ```python
 class TrackStore:
-    def __init__(self, db_path: str) -> None
-    def add_track(self, video_id: str, stream_url: str | None, title: str, artist: str | None = None) -> None
-    def get_track(self, video_id: str) -> dict[str, Any] | None
-    def update_stream_url(self, video_id: str, stream_url: str) -> None
+    SCHEMA_VERSION = 1
+    def __init__(self, db_path: str) -> None  # runs migration on construction
+    def add_track(self, provider: str, track_id: str, stream_url: str | None,
+                  title: str, artist: str | None = None,
+                  album: str | None = None, duration_seconds: int | None = None,
+                  art_url: str | None = None) -> None
+    def get_track(self, provider: str, track_id: str) -> dict[str, Any] | None
+    def update_stream_url(self, provider: str, track_id: str, stream_url: str) -> None
+    def update_metadata(self, provider: str, track_id: str, **kwargs) -> None
     def close(self) -> None
 ```
 
 ```sql
-CREATE TABLE tracks (
-    video_id   TEXT PRIMARY KEY,
-    stream_url TEXT,
-    artist     TEXT,
-    title      TEXT NOT NULL,
-    updated_at REAL NOT NULL
+CREATE TABLE "tracks" (
+    track_id          TEXT NOT NULL,
+    provider          TEXT NOT NULL DEFAULT 'yt',
+    stream_url        TEXT,
+    artist            TEXT,
+    title             TEXT NOT NULL,
+    album             TEXT,
+    duration_seconds  INTEGER,
+    art_url           TEXT,
+    updated_at        REAL NOT NULL
 );
+CREATE UNIQUE INDEX tracks_pk_idx ON tracks(provider, track_id);
 CREATE INDEX idx_tracks_updated_at ON tracks(updated_at);
+-- PRAGMA user_version = 1
 ```
 
-POST-Phase-5 (target):
-
-- Compound unique key `(provider, track_id)`.
-- New nullable columns: `album`, `duration_seconds`, `art_url`.
-- `provider` defaults to `'yt'` for legacy rows.
-- Schema version tracked via `PRAGMA user_version`; migration is idempotent.
-- Existing methods take `(provider, track_id)` instead of bare `video_id`.
+Notes:
+- Migration from v0 to v1 runs automatically on TrackStore construction; idempotent.
+- `add_track` upsert does NOT overwrite non-NULL `album`/`duration_seconds`/`art_url` with NULL. Use `update_metadata` for explicit overwrites.
+- `update_metadata` builds UPDATE dynamically from non-None kwargs; does NOT bump `updated_at`.
+- Downstream callers (`icy_proxy.py`, `daemon.py`, `sync_engine.py`) still call old single-key API; updated in Phase 4/6/8.
 
 ### ICYProxyServer (`xmpd/icy_proxy.py`)
 
@@ -255,35 +267,26 @@ After Phases 1-13, this flow generalizes: provider canonical name comes from the
 
 ## Data Models
 
-### Current `tracks` table
+### Current `tracks` table (post-Phase-5, LIVE)
 
 ```sql
-CREATE TABLE tracks (
-    video_id   TEXT PRIMARY KEY,
-    stream_url TEXT,
-    artist     TEXT,
-    title      TEXT NOT NULL,
-    updated_at REAL NOT NULL
+CREATE TABLE "tracks" (
+    track_id          TEXT NOT NULL,
+    provider          TEXT NOT NULL DEFAULT 'yt',
+    stream_url        TEXT,
+    artist            TEXT,
+    title             TEXT NOT NULL,
+    album             TEXT,
+    duration_seconds  INTEGER,
+    art_url           TEXT,
+    updated_at        REAL NOT NULL
 );
-CREATE INDEX idx_tracks_updated_at ON tracks(updated_at);
-```
-
-Single-key on `video_id`. No provider concept. No album, duration, or art-url fields.
-
-### Target `tracks` table (post-Phase-5)
-
-```sql
--- After idempotent migration:
-ALTER TABLE tracks RENAME COLUMN video_id TO track_id;
-ALTER TABLE tracks ADD COLUMN provider          TEXT NOT NULL DEFAULT 'yt';
-ALTER TABLE tracks ADD COLUMN album             TEXT;
-ALTER TABLE tracks ADD COLUMN duration_seconds  INTEGER;
-ALTER TABLE tracks ADD COLUMN art_url           TEXT;
--- Drop old PK, add compound unique:
 CREATE UNIQUE INDEX tracks_pk_idx ON tracks(provider, track_id);
+CREATE INDEX idx_tracks_updated_at ON tracks(updated_at);
+-- PRAGMA user_version = 1
 ```
 
-`PRAGMA user_version` tracks schema version; Phase 5 owns the version constant and migration logic.
+Compound-key on `(provider, track_id)`. All 1183 legacy rows tagged `provider='yt'`. Schema versioned via `PRAGMA user_version`; migration from v0 is idempotent and runs on TrackStore construction. Future migrations: bump `SCHEMA_VERSION`, add `_migrate_vN_to_vN+1`, add branch in `_apply_migrations`.
 
 ### New shared dataclasses (Phase 1) -- LIVE
 
@@ -324,7 +327,7 @@ The pre-existing `Track` / `Playlist` dataclasses inside `xmpd/ytmusic.py` are l
 
 ### Logging notes
 
-`rating.py` and `track_store.py` have no logging at all (no `import logging`, no `getLogger`). Pre-existing; 12 `getLogger` hits total (11 `__name__`, 1 root-logger at `__main__.py:33`). No hardcoded names found.
+`rating.py` has no logging (no `import logging`, no `getLogger`). Pre-existing. `track_store.py` now has `logger = logging.getLogger(__name__)` (added in Phase 5). 13 `getLogger` hits total (12 `__name__`, 1 root-logger at `__main__.py:33`). No hardcoded names found.
 
 ---
 
@@ -336,16 +339,16 @@ daemon.py
   +-- config.py (load_config)
   +-- providers/                              [Phase 1+]
   |   +-- base.py (Provider, Track, Playlist, TrackMetadata)
-  |   +-- ytmusic.py -> YTMusicProvider       [Phase 2 move, Phase 3 methods]
+  |   +-- ytmusic.py -> YTMusicProvider       [LIVE scaffold Phase 2, Phase 3 methods]
   |   +-- tidal.py -> TidalProvider           [Phase 9 scaffold, Phase 10 methods]
   +-- auth/                                   [Phase 1+]
-  |   +-- ytmusic_cookie.py (FirefoxCookieExtractor)  [Phase 2 move]
+  |   +-- ytmusic_cookie.py (FirefoxCookieExtractor)  [LIVE, relocated Phase 2]
   |   +-- tidal_oauth.py                              [Phase 9]
   +-- sync_engine.py (SyncEngine)             [Phase 6: registry-aware]
   +-- icy_proxy.py -> stream_proxy.py         [Phase 4 rename + provider routing]
   +-- mpd_client.py (MPDClient)               [Phase 4: build_proxy_url consumer]
   +-- xspf_generator.py                       [Phase 4: build_proxy_url consumer]
-  +-- track_store.py (TrackStore)             [Phase 5: schema migration]
+  +-- track_store.py (TrackStore)             [LIVE, compound-key Phase 5]
   +-- history_reporter.py (HistoryReporter)   [Phase 7: provider-aware]
   +-- rating.py (RatingManager)               [Phase 7: provider-aware]
   +-- stream_resolver.py (StreamResolver)     [stays YT-internal]
@@ -465,9 +468,5 @@ Phase 11 reshapes this to nest `auto_auth:` under `yt:`, add `tidal:` with `enab
 
 ## Cleanup notes (post-Phase-A leftovers)
 
-The `ytmpd -> xmpd` rename in commit `eb4a02e` left two harmless leftovers worth noting (and worth cleaning up opportunistically):
-
-1. `xmpd/cookie_extract.py:67` uses `prefix="ytmpd_cookies_"` in `tempfile.mkdtemp()`. Phase 2 (which moves this file) is the natural place to fix.
+1. ~~`xmpd/cookie_extract.py:67` uses `prefix="ytmpd_cookies_"`~~ Fixed in Phase 2 (now `xmpd/auth/ytmusic_cookie.py` with `prefix="xmpd_cookies_"`).
 2. `tests/test_xmpd_status_cli.py` has internal var names `_ytmpd_status_code`, `ytmpd_status` (test-only introspection). Cosmetic; can be cleaned up any time.
-
-Neither blocks anything. Mention them in the relevant phase summary if you fix them.
