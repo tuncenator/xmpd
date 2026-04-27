@@ -89,7 +89,36 @@ No helpers were listed for Phase 9. No phase summary reported helper issues requ
 
 ## Code Review Results
 
-> Pending code review.
+**Result**: REVIEW PASSED WITH NOTES (3 Minor)
+**Reviewer**: spark-code-reviewer (claude-opus-4-6)
+**Diff range**: `afc5d30..9269e52`
+
+### Findings
+
+| Severity | Count | Notes |
+|----------|-------|-------|
+| Critical | 0 | -- |
+| Important | 0 | -- |
+| Minor | 3 | (1) `xmpd/auth/tidal_oauth.py:150` uses `except (KeyError, Exception)` which is functionally `except Exception` since `KeyError` is a subclass; should be `except Exception` or narrower like `except (KeyError, ValueError, TypeError)` -- behavior is correct, only the listing reads misleadingly. (2) `tests/test_tidal_oauth.py:39` uses deprecated `datetime.utcnow()`; harmless in test mocks but `datetime.now(tz=timezone.utc)` is forward-compatible. (3) `uv.lock` diff includes the `ytmpd -> xmpd` package rename artifact; not a Phase 9 concern, just a visible diff line. |
+
+### Notes
+
+All correctness properties verified:
+- Stub method signatures match the Provider Protocol byte-for-byte; `isinstance(TidalProvider({}), Provider)` passes at runtime.
+- `is_authenticated()` returns `tuple[bool, str]` matching the Protocol contract (the plan said `bool`; the Protocol won, as instructed).
+- `load_session` correctly parses `expiry_time` ISO-8601 string back to `datetime` before passing to `session.load_oauth_session()`.
+- `run_oauth_flow` prepends `https://` to scheme-less `LinkLogin.verification_uri_complete`.
+- `Quality.high_lossless` set in BOTH `run_oauth_flow` and `load_session`.
+- Lazy `from xmpd.providers.tidal import TidalProvider` inside the `if "tidal" in enabled` branch in `build_registry`; top-level tidalapi load avoided.
+- Atomic session write: tmp file -> chmod 0600 -> os.replace; parent dir created at mode 0700.
+
+Token-leak scan: clean. Phase summary contains only `[:20] + "..."` truncated fragments; checkpoint summary uses `<string, JWT format>` placeholders; test files use literal placeholders (`"FAKE-AT"`, `"AT"`, `"AT-TOKEN-PLACEHOLDER"`). No full-length Bearer tokens anywhere in the diff.
+
+Helper edits: none (`scripts/spark-*.sh` untouched, as expected for this feature with smoke/deploy disabled).
+
+Evidence-vs-types: all five captured interfaces (`Quality.high_lossless`, `LinkLogin.verification_uri_complete` scheme-less, `load_oauth_session` signature, persisted JSON 5-key shape, `check_login` bool return) match the code.
+
+The 3 minor issues are nit-level (one redundant exception clause, one deprecated stdlib API in test-only code, one unrelated uv.lock artifact). They do not block Phase 9's landing; can be addressed opportunistically in Phase 10 or a later cleanup.
 
 ---
 
