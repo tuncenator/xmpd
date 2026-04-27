@@ -77,7 +77,34 @@ No helpers were listed for Phase 8. No phase summary reported helper issues. No 
 
 ## Code Review Results
 
-> Pending code review.
+**Result**: REVIEW PASSED WITH NOTES (4 Minor)
+**Reviewer**: spark-code-reviewer (claude-opus-4-6)
+**Diff range**: `1d7f3bc..f715d81`
+
+### Findings
+
+| Severity | Count | Notes |
+|----------|-------|-------|
+| Critical | 0 | -- |
+| Important | 0 | -- |
+| Minor | 4 | (1) `cmd_like`/`cmd_dislike` in xmpctl unconditionally trigger a sync on success; old code gated on LIKED-state involvement -- low impact since sync is async/background; (2) `cmd_radio` retains a unicode checkmark while other xmpctl output was standardized to plain "OK" -- cosmetic inconsistency; (3) `_cmd_like` and `_cmd_dislike` in daemon share near-identical structure (auth + get_like_state + map + apply_action + apply_to_provider) differing only in `RatingAction.LIKE` vs `RatingAction.DISLIKE` -- a shared helper could DRY but not a functional issue; (4) `_build_yt_config()` returns `{"enabled": True}` for legacy config so yt cannot currently be disabled -- Phase 11 will address when config schema is finalized. |
+
+### Notes
+
+All correctness properties verified end-to-end:
+- Registry construction via `build_registry()` with `_build_yt_config()` shim; downstream consumers guard with `is_authenticated()` before network calls. Internally consistent.
+- `_cmd_play` / `_cmd_queue` emit `/proxy/{provider}/{track_id}` (Phase 4 shape). Both call sites confirmed.
+- `_cmd_search` provider routing, `_cmd_radio` provider inference, `_cmd_like`/`_cmd_dislike` round-trip, `provider-status` JSON shape all match spec.
+- HistoryReporter, StreamRedirectProxy, SyncEngine constructors all receive `provider_registry=` (StreamRedirectProxy no longer `{}` placeholder).
+- `bin/xmpctl` style preserved: hand-rolled argv dispatch, lazy imports, no argparse. Legacy `auth` (no args -> `auth yt --manual`) and `auth --auto` (-> `auth yt` cookie flow) backward-compat correct.
+- `get_current_track_from_mpd()` returns `(provider, track_id, title, artist)`; both `cmd_like` and `cmd_dislike` updated.
+- Removed code inventory clean: `_auto_auth_loop`, `_attempt_auto_refresh`, `auto_auth_*`, `FirefoxCookieExtractor` import, `CookieExtractionError` import, `send_notification` import, `YTMusicClient` import all gone from daemon. `tests/test_auto_auth_daemon.py` deleted.
+
+Security: no hardcoded secrets, no helper edits, no untagged infrastructure values.
+
+Evidence-vs-types: all six captured interfaces (Provider Protocol methods, SyncEngine/HistoryReporter/StreamRedirectProxy constructors, `build_registry` signature, `provider-status` response, daemon search response) match the diff byte-for-byte.
+
+The 4 minor issues are ergonomic/cosmetic and do not block the Stage B keystone landing. They can be addressed opportunistically in Phase 11 (config) or a later cleanup phase.
 
 ---
 
