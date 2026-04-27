@@ -30,6 +30,34 @@ TRACK_ID_PATTERNS: dict[str, re.Pattern[str]] = {
 }
 
 
+def resolve_stream_cache_hours(config: dict[str, Any]) -> dict[str, int]:
+    """Resolve per-provider stream_cache_hours from config.
+
+    Precedence per provider:
+      1. config[<provider>][stream_cache_hours]  -- provider-specific setting
+      2. config[stream_cache_hours]              -- top-level fallback
+      3. hardcoded default per provider          -- yt=5, tidal=1
+
+    Args:
+        config: Full xmpd config dict (as returned by load_config()).
+
+    Returns:
+        Dict mapping provider name to TTL in hours.
+    """
+    hardcoded_defaults = {"yt": 5, "tidal": 1}
+    top_level = config.get("stream_cache_hours")
+    out: dict[str, int] = {}
+    for provider in ("yt", "tidal"):
+        section = config.get(provider) or {}
+        if "stream_cache_hours" in section:
+            out[provider] = int(section["stream_cache_hours"])
+        elif isinstance(top_level, int) and top_level > 0:
+            out[provider] = int(top_level)
+        else:
+            out[provider] = hardcoded_defaults[provider]
+    return out
+
+
 class StreamRedirectProxy:
     """HTTP redirect proxy for lazy provider-agnostic stream URL resolution.
 

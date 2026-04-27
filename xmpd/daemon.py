@@ -23,7 +23,7 @@ from xmpd.mpd_client import MPDClient
 from xmpd.providers import build_registry
 from xmpd.providers.base import Provider
 from xmpd.rating import RatingAction, RatingManager, apply_to_provider
-from xmpd.stream_proxy import StreamRedirectProxy
+from xmpd.stream_proxy import StreamRedirectProxy, resolve_stream_cache_hours
 from xmpd.stream_resolver import StreamResolver
 from xmpd.sync_engine import SyncEngine
 from xmpd.track_store import TrackStore
@@ -141,7 +141,7 @@ class XMPDaemon:
                     stream_resolver=self.stream_resolver,
                     host=self.config["proxy_host"],
                     port=self.config["proxy_port"],
-                    stream_cache_hours={"yt": self.config["stream_cache_hours"]},
+                    stream_cache_hours=resolve_stream_cache_hours(self.config),
                 )
                 self.proxy_config = {
                     "enabled": True,

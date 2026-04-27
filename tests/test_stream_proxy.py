@@ -7,7 +7,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from xmpd.proxy_url import build_proxy_url
-from xmpd.stream_proxy import StreamRedirectProxy
+from xmpd.stream_proxy import StreamRedirectProxy, resolve_stream_cache_hours
 from xmpd.track_store import TrackStore
 
 # ---------------------------------------------------------------------------
@@ -632,3 +632,57 @@ async def test_refresh_stream_url_returns_none_raises(track_store, yt_provider_m
     proxy = _make_proxy(track_store, provider_registry={"yt": yt_provider_mock})
     with pytest.raises(URLRefreshError, match="Failed to resolve URL"):
         await proxy._refresh_stream_url("yt", "dQw4w9WgXcQ")
+
+
+# ---------------------------------------------------------------------------
+# Per-provider stream_cache_hours resolution
+# ---------------------------------------------------------------------------
+
+
+class TestPerProviderStreamCacheHours:
+    """Tests for resolve_stream_cache_hours config helper."""
+
+    def test_yt_default_5h_when_unset(self) -> None:
+        """Empty config returns yt=5 (hardcoded default)."""
+        result = resolve_stream_cache_hours({})
+        assert result["yt"] == 5
+
+    def test_tidal_default_1h_when_unset(self) -> None:
+        """Empty config returns tidal=1 (hardcoded default)."""
+        result = resolve_stream_cache_hours({})
+        assert result["tidal"] == 1
+
+    def test_yt_override_via_yt_section(self) -> None:
+        """yt.stream_cache_hours overrides the hardcoded default."""
+        config = {"yt": {"stream_cache_hours": 3}}
+        result = resolve_stream_cache_hours(config)
+        assert result["yt"] == 3
+
+    def test_tidal_override_via_tidal_section(self) -> None:
+        """tidal.stream_cache_hours overrides the hardcoded default."""
+        config = {"tidal": {"stream_cache_hours": 2}}
+        result = resolve_stream_cache_hours(config)
+        assert result["tidal"] == 2
+
+    def test_top_level_fallback_used_when_provider_unset(self) -> None:
+        """Top-level stream_cache_hours is used when provider section has no override."""
+        config = {"stream_cache_hours": 8}
+        result = resolve_stream_cache_hours(config)
+        assert result["yt"] == 8
+        assert result["tidal"] == 8
+
+    def test_provider_section_wins_over_top_level(self) -> None:
+        """Provider-specific stream_cache_hours beats the top-level fallback."""
+        config = {
+            "stream_cache_hours": 8,
+            "yt": {"stream_cache_hours": 2},
+        }
+        result = resolve_stream_cache_hours(config)
+        assert result["yt"] == 2
+        assert result["tidal"] == 8  # top-level fallback for tidal
+
+    def test_missing_provider_sections_use_hardcoded_defaults(self) -> None:
+        """Provider sections absent entirely; hardcoded defaults apply."""
+        config = {"log_level": "INFO"}  # no stream_cache_hours, no yt/tidal
+        result = resolve_stream_cache_hours(config)
+        assert result == {"yt": 5, "tidal": 1}
