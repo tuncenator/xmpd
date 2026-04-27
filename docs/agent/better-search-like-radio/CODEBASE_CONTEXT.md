@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 3 - Phase 4 (2026-04-28)
+> Last updated by: Checkpoint 4 - Phase 5 (2026-04-28)
 
 ---
 
@@ -25,7 +25,7 @@ xmpd is a Python 3.11 async music daemon proxy that sits between MPD (playback) 
 
 | File Path | Purpose | Notes |
 |-----------|---------|-------|
-| `xmpd/daemon.py` | Core daemon, socket listener, command routing | `XMPDaemon` class, handles `search`, `play`, `queue`, `radio`, `like` commands |
+| `xmpd/daemon.py` | Core daemon, socket listener, command routing | `XMPDaemon` class, handles `search`, `play`, `queue`, `radio`, `like`, `like-toggle` commands |
 | `xmpd/stream_proxy.py` | HTTP proxy for lazy stream URL resolution | `StreamRedirectProxy` class, semaphore-gated resolution (max 10), uncapped streaming |
 | `xmpd/sync_engine.py` | Playlist sync orchestrator | `SyncEngine` class, `_sync_provider_playlist()` handles M3U/XSPF generation |
 | `xmpd/mpd_client.py` | MPD communication wrapper | `MPDClient` class, playlist creation, like indicator application |
@@ -39,14 +39,15 @@ xmpd is a Python 3.11 async music daemon proxy that sits between MPD (playback) 
 | `xmpd/proxy_url.py` | Proxy URL builder | `build_proxy_url(provider, track_id)` |
 | `xmpd/xspf_generator.py` | XSPF playlist format generation | Used when `playlist_format: xspf` |
 | `xmpd/exceptions.py` | Custom exceptions | Project-wide exception hierarchy |
-| `bin/xmpctl` | CLI client | Python script, command dispatcher, search UI, socket communication. ANSI constants at module scope (`ANSI_TIDAL`, `ANSI_YT`, `ANSI_RESET`, `ANSI_BOLD`, `ANSI_DIM`). `format_track_fzf()` produces tab-separated fzf lines. `--format fzf` flag on `cmd_search_json()`. Commands: `play <provider> <track_id>`, `queue <provider> <track_id>`, `radio [--provider P] [--track-id ID] [--apply]`. |
-| `bin/xmpd-search` | Interactive fzf search launcher | Bash script. Full keybinding support: enter=play, ctrl-q=queue, ctrl-r=radio, tab=multi-select, ctrl-a=queue-all, ctrl-p=play-all. Key help header. Multi-select via `--expect` for ctrl-a/ctrl-p with post-exit shell loop. |
+| `bin/xmpctl` | CLI client | Python script, command dispatcher, search UI, socket communication. ANSI constants at module scope (`ANSI_TIDAL`, `ANSI_YT`, `ANSI_RESET`, `ANSI_BOLD`, `ANSI_DIM`). `format_track_fzf()` produces tab-separated fzf lines. `--format fzf` flag on `cmd_search_json()`. Commands: `play <provider> <track_id>`, `queue <provider> <track_id>`, `radio [--provider P] [--track-id ID] [--apply]`, `like-toggle <provider> <track_id>`. |
+| `bin/xmpd-search` | Interactive fzf search launcher | Bash script. Full keybinding support: enter=play, ctrl-q=queue, ctrl-r=radio, ctrl-l=like, tab=multi-select, ctrl-a=queue-all, ctrl-p=play-all. Key help header. Multi-select via `--expect` for ctrl-a/ctrl-p with post-exit shell loop. |
 | `bin/xmpd-status` | i3blocks status widget | Provider colors, quality classification, progress bar |
 | `tests/test_stream_proxy.py` | Stream proxy tests | Connection handling, DASH stitching, cancellation safety |
 | `tests/test_search_json.py` | search-json command tests | 16 daemon unit tests + 5 xmpctl CLI tests + 8 fzf format CLI tests |
 | `tests/test_search_fzf_format.py` | fzf output formatter tests | 26 tests for tab encoding, provider colors, quality badges, liked indicator, edge cases |
 | `tests/test_search_actions.py` | Search action tests | 36 tests: field extraction, multi-select parsing, play/queue/radio CLI validation, script structure |
 | `tests/test_like_indicator.py` | Like indicator tests | [+1] tagging in M3U/XSPF |
+| `tests/test_like_toggle.py` | Like toggle tests | 29 tests: daemon like-toggle command, cache invalidation, search-json state, xmpctl CLI, ctrl-l binding |
 
 ---
 
@@ -143,6 +144,18 @@ Uses `provider_registry` to search across providers. Liked state populated via `
 
 Returns `set[str]` of liked track IDs across all providers, cached 5 min. Uses `provider.get_favorites()` from the provider registry.
 
+### XMPDaemon._cmd_like_toggle() (`xmpd/daemon.py:1288`)
+
+```python
+def _cmd_like_toggle(self, provider: str | None, track_id: str | None) -> dict[str, Any]:
+    # Reads current like state via provider.get_like_state()
+    # NEUTRAL/DISLIKED -> like(), LIKED -> unlike()
+    # Invalidates _liked_ids_cache_time on success
+    # Returns {"success": True, "liked": bool}
+```
+
+Cache invalidation: `_cmd_like()`, `_cmd_dislike()`, and `_cmd_like_toggle()` all reset `_liked_ids_cache_time = 0.0` on success so subsequent `search-json` calls re-fetch favorites.
+
 ### xmpctl cmd_play() (`bin/xmpctl:614`)
 
 ```python
@@ -166,6 +179,14 @@ def cmd_radio(apply: bool = False, provider: str | None = None, track_id: str | 
     # Sends "radio [--provider P] [track_id]" to daemon
     # With apply=True: also clears MPD, loads radio playlist, starts playback
     # --track-id flag: seed from specific track instead of current
+```
+
+### xmpctl cmd_like_toggle() (`bin/xmpctl:892`)
+
+```python
+def cmd_like_toggle(provider: str, track_id: str) -> None:
+    # Sends "like-toggle {provider} {track_id}" to daemon
+    # Prints [+1] or [-1] based on result
 ```
 
 ### Daemon radio dispatch
@@ -233,6 +254,7 @@ Format: `[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s`
    - enter: `execute-silent(xmpctl play {provider} {track_id})+abort`
    - ctrl-q: `execute-silent(xmpctl queue {provider} {track_id})` (fzf stays open)
    - ctrl-r: `execute-silent(xmpctl radio --provider {provider} --track-id {track_id} --apply)+abort`
+   - ctrl-l: `execute-silent(xmpctl like-toggle {provider} {track_id})+reload(...)` (toggles like, reloads to show/hide [+1])
    - tab: toggle multi-select
    - ctrl-a: accept, then shell loop `xmpctl queue` for each selected track
    - ctrl-p: accept, then `mpc clear`, shell loop `xmpctl queue`, `mpc play`
