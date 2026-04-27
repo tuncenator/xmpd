@@ -653,6 +653,10 @@ class XMPDaemon:
                 provider = args[0] if len(args) > 0 else None
                 track_id = args[1] if len(args) > 1 else None
                 response = self._cmd_dislike(provider, track_id)
+            elif cmd == "like-toggle":
+                provider = args[0] if len(args) > 0 else None
+                track_id = args[1] if len(args) > 1 else None
+                response = self._cmd_like_toggle(provider, track_id)
             else:
                 response = {"success": False, "error": f"Unknown command: {cmd}"}
 
@@ -1233,6 +1237,8 @@ class XMPDaemon:
             current = state_map.get(raw_state, RatingState.NEUTRAL)
             transition = self._rating_manager.apply_action(current, RatingAction.LIKE)
             apply_to_provider(prov, transition, track_id)
+            # Invalidate favorites cache so next search-json reflects new state
+            self._liked_ids_cache_time = 0.0
             return {
                 "success": True,
                 "message": transition.user_message,
@@ -1268,6 +1274,8 @@ class XMPDaemon:
             current = state_map.get(raw_state, RatingState.NEUTRAL)
             transition = self._rating_manager.apply_action(current, RatingAction.DISLIKE)
             apply_to_provider(prov, transition, track_id)
+            # Invalidate favorites cache so next search-json reflects new state
+            self._liked_ids_cache_time = 0.0
             return {
                 "success": True,
                 "message": transition.user_message,
@@ -1275,6 +1283,65 @@ class XMPDaemon:
             }
         except Exception as e:
             logger.error("Dislike failed: %s", e, exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    def _cmd_like_toggle(self, provider: str | None, track_id: str | None) -> dict[str, Any]:
+        """Handle 'like-toggle' command - toggle like state for arbitrary track.
+
+        Unlike 'like', which toggles based on current provider state, this
+        command is explicitly for the search interface: it reads current like
+        state, applies the LIKE toggle action, updates the provider, then
+        invalidates the favorites cache so the next search-json reflects the
+        change.
+
+        Args:
+            provider: Provider canonical name (e.g. 'yt', 'tidal').
+            track_id: Track identifier.
+
+        Returns:
+            Response dict with 'success', 'message', 'new_state', 'liked' (bool).
+        """
+        if not provider or not track_id:
+            return {"success": False, "error": "Usage: like-toggle <provider> <track_id>"}
+        if provider not in self.provider_registry:
+            return {"success": False, "error": f"Unknown provider: {provider}"}
+
+        prov = self.provider_registry[provider]
+        try:
+            is_auth, err = prov.is_authenticated()
+        except Exception as exc:
+            return {"success": False, "error": f"{provider} auth probe failed: {exc}"}
+        if not is_auth:
+            return {"success": False, "error": f"{provider} not authenticated: {err}"}
+
+        try:
+            raw_state = prov.get_like_state(track_id)
+            from xmpd.rating import RatingState
+            state_map = {
+                "LIKED": RatingState.LIKED,
+                "DISLIKED": RatingState.DISLIKED,
+                "NEUTRAL": RatingState.NEUTRAL,
+            }
+            current = state_map.get(raw_state, RatingState.NEUTRAL)
+            transition = self._rating_manager.apply_action(current, RatingAction.LIKE)
+            apply_to_provider(prov, transition, track_id)
+
+            # Invalidate the favorites cache so next search-json reflects new state
+            self._liked_ids_cache_time = 0.0
+            logger.debug(
+                "like-toggle: invalidated favorites cache for %s:%s (new_state=%s)",
+                provider, track_id, transition.new_state.value,
+            )
+
+            now_liked = transition.new_state == RatingState.LIKED
+            return {
+                "success": True,
+                "message": transition.user_message,
+                "new_state": transition.new_state.value,
+                "liked": now_liked,
+            }
+        except Exception as e:
+            logger.error("Like-toggle failed: %s", e, exc_info=True)
             return {"success": False, "error": str(e)}
 
     # ------------------------------------------------------------------

@@ -889,6 +889,25 @@ def cmd_dislike() -> None:
         sys.exit(1)
 
 
+def cmd_like_toggle(provider: str, track_id: str) -> None:
+    """Toggle like state for a specific track (used by fzf search ctrl-l).
+
+    Args:
+        provider: Provider canonical name (e.g. 'yt', 'tidal').
+        track_id: Track identifier.
+    """
+    result = send_command(f"like-toggle {provider} {track_id}")
+    if result.get("success"):
+        msg = result.get("message", "Toggled")
+        liked = result.get("liked", False)
+        state_str = "[+1]" if liked else "[-1]"
+        print(colorize(f"OK {state_str} {msg}", "green"))
+    else:
+        error = result.get("error", "Unknown error")
+        print(colorize(f"ERROR {error}", "red"), file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_auth_tidal() -> None:
     """Run Tidal OAuth device flow and persist session token."""
     from xmpd.auth.tidal_oauth import run_oauth_flow
@@ -1028,6 +1047,7 @@ def show_help() -> None:
                                   --apply            Load and play immediately
   xmpctl like                    Toggle like for current track (provider inferred)
   xmpctl dislike                 Toggle dislike for current track (provider inferred)
+  xmpctl like-toggle <prov> <id> Toggle like for specific track (used by fzf search)
   xmpctl help                    Show this help message
 
 {colorize("Playback Control:", "bold")}
@@ -1113,6 +1133,11 @@ def main() -> NoReturn:
         cmd_like()
     elif command == "dislike":
         cmd_dislike()
+    elif command == "like-toggle":
+        if len(args) < 2:
+            print("Error: like-toggle requires <provider> <track_id>", file=sys.stderr)
+            sys.exit(1)
+        cmd_like_toggle(args[0], args[1])
     elif command == "auth":
         # Legacy compat: bare `auth` or `auth --auto` -> `auth yt`
         legacy_auto = "--auto" in args
