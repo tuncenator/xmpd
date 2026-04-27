@@ -489,6 +489,59 @@ def cmd_search() -> None:
         sys.exit(1)
 
 
+def cmd_search_json(args: list[str]) -> None:
+    """Output search results as NDJSON (one JSON object per line) for fzf consumption.
+
+    Usage: search-json [--provider yt|all] [--limit N] QUERY
+
+    Args:
+        args: Arguments after 'search-json' from sys.argv.
+    """
+    # Extract query and flags from args
+    provider = "all"
+    limit = 25
+    query_parts: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--provider" and i + 1 < len(args):
+            provider = args[i + 1]
+            i += 2
+        elif args[i] == "--limit" and i + 1 < len(args):
+            try:
+                limit = int(args[i + 1])
+            except ValueError:
+                pass
+            i += 2
+        else:
+            query_parts.append(args[i])
+            i += 1
+
+    query = " ".join(query_parts).strip()
+    if not query:
+        print("Error: search-json requires a query", file=sys.stderr)
+        print("Usage: xmpctl search-json [--provider yt|all] [--limit N] QUERY", file=sys.stderr)
+        sys.exit(1)
+
+    # Build command string for daemon
+    cmd_parts = ["search-json"]
+    if provider != "all":
+        cmd_parts += ["--provider", provider]
+    cmd_parts += ["--limit", str(limit)]
+    cmd_parts.append(query)
+    command = " ".join(cmd_parts)
+
+    result = send_command(command)
+
+    if not result.get("success"):
+        error = result.get("error", "Unknown error")
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    tracks = result.get("results", [])
+    for track in tracks:
+        print(json.dumps(track))
+
+
 def cmd_radio(apply: bool = False) -> None:
     """Generate radio playlist from currently playing track.
 
@@ -847,6 +900,8 @@ def show_help() -> None:
   xmpctl radio [--apply]   Generate radio playlist from current track
                             --apply: Automatically load and play the radio
   xmpctl search            Interactive search for YouTube Music tracks
+  xmpctl search-json QUERY Search and output NDJSON (for fzf integration)
+                            Options: --provider yt|all, --limit N
   xmpctl like              Toggle like for current track
   xmpctl dislike           Toggle dislike for current track
   xmpctl auth              Set up or refresh YouTube Music authentication
@@ -918,6 +973,8 @@ def main() -> NoReturn:
         cmd_radio(apply=apply)
     elif command == "search":
         cmd_search()
+    elif command == "search-json":
+        cmd_search_json(args)
     elif command == "like":
         cmd_like()
     elif command == "dislike":
