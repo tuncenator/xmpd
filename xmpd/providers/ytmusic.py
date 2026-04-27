@@ -2,22 +2,32 @@
 
 This module provides a wrapper around ytmusicapi that handles authentication
 and provides clean interfaces for search, playback, and song info retrieval.
+
+YTMusicProvider implements the full Provider Protocol (Phase 3):
+  - list_playlists, get_playlist_tracks, get_favorites
+  - resolve_stream, get_track_metadata
+  - search, get_radio
+  - like, dislike, unlike, get_like_state
+  - report_play
 """
 
 import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ytmusicapi import YTMusic
 
 from xmpd.config import get_config_dir
-from xmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
-from xmpd.providers.base import Playlist as ProviderPlaylist  # noqa: F401  (Phase 3 uses this)
-from xmpd.providers.base import Track as ProviderTrack  # noqa: F401  (Phase 3 uses this)
-from xmpd.providers.base import TrackMetadata  # noqa: F401  (Phase 3 uses this)
+from xmpd.exceptions import ProxyError, YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
+from xmpd.providers.base import Playlist as ProviderPlaylist
+from xmpd.providers.base import Track as ProviderTrack
+from xmpd.providers.base import TrackMetadata
 from xmpd.rating import RatingManager, RatingState
+
+if TYPE_CHECKING:
+    from xmpd.stream_resolver import StreamResolver
 
 logger = logging.getLogger(__name__)
 
@@ -25,38 +35,297 @@ logger = logging.getLogger(__name__)
 class YTMusicProvider:
     """Provider implementation for YouTube Music.
 
-    Wraps :class:`YTMusicClient` (defined later in this module). Method bodies
-    for the full Provider Protocol arrive in Phase 3; this scaffold only
-    declares the class so the registry can construct it and tests can
-    isinstance-check it (note: ``isinstance(p, Provider)`` will return False
-    until Phase 3 finishes the method surface).
+    Wraps :class:`YTMusicClient` (defined later in this module) and converts
+    its return types into the shared Provider Protocol types.
+
+    Implemented Provider Protocol methods:
+      - is_enabled, is_authenticated
+      - list_playlists, get_playlist_tracks, get_favorites
+      - resolve_stream, get_track_metadata
+      - search, get_radio
+      - like, dislike, unlike, get_like_state
+      - report_play
     """
 
     name = "yt"
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        stream_resolver: "StreamResolver | None" = None,
+    ) -> None:
         self._config = config
-        self._client: Any = None  # YTMusicClient lazily constructed via _ensure_client
+        self._stream_resolver = stream_resolver
+        self._client: YTMusicClient | None = None
 
     def is_enabled(self) -> bool:
         return bool(self._config.get("enabled", False))
 
-    def is_authenticated(self) -> bool:
-        # Defer to the existing browser.json check used by YTMusicClient.
-        # Phase 3 may refine this to also check token validity.
-        return Path("~/.config/xmpd/browser.json").expanduser().is_file()
+    def is_authenticated(self) -> tuple[bool, str]:
+        try:
+            client = self._ensure_client()
+            return client.is_authenticated()
+        except YTMusicAuthError as e:
+            return False, str(e)
 
     def _ensure_client(self) -> "YTMusicClient":
         if self._client is None:
-            self._client = YTMusicClient()  # YTMusicClient defined below in this file
+            self._client = YTMusicClient()
         return self._client
 
-    # Phase 3 adds:
-    #   list_playlists, get_playlist_tracks, get_favorites,
-    #   resolve_stream, get_track_metadata,
-    #   search, get_radio,
-    #   like, dislike, unlike, get_like_state,
-    #   report_play
+    # -----------------------------------------------------------------------
+    # Provider Protocol methods
+    # -----------------------------------------------------------------------
+
+    def list_playlists(self) -> list[ProviderPlaylist]:
+        """Return all user playlists plus a synthetic Liked Songs entry."""
+        client = self._ensure_client()
+        user_playlists = client.get_user_playlists()
+
+        result: list[ProviderPlaylist] = []
+
+        # Synthetic Liked Songs entry always first
+        result.append(
+            ProviderPlaylist(
+                provider="yt",
+                playlist_id="LM",
+                name="Liked Music",
+                track_count=0,
+                is_owned=True,
+                is_favorites=True,
+            )
+        )
+
+        for pl in user_playlists:
+            track_count = pl.track_count if pl.track_count is not None else 0
+            result.append(
+                ProviderPlaylist(
+                    provider="yt",
+                    playlist_id=pl.id,
+                    name=pl.name,
+                    track_count=track_count,
+                    is_owned=True,
+                    is_favorites=False,
+                )
+            )
+
+        return result
+
+    def get_playlist_tracks(self, playlist_id: str) -> list[ProviderTrack]:
+        """Return tracks for a playlist, converting to ProviderTrack."""
+        client = self._ensure_client()
+        raw_tracks = client.get_playlist_tracks(playlist_id)
+        return [self._local_track_to_provider(t) for t in raw_tracks]
+
+    def get_favorites(self) -> list[ProviderTrack]:
+        """Return liked songs, each with liked=True."""
+        client = self._ensure_client()
+        raw_tracks = client.get_liked_songs(limit=None)
+        return [self._local_track_to_provider(t, liked=True) for t in raw_tracks]
+
+    def resolve_stream(self, track_id: str) -> str:
+        """Resolve a direct stream URL via the injected StreamResolver."""
+        if self._stream_resolver is None:
+            raise YTMusicAPIError("YTMusicProvider has no StreamResolver injected")
+        url = self._stream_resolver.resolve_video_id(track_id)
+        if url is None:
+            raise ProxyError(f"Failed to resolve YT stream URL for {track_id}")
+        return url
+
+    def get_track_metadata(self, track_id: str) -> TrackMetadata | None:
+        """Return TrackMetadata for track_id, or None if not found."""
+        client = self._ensure_client()
+        try:
+            info = client.get_song_info(track_id)
+        except YTMusicNotFoundError:
+            return None
+
+        title = info.get("title") or "Unknown Title"
+        artist = info.get("artist") or None
+        if artist == "Unknown Artist":
+            artist = None
+
+        album = info.get("album") or None
+        if album == "":
+            album = None
+
+        duration_raw = info.get("duration")
+        duration_seconds: int | None = int(duration_raw) if duration_raw else None
+        if duration_seconds == 0:
+            duration_seconds = None
+
+        art_url = info.get("thumbnail_url") or None
+        if art_url == "":
+            art_url = None
+
+        return TrackMetadata(
+            title=title,
+            artist=artist,
+            album=album,
+            duration_seconds=duration_seconds,
+            art_url=art_url,
+        )
+
+    def search(self, query: str, limit: int = 25) -> list[ProviderTrack]:
+        """Search YouTube Music; returns empty list on YTMusicNotFoundError."""
+        client = self._ensure_client()
+        try:
+            raw_results = client.search(query, limit=limit)
+        except YTMusicNotFoundError:
+            return []
+
+        tracks: list[ProviderTrack] = []
+        for r in raw_results:
+            if not r.get("video_id"):
+                continue
+            artist = r.get("artist") or None
+            if artist == "Unknown Artist":
+                artist = None
+            duration_raw = r.get("duration")
+            duration_seconds: int | None = int(duration_raw) if duration_raw else None
+            if duration_seconds == 0:
+                duration_seconds = None
+            metadata = TrackMetadata(
+                title=r.get("title") or "Unknown Title",
+                artist=artist,
+                album=None,
+                duration_seconds=duration_seconds,
+                art_url=None,
+            )
+            tracks.append(
+                ProviderTrack(
+                    provider="yt",
+                    track_id=r["video_id"],
+                    metadata=metadata,
+                )
+            )
+        return tracks
+
+    def get_radio(self, seed_track_id: str, limit: int = 25) -> list[ProviderTrack]:
+        """Return a radio/watch-playlist seeded from seed_track_id.
+
+        NOTE: This is the only place in YTMusicProvider that breaches the
+        YTMusicClient abstraction by accessing ``self._client._client`` directly.
+        get_watch_playlist is not exposed on YTMusicClient and adding it would be
+        a Phase 3-scope-creep; a future cleanup can wrap it properly.
+        """
+        client = self._ensure_client()
+        # Access underlying ytmusicapi client directly (see NOTE above)
+        yt = client._client
+        if yt is None:
+            logger.warning("get_radio: YTMusic client not initialized for %s", seed_track_id)
+            return []
+        try:
+            response = yt.get_watch_playlist(
+                videoId=seed_track_id, radio=True, limit=limit
+            )
+        except Exception as e:
+            logger.warning("get_radio failed for %s: %s", seed_track_id, e)
+            return []
+
+        raw_resp: dict[str, Any] = response if isinstance(response, dict) else {}
+        raw_tracks: list[Any] = raw_resp.get("tracks") or []
+        tracks: list[ProviderTrack] = []
+
+        for t in raw_tracks:
+            if not isinstance(t, dict):
+                continue
+            video_id = t.get("videoId")
+            if not video_id:
+                continue
+
+            artists: list[Any] = t.get("artists") or []
+            artist_name: str | None = artists[0]["name"] if artists else None
+            if artist_name == "Unknown Artist":
+                artist_name = None
+
+            length_str = t.get("length")
+            dur: int | None = None
+            if length_str:
+                parsed = YTMusicClient._parse_duration(length_str)
+                dur = parsed if parsed != 0 else None
+
+            album_info = t.get("album")
+            album_name: str | None = None
+            if isinstance(album_info, dict):
+                album_name = album_info.get("name") or None
+
+            thumbnails: list[Any] = t.get("thumbnail") or []
+            art_url: str | None = thumbnails[-1].get("url") if thumbnails else None
+
+            metadata = TrackMetadata(
+                title=t.get("title") or "Unknown Title",
+                artist=artist_name,
+                album=album_name,
+                duration_seconds=dur,
+                art_url=art_url,
+            )
+            tracks.append(
+                ProviderTrack(
+                    provider="yt",
+                    track_id=video_id,
+                    metadata=metadata,
+                )
+            )
+
+        return tracks
+
+    def like(self, track_id: str) -> None:
+        self._ensure_client().set_track_rating(track_id, RatingState.LIKED)
+
+    def dislike(self, track_id: str) -> None:
+        self._ensure_client().set_track_rating(track_id, RatingState.DISLIKED)
+
+    def unlike(self, track_id: str) -> None:
+        self._ensure_client().set_track_rating(track_id, RatingState.NEUTRAL)
+
+    def get_like_state(self, track_id: str) -> bool:
+        state = self._ensure_client().get_track_rating(track_id)
+        return state == RatingState.LIKED
+
+    def report_play(self, track_id: str, duration_seconds: int) -> None:
+        """Report a play to YouTube Music history. Best-effort; never raises.
+
+        duration_seconds is part of the Provider contract but is unused by
+        ytmusicapi's add_history_item() implementation.
+        """
+        try:
+            client = self._ensure_client()
+            song = client.get_song(track_id)
+            ok = client.report_history(song)
+            if not ok:
+                logger.warning(
+                    "report_play: YT history report returned False for %s", track_id
+                )
+        except Exception as e:
+            logger.warning("report_play: unexpected error for %s: %s", track_id, e)
+
+    # -----------------------------------------------------------------------
+    # Internal helpers
+    # -----------------------------------------------------------------------
+
+    def _local_track_to_provider(
+        self, track: "Track", liked: bool | None = None
+    ) -> ProviderTrack:
+        """Convert a module-local YTMusicClient Track to a ProviderTrack."""
+        artist: str | None = track.artist if track.artist != "Unknown Artist" else None
+        dur_raw = track.duration_seconds
+        duration_seconds: int | None = int(dur_raw) if dur_raw is not None else None
+        if duration_seconds == 0:
+            duration_seconds = None
+        metadata = TrackMetadata(
+            title=track.title,
+            artist=artist,
+            album=None,
+            duration_seconds=duration_seconds,
+            art_url=None,
+        )
+        return ProviderTrack(
+            provider="yt",
+            track_id=track.video_id,
+            metadata=metadata,
+            liked=liked,
+        )
 
 
 def _truncate_error(error: Exception, max_length: int = 200) -> str:

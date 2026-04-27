@@ -1,0 +1,53 @@
+{
+  "_capture_note": "Partial capture 2026-04-27: browser.json auth expired for liked-songs/playlist endpoints. get_user_playlists returns empty (no auth). search() works. Shapes for liked-songs/playlists are minimal representative fallbacks inferred from YTMusicClient code.",
+  "get_user_playlists_first": null,
+  "get_playlist_tracks_LM_first2": [
+    {
+      "video_id": "dQw4w9WgXcQ",
+      "title": "Never Gonna Give You Up",
+      "artist": "Rick Astley",
+      "duration_seconds": 213
+    }
+  ],
+  "get_liked_songs_first2": [
+    {
+      "video_id": "dQw4w9WgXcQ",
+      "title": "Never Gonna Give You Up",
+      "artist": "Rick Astley",
+      "duration_seconds": 213
+    }
+  ],
+  "get_song_info_sample": {
+    "video_id": "dQw4w9WgXcQ",
+    "title": "Never Gonna Give You Up",
+    "artist": "Rick Astley",
+    "album": "",
+    "duration": 213,
+    "thumbnail_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg"
+  },
+  "search_miles_davis_first2": [
+    {
+      "video_id": "8bdBONxS-Es",
+      "title": "In a Silent Way",
+      "artist": "Miles Davis",
+      "duration": 1193
+    },
+    {
+      "video_id": "Y_OLqWOT7ck",
+      "title": "So What",
+      "artist": "Miles Davis",
+      "duration": 564
+    }
+  ],
+  "get_watch_playlist_radio_first2_tracks": [
+    {
+      "videoId": "8bdBONxS-Es",
+      "title": "In a Silent Way",
+      "artists": [{"name": "Miles Davis"}],
+      "length": "19:53",
+      "album": {"name": "In A Silent Way"},
+      "thumbnail": [{"url": "https://lh3.googleusercontent.com/example", "width": 226, "height": 226}]
+    }
+  ],
+  "get_track_rating_for_liked_track": "NEUTRAL"
+}
