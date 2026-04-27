@@ -347,6 +347,50 @@ class TestResolveStream:
         with pytest.raises(TidalAuthRequired, match="no longer authenticated"):
             prov.resolve_stream("12345")
 
+    def test_retry_authentication_error_raises_tidal_auth_required(
+        self, wired_provider: tuple[TidalProvider, MagicMock]
+    ) -> None:
+        """First attempt hits TooManyRequests, retry hits AuthenticationError."""
+        from tidalapi.exceptions import AuthenticationError, TooManyRequests
+
+        prov, session = wired_provider
+
+        err_rate = TooManyRequests("slow down", retry_after=0)
+        mock_track_fail = MagicMock()
+        mock_track_fail.get_url.side_effect = err_rate
+
+        err_auth = AuthenticationError("expired between attempts")
+        mock_track_auth = MagicMock()
+        mock_track_auth.get_url.side_effect = err_auth
+
+        session.track.side_effect = [mock_track_fail, mock_track_auth]
+
+        with patch("xmpd.providers.tidal.time.sleep"):
+            with pytest.raises(TidalAuthRequired, match="no longer authenticated"):
+                prov.resolve_stream("12345")
+
+    def test_retry_url_not_available_raises_xmpderror(
+        self, wired_provider: tuple[TidalProvider, MagicMock]
+    ) -> None:
+        """First attempt hits TooManyRequests, retry hits URLNotAvailable."""
+        from tidalapi.exceptions import TooManyRequests, URLNotAvailable
+
+        prov, session = wired_provider
+
+        err_rate = TooManyRequests("slow down", retry_after=0)
+        mock_track_fail = MagicMock()
+        mock_track_fail.get_url.side_effect = err_rate
+
+        err_url = URLNotAvailable("gone")
+        mock_track_url = MagicMock()
+        mock_track_url.get_url.side_effect = err_url
+
+        session.track.side_effect = [mock_track_fail, mock_track_url]
+
+        with patch("xmpd.providers.tidal.time.sleep"):
+            with pytest.raises(XMPDError, match="URL not available"):
+                prov.resolve_stream("12345")
+
 
 # ---------------------------------------------------------------------------
 # get_track_metadata
@@ -376,7 +420,7 @@ class TestGetTrackMetadata:
         assert meta.duration_seconds == 300
         assert meta.art_url == "https://resources.tidal.com/images/cover/640x640.jpg"
 
-    def test_object_not_found_raises_xmpderror(
+    def test_object_not_found_returns_none(
         self, wired_provider: tuple[TidalProvider, MagicMock]
     ) -> None:
         from tidalapi.exceptions import ObjectNotFound
@@ -384,8 +428,8 @@ class TestGetTrackMetadata:
         prov, session = wired_provider
         session.track.side_effect = ObjectNotFound("nope")
 
-        with pytest.raises(XMPDError, match="not found"):
-            prov.get_track_metadata("999")
+        result = prov.get_track_metadata("999")
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

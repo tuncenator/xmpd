@@ -245,30 +245,33 @@ class TidalProvider:
             self._hires_warned = True
         session.config.quality = Quality.high_lossless
 
-        try:
-            track = session.track(track_id)
-            url: str = track.get_url()
-            return url
-        except URLNotAvailable as e:
-            raise XMPDError(f"Tidal URL not available for track {track_id}: {e}") from e
-        except TooManyRequests as e:
-            retry = max(1, e.retry_after if e.retry_after > 0 else 1)
-            logger.warning(
-                "Tidal rate-limited on resolve_stream(%s); sleeping %ss then retrying once",
-                track_id,
-                retry,
-            )
-            time.sleep(retry)
+        for attempt in (1, 2):
             try:
                 track = session.track(track_id)
-                url = track.get_url()
+                url: str = track.get_url()
                 return url
-            except TooManyRequests as e2:
+            except URLNotAvailable as e:
                 raise XMPDError(
-                    f"Tidal rate-limit persisted on retry for track {track_id}: {e2}"
-                ) from e2
-        except AuthenticationError as e:
-            raise TidalAuthRequired(f"Tidal session no longer authenticated: {e}") from e
+                    f"Tidal URL not available for track {track_id}: {e}"
+                ) from e
+            except TooManyRequests as e:
+                if attempt == 2:
+                    raise XMPDError(
+                        f"Tidal rate-limit persisted on retry for track {track_id}: {e}"
+                    ) from e
+                retry = max(1, e.retry_after if e.retry_after > 0 else 1)
+                logger.warning(
+                    "Tidal rate-limited on resolve_stream(%s); "
+                    "sleeping %ss then retrying once",
+                    track_id,
+                    retry,
+                )
+                time.sleep(retry)
+            except AuthenticationError as e:
+                raise TidalAuthRequired(
+                    f"Tidal session no longer authenticated: {e}"
+                ) from e
+        return None  # unreachable; keeps mypy happy
 
     def get_track_metadata(self, track_id: str) -> TrackMetadata | None:
         """Return metadata for a single track, or None on not-found."""
@@ -276,7 +279,8 @@ class TidalProvider:
         try:
             t = session.track(track_id, with_album=True)
         except ObjectNotFound as e:
-            raise XMPDError(f"Tidal track {track_id} not found: {e}") from e
+            logger.warning("Tidal track %s not found: %s", track_id, e)
+            return None
 
         art_url: str | None = None
         if t.album is not None and getattr(t.album, "cover", None):
