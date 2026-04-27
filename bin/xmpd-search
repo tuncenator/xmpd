@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# xmpd-search - Interactive fzf-based music search for xmpd.
+#
+# Launches fzf with live-as-you-type search results from Tidal and YouTube Music.
+# Results are colored by provider (Tidal teal, YouTube pink) with quality badges
+# and liked indicators.
+#
+# On enter, prints "provider\ttrack_id" of the selected track to stdout.
+# Phase 4 will add action keybindings (play, queue, radio, multi-select).
+#
+# Requires: fzf, xmpctl (in PATH or sibling in bin/)
+
+set -euo pipefail
+
+# Resolve xmpctl path: prefer sibling in same bin/ directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -x "${SCRIPT_DIR}/xmpctl" ]]; then
+    XMPCTL="${SCRIPT_DIR}/xmpctl"
+elif command -v xmpctl &>/dev/null; then
+    XMPCTL="xmpctl"
+else
+    echo "Error: xmpctl not found" >&2
+    exit 1
+fi
+
+# Check fzf is available
+if ! command -v fzf &>/dev/null; then
+    echo "Error: fzf is required but not installed" >&2
+    echo "Install with: pacman -S fzf (or your package manager)" >&2
+    exit 1
+fi
+
+# Check if xmpd daemon is running
+SOCKET_PATH="${HOME}/.config/xmpd/sync_socket"
+if [[ ! -S "${SOCKET_PATH}" ]]; then
+    echo "Error: xmpd daemon is not running" >&2
+    echo "Start the daemon with: systemctl --user start xmpd" >&2
+    exit 1
+fi
+
+# ANSI colors for header
+TIDAL_COLOR=$'\033[38;2;115;218;202m'
+YT_COLOR=$'\033[38;2;247;118;142m'
+RESET=$'\033[0m'
+DIM=$'\033[2m'
+BOLD=$'\033[1m'
+
+HEADER="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  ${DIM}| Type to search${RESET}"
+
+# Build the reload command. fzf replaces {q} with the current query.
+# sleep 0.15 provides basic debounce since fzf fires on every keystroke.
+RELOAD_CMD="sleep 0.15; ${XMPCTL} search-json --format fzf {q}"
+
+# Launch fzf
+SELECTED=$(
+    fzf --ansi \
+        --disabled \
+        --delimiter=$'\t' \
+        --with-nth=3.. \
+        --bind "change:reload:${RELOAD_CMD}" \
+        --bind "start:reload:echo ''" \
+        --header="${HEADER}" \
+        --prompt="Search: " \
+        --pointer=">" \
+        --no-info \
+        --layout=reverse \
+        --margin=1,2 \
+        --no-scrollbar \
+        --color='bg+:#1a1b26,pointer:#f7768e' \
+    < /dev/null 2>/dev/null
+) || exit 0
+
+# Extract provider and track_id from selection (first two tab-separated fields)
+if [[ -n "${SELECTED}" ]]; then
+    PROVIDER=$(echo "${SELECTED}" | cut -f1)
+    TRACK_ID=$(echo "${SELECTED}" | cut -f2)
+    echo "${PROVIDER}	${TRACK_ID}"
+fi
