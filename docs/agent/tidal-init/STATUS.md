@@ -47,7 +47,7 @@
 
 - **Conductor Mode**: enabled
 - **Total Batches**: 9
-- **Current Batch**: 6
+- **Current Batch**: 7
 - **Pacing**: auto-refresh
 - **Batches Per Session**: 5
 - **Execution Plan**: docs/agent/tidal-init/EXECUTION_PLAN.md
@@ -55,16 +55,16 @@
 ---
 
 **Last Updated:** 2026-04-27
-**Current Phase:** 9 of 13
-**Phase Name:** Tidal foundation (tidalapi dep, OAuth, TidalProvider scaffold)
-**Progress:** 62% (8/13 phases complete)
+**Current Phase:** 10 of 13
+**Phase Name:** TidalProvider methods (full Protocol coverage)
+**Progress:** 69% (9/13 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[########-----] 62% (8/13)
+[#########----] 69% (9/13)
 ```
 
 ---
@@ -81,8 +81,8 @@
 | 6 | Provider-aware sync engine | `[Complete]` |
 | 7 | Provider-aware history reporter + rating module | `[Complete]` |
 | 8 | Daemon registry wiring + xmpctl auth subcommand restructure | `[Complete]` |
-| 9 | Tidal foundation (tidalapi dep, OAuth, TidalProvider scaffold) | `[Current]` |
-| 10 | TidalProvider methods (full Protocol coverage) | `[Pending]` |
+| 9 | Tidal foundation (tidalapi dep, OAuth, TidalProvider scaffold) | `[Complete]` |
+| 10 | TidalProvider methods (full Protocol coverage) | `[Current]` |
 | 11 | Tidal CLI + per-provider config + stream-proxy wiring | `[Pending]` |
 | 12 | AirPlay bridge: Tidal album art | `[Pending]` |
 | 13 | Install / migration / docs / final integration | `[Pending]` |
@@ -91,10 +91,10 @@
 
 ## Instructions for Agents
 
-1. Read `phase_plans/PHASE_09.md` for detailed requirements for Phase 9
-2. Read most recent phase summaries (`summaries/PHASE_08_SUMMARY.md`, `summaries/PHASE_06_SUMMARY.md`)
+1. Read `phase_plans/PHASE_10.md` for detailed requirements for Phase 10
+2. Read most recent phase summaries (`summaries/PHASE_09_SUMMARY.md`, `summaries/PHASE_08_SUMMARY.md`)
 3. Complete the phase following the build-verify-commit cycle
-4. Create `summaries/PHASE_09_SUMMARY.md`
+4. Create `summaries/PHASE_10_SUMMARY.md`
 5. Update this file when complete
 
 **Phase plans:** See `phase_plans/PHASE_XX.md`
