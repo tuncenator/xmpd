@@ -47,7 +47,7 @@
 
 - **Conductor Mode**: enabled
 - **Total Batches**: 9
-- **Current Batch**: 3
+- **Current Batch**: 4
 - **Pacing**: auto-refresh
 - **Batches Per Session**: 5
 - **Execution Plan**: docs/agent/tidal-init/EXECUTION_PLAN.md
@@ -55,16 +55,16 @@
 ---
 
 **Last Updated:** 2026-04-27
-**Current Phase:** 3 of 13
-**Phase Name:** YTMusicProvider methods
-**Progress:** 23% (3/13 phases complete)
+**Current Phase:** 6 of 13
+**Phase Name:** Provider-aware sync engine
+**Progress:** 46% (6/13 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[###----------] 23% (3/13)
+[######-------] 46% (6/13)
 ```
 
 ---
@@ -75,11 +75,11 @@
 |-------|------|--------|
 | 1 | Provider abstraction foundation (packages, dataclasses, Protocol, registry skeleton) | `[Complete]` |
 | 2 | YT module relocation + YTMusicProvider scaffold | `[Complete]` |
-| 3 | YTMusicProvider methods (full Protocol coverage wrapping YTMusicClient) | `[Current]` |
-| 4 | Stream proxy rename + provider-aware routing + URL builder | `[Pending]` |
+| 3 | YTMusicProvider methods (full Protocol coverage wrapping YTMusicClient) | `[Complete]` |
+| 4 | Stream proxy rename + provider-aware routing + URL builder | `[Complete]` |
 | 5 | Track store schema migration (compound key, new columns) | `[Complete]` |
-| 6 | Provider-aware sync engine | `[Pending]` |
-| 7 | Provider-aware history reporter + rating module | `[Pending]` |
+| 6 | Provider-aware sync engine | `[Current]` |
+| 7 | Provider-aware history reporter + rating module | `[Complete]` |
 | 8 | Daemon registry wiring + xmpctl auth subcommand restructure | `[Pending]` |
 | 9 | Tidal foundation (tidalapi dep, OAuth, TidalProvider scaffold) | `[Pending]` |
 | 10 | TidalProvider methods (full Protocol coverage) | `[Pending]` |
@@ -91,10 +91,10 @@
 
 ## Instructions for Agents
 
-1. Read `phase_plans/PHASE_XX.md` for detailed requirements for your phase
-2. Read most recent phase summaries (`summaries/PHASE_05_SUMMARY.md`, `summaries/PHASE_02_SUMMARY.md`)
+1. Read `phase_plans/PHASE_06.md` for detailed requirements for Phase 6
+2. Read most recent phase summaries (`summaries/PHASE_07_SUMMARY.md`, `summaries/PHASE_04_SUMMARY.md`)
 3. Complete the phase following the build-verify-commit cycle
-4. Create `summaries/PHASE_XX_SUMMARY.md`
+4. Create `summaries/PHASE_06_SUMMARY.md`
 5. Update this file when complete
 
 **Phase plans:** See `phase_plans/PHASE_XX.md`
