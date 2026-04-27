@@ -198,30 +198,32 @@ def cmd_status() -> None:
     daemon_start = format_datetime(result.get("daemon_start_time"))
     print(f"Daemon started: {daemon_start}")
 
-    # Authentication status
-    auth_valid = result.get("auth_valid", False)
-    auth_error = result.get("auth_error", "")
-    if auth_valid:
-        print(f"Authentication: {colorize('Valid', 'green')}")
+    # Per-provider authentication status
+    prov_status = send_command("provider-status")
+    if prov_status.get("success"):
+        providers = prov_status.get("providers", {})
+        for prov_name in ("yt", "tidal"):
+            info = providers.get(prov_name)
+            if info is None:
+                continue
+            label = f"Authentication ({prov_name})"
+            if not info.get("enabled", False):
+                print(f"{label}: {colorize('Disabled', 'yellow')}")
+            elif info.get("authenticated", False):
+                print(f"{label}: {colorize('Valid', 'green')}")
+            else:
+                print(f"{label}: {colorize('INVALID', 'red')}")
+                print(f"  Run: {colorize(f'xmpctl auth {prov_name}', 'blue')} to authenticate")
     else:
-        print(f"Authentication: {colorize('INVALID', 'red')}")
-        if auth_error:
-            print(f"  Error: {auth_error}")
-            print(f"  Run: {colorize('xmpctl auth', 'blue')} to re-authenticate")
-
-    # Auto-auth status
-    auto_auth_enabled = result.get("auto_auth_enabled", False)
-    if auto_auth_enabled:
-        print(f"Auto-auth: {colorize('Enabled', 'green')}")
-        last_refresh = format_datetime(result.get("last_auto_refresh"))
-        print(f"  Last refresh: {last_refresh}")
-        failures = result.get("auto_refresh_failures", 0)
-        if failures > 0:
-            print(f"  Refresh failures: {colorize(str(failures), 'yellow')}")
+        # Fall back to legacy single-provider field
+        auth_valid = result.get("auth_valid", False)
+        auth_error = result.get("auth_error", "")
+        if auth_valid:
+            print(f"Authentication: {colorize('Valid', 'green')}")
         else:
-            print(f"  Refresh failures: {failures}")
-    else:
-        print("Auto-auth: Disabled")
+            print(f"Authentication: {colorize('INVALID', 'red')}")
+            if auth_error:
+                print(f"  Error: {auth_error}")
     print()
 
     # Sync in progress indicator
@@ -265,8 +267,8 @@ def cmd_status() -> None:
 
 
 def cmd_list_playlists() -> None:
-    """List YouTube Music playlists."""
-    print("Fetching playlists from YouTube Music...")
+    """List playlists from all enabled providers."""
+    print("Fetching playlists from all providers...")
     result = send_command("list")
 
     if not result.get("success"):
@@ -280,20 +282,31 @@ def cmd_list_playlists() -> None:
         print("No playlists found.")
         return
 
-    print()
-    print(colorize("=== YouTube Music Playlists ===", "bold"))
-    print()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for p in playlists:
+        grouped.setdefault(p.get("provider", "unknown"), []).append(p)
 
-    for playlist in playlists:
-        name = playlist.get("name", "Unknown")
-        track_count = playlist.get("track_count", 0)
-        print(f"  • {name} ({track_count} tracks)")
+    provider_titles = {"yt": "YouTube Music", "tidal": "Tidal"}
+    provider_prefixes = {"yt": "YT: ", "tidal": "TD: "}
+
+    for prov_name in sorted(grouped):
+        title = provider_titles.get(prov_name, prov_name.capitalize())
+        prov_playlists = grouped[prov_name]
+        print()
+        print(colorize(f"=== {title} ({len(prov_playlists)}) ===", "bold"))
+        print()
+        for playlist in prov_playlists:
+            name = playlist.get("name", "Unknown")
+            track_count = playlist.get("track_count", 0)
+            print(f"  - {name} ({track_count} tracks)")
 
     print()
-    print(f"Total: {len(playlists)} playlists")
+    print(f"Total: {len(playlists)} playlists across {len(grouped)} provider(s)")
     print()
     print("To load a playlist in MPD, use:")
-    print(colorize('  mpc load "YT: <playlist-name>"', "blue"))
+    for prov_name in sorted(grouped):
+        prefix = provider_prefixes.get(prov_name, f"{prov_name.upper()}: ")
+        print(colorize(f'  mpc load "{prefix}<playlist-name>"', "blue"))
 
 
 def parse_provider_flag(args: list[str]) -> tuple[str | None, list[str]]:
@@ -439,9 +452,21 @@ def cmd_search(query: str | None = None, provider: str | None = None) -> None:
             resp = send_command(f"radio {sel_provider} {sel_track_id}")
             if resp.get("success"):
                 tracks = resp.get("tracks", 0)
+                playlist = resp.get("playlist", "TD: Radio" if sel_provider == "tidal" else "YT: Radio")
+                radio_xspf = f"_xmpd/{playlist}.xspf"
                 print(
                     colorize(f"OK Radio playlist created: {tracks} tracks", "green")
                 )
+                # Auto-apply: clear, load, play
+                mpc_cmd = _build_mpc_cmd()
+                try:
+                    subprocess.run(mpc_cmd + ["clear"], check=True, capture_output=True)
+                    subprocess.run(mpc_cmd + ["load", radio_xspf], check=True, capture_output=True)
+                    subprocess.run(mpc_cmd + ["play"], check=True, capture_output=True)
+                    print(colorize("OK Radio playlist loaded and playing!", "green"))
+                except subprocess.CalledProcessError as e:
+                    print(colorize(f"ERROR Failed to apply radio playlist: {e}", "red"), file=sys.stderr)
+                    sys.exit(1)
             else:
                 error = resp.get("error", "Failed to generate radio")
                 print(colorize(f"ERROR {error}", "red"), file=sys.stderr)
@@ -476,6 +501,7 @@ def cmd_radio(apply: bool = False, provider: str | None = None) -> None:
         check = "✓" if has_unicode_support() else "OK"
         tracks = result.get("tracks", 0)
         playlist = result.get("playlist", "YT: Radio")
+        radio_xspf = f"_xmpd/{playlist}.xspf"
         msg = f"Radio playlist created: {tracks} tracks"
         print(colorize(f"{check} {msg}", "green"))
 
@@ -525,7 +551,7 @@ def cmd_radio(apply: bool = False, provider: str | None = None) -> None:
                 # Load radio playlist from music directory
                 # XSPF playlists are in music dir, not playlist dir
                 subprocess.run(
-                    mpc_cmd + ["load", "_youtube/YT: Radio.xspf"], check=True, capture_output=True
+                    mpc_cmd + ["load", radio_xspf], check=True, capture_output=True
                 )
 
                 # Start playback
@@ -539,7 +565,7 @@ def cmd_radio(apply: bool = False, provider: str | None = None) -> None:
             print()
             print(f"Playlist '{playlist}' is ready in MPD.")
             print("To load and play:")
-            print(colorize('  mpc load "_youtube/YT: Radio.xspf"', "blue"))
+            print(colorize(f'  mpc load "{radio_xspf}"', "blue"))
             print(colorize("  mpc play", "blue"))
             print()
             print("Or use:")
@@ -582,6 +608,14 @@ def get_mpd_connection_info() -> tuple[str | None, int]:
         pass  # Use defaults
 
     return mpd_socket, mpd_port
+
+
+def _build_mpc_cmd() -> list[str]:
+    """Build the base mpc command with connection args."""
+    mpd_socket, mpd_port = get_mpd_connection_info()
+    if mpd_socket:
+        return ["mpc", "-h", mpd_socket]
+    return ["mpc", "-p", str(mpd_port)]
 
 
 def get_current_track_from_mpd() -> tuple[str, str, str, str]:
@@ -819,7 +853,8 @@ def show_help() -> None:
 
 {colorize("Playback Control:", "bold")}
   Use mpc for playback control of synced playlists:
-    mpc load "YT: Favorites"    Load YouTube playlist in MPD
+    mpc load "YT: Liked Songs"  Load YouTube playlist in MPD
+    mpc load "TD: Favorites"    Load Tidal playlist in MPD
     mpc play                     Start playback
     mpc pause                    Pause playback
     mpc next                     Next track
