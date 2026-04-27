@@ -65,6 +65,18 @@ Interactive criteria (C-s keybinding, live search results) require a running dae
 
 ---
 
+## Code Review Results
+
+**Result**: PASSED WITH NOTES (3 minor issues)
+
+| # | Severity | File | Issue | Status |
+|---|----------|------|-------|--------|
+| 1 | Minor | bin/xmpctl | Unknown provider defaults to YT styling (acceptable fallback) | Accepted |
+| 2 | Minor | bin/xmpd-search | sleep 0.15 debounce adds latency per keystroke (documented) | Accepted |
+| 3 | Minor | tests/ | exec()/os.execv monkey-patch test loading pattern is fragile (pre-existing) | Accepted |
+
+---
+
 ## Code Quality
 
 - **ruff**: Phase 3 files clean. 12 pre-existing issues in `xmpd/stream_resolver.py` and `xmpd/xspf_generator.py` (not modified by this batch).
