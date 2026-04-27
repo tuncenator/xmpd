@@ -452,7 +452,8 @@ def cmd_search(query: str | None = None, provider: str | None = None) -> None:
             resp = send_command(f"radio {sel_provider} {sel_track_id}")
             if resp.get("success"):
                 tracks = resp.get("tracks", 0)
-                playlist = resp.get("playlist", "TD: Radio" if sel_provider == "tidal" else "YT: Radio")
+                default_pl = "TD: Radio" if sel_provider == "tidal" else "YT: Radio"
+                playlist = resp.get("playlist", default_pl)
                 radio_xspf = f"_xmpd/{playlist}.xspf"
                 print(
                     colorize(f"OK Radio playlist created: {tracks} tracks", "green")
@@ -465,7 +466,8 @@ def cmd_search(query: str | None = None, provider: str | None = None) -> None:
                     subprocess.run(mpc_cmd + ["play"], check=True, capture_output=True)
                     print(colorize("OK Radio playlist loaded and playing!", "green"))
                 except subprocess.CalledProcessError as e:
-                    print(colorize(f"ERROR Failed to apply radio playlist: {e}", "red"), file=sys.stderr)
+                    msg = f"ERROR Failed to apply radio playlist: {e}"
+                    print(colorize(msg, "red"), file=sys.stderr)
                     sys.exit(1)
             else:
                 error = resp.get("error", "Failed to generate radio")
@@ -482,6 +484,14 @@ def cmd_search(query: str | None = None, provider: str | None = None) -> None:
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+# ANSI true color escapes for fzf output (consistent with bin/xmpd-status)
+ANSI_TIDAL = "\033[38;2;115;218;202m"  # #73daca teal
+ANSI_YT = "\033[38;2;247;118;142m"     # #f7768e pink
+ANSI_RESET = "\033[0m"
+ANSI_BOLD = "\033[1m"
+ANSI_DIM = "\033[2m"
 
 
 def format_track_fzf(track: dict[str, Any]) -> str:
@@ -505,34 +515,30 @@ def format_track_fzf(track: dict[str, Any]) -> str:
     quality = track.get("quality")
     liked = track.get("liked", False)
 
-    # Provider tag and color
-    TIDAL_COLOR = "\033[38;2;115;218;202m"
-    YT_COLOR = "\033[38;2;247;118;142m"
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-
     if provider == "tidal":
-        color = TIDAL_COLOR
+        color = ANSI_TIDAL
         tag = "[TD]"
     else:
-        color = YT_COLOR
+        color = ANSI_YT
         tag = "[YT]"
 
     # Quality badge
     badge = ""
     if quality == "HR":
-        badge = f" {BOLD}HR{RESET}{color}"
+        badge = f" {ANSI_BOLD}HR{ANSI_RESET}{color}"
     elif quality == "CD":
         badge = " CD"
     elif quality == "Lo":
-        badge = f" {DIM}Lo{RESET}{color}"
+        badge = f" {ANSI_DIM}Lo{ANSI_RESET}{color}"
 
     # Liked indicator
     liked_str = " [+1]" if liked is True else ""
 
     # Build visible line: [TD] CD [+1] Artist - Title (3:59)
-    visible = f"{color}{tag}{badge}{liked_str} {artist} - {title} ({duration}){RESET}"
+    visible = (
+        f"{color}{tag}{badge}{liked_str}"
+        f" {artist} - {title} ({duration}){ANSI_RESET}"
+    )
 
     return f"{provider}\t{track_id}\t{visible}"
 
