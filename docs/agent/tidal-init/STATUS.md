@@ -47,7 +47,7 @@
 
 - **Conductor Mode**: enabled
 - **Total Batches**: 9
-- **Current Batch**: 2
+- **Current Batch**: 3
 - **Pacing**: auto-refresh
 - **Batches Per Session**: 5
 - **Execution Plan**: docs/agent/tidal-init/EXECUTION_PLAN.md
@@ -55,16 +55,16 @@
 ---
 
 **Last Updated:** 2026-04-27
-**Current Phase:** 2 of 13
-**Phase Name:** YT module relocation + YTMusicProvider scaffold
-**Progress:** 8% (1/13 phases complete)
+**Current Phase:** 3 of 13
+**Phase Name:** YTMusicProvider methods
+**Progress:** 23% (3/13 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[#------------] 8% (1/13)
+[###----------] 23% (3/13)
 ```
 
 ---
@@ -74,10 +74,10 @@
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | Provider abstraction foundation (packages, dataclasses, Protocol, registry skeleton) | `[Complete]` |
-| 2 | YT module relocation + YTMusicProvider scaffold | `[Current]` |
-| 3 | YTMusicProvider methods (full Protocol coverage wrapping YTMusicClient) | `[Pending]` |
+| 2 | YT module relocation + YTMusicProvider scaffold | `[Complete]` |
+| 3 | YTMusicProvider methods (full Protocol coverage wrapping YTMusicClient) | `[Current]` |
 | 4 | Stream proxy rename + provider-aware routing + URL builder | `[Pending]` |
-| 5 | Track store schema migration (compound key, new columns) | `[Pending]` |
+| 5 | Track store schema migration (compound key, new columns) | `[Complete]` |
 | 6 | Provider-aware sync engine | `[Pending]` |
 | 7 | Provider-aware history reporter + rating module | `[Pending]` |
 | 8 | Daemon registry wiring + xmpctl auth subcommand restructure | `[Pending]` |
@@ -91,16 +91,11 @@
 
 ## Instructions for Agents
 
-1. Read `phase_plans/PHASE_02.md` for detailed requirements for Phase 2
-2. Read most recent phase summary (`summaries/PHASE_01_SUMMARY.md`)
+1. Read `phase_plans/PHASE_XX.md` for detailed requirements for your phase
+2. Read most recent phase summaries (`summaries/PHASE_05_SUMMARY.md`, `summaries/PHASE_02_SUMMARY.md`)
 3. Complete the phase following the build-verify-commit cycle
-4. Create `summaries/PHASE_02_SUMMARY.md`
-5. Update this file:
-   - Mark Phase 2 as `[Complete]`
-   - Set Phase 3 as `[Current]`
-   - Update "Current Phase" to "3 of 13"
-   - Update "Progress" percentage and count
-   - Update progress bar (each `#` = completed phase, each `-` = remaining phase)
+4. Create `summaries/PHASE_XX_SUMMARY.md`
+5. Update this file when complete
 
 **Phase plans:** See `phase_plans/PHASE_XX.md`
 **Project overview:** See `PROJECT_PLAN.md`
