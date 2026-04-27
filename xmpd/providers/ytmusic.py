@@ -14,9 +14,49 @@ from ytmusicapi import YTMusic
 
 from xmpd.config import get_config_dir
 from xmpd.exceptions import YTMusicAPIError, YTMusicAuthError, YTMusicNotFoundError
+from xmpd.providers.base import Playlist as ProviderPlaylist  # noqa: F401  (Phase 3 uses this)
+from xmpd.providers.base import Track as ProviderTrack  # noqa: F401  (Phase 3 uses this)
+from xmpd.providers.base import TrackMetadata  # noqa: F401  (Phase 3 uses this)
 from xmpd.rating import RatingManager, RatingState
 
 logger = logging.getLogger(__name__)
+
+
+class YTMusicProvider:
+    """Provider implementation for YouTube Music.
+
+    Wraps :class:`YTMusicClient` (defined later in this module). Method bodies
+    for the full Provider Protocol arrive in Phase 3; this scaffold only
+    declares the class so the registry can construct it and tests can
+    isinstance-check it (note: ``isinstance(p, Provider)`` will return False
+    until Phase 3 finishes the method surface).
+    """
+
+    name = "yt"
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = config
+        self._client: Any = None  # YTMusicClient lazily constructed via _ensure_client
+
+    def is_enabled(self) -> bool:
+        return bool(self._config.get("enabled", False))
+
+    def is_authenticated(self) -> bool:
+        # Defer to the existing browser.json check used by YTMusicClient.
+        # Phase 3 may refine this to also check token validity.
+        return Path("~/.config/xmpd/browser.json").expanduser().is_file()
+
+    def _ensure_client(self) -> "YTMusicClient":
+        if self._client is None:
+            self._client = YTMusicClient()  # YTMusicClient defined below in this file
+        return self._client
+
+    # Phase 3 adds:
+    #   list_playlists, get_playlist_tracks, get_favorites,
+    #   resolve_stream, get_track_metadata,
+    #   search, get_radio,
+    #   like, dislike, unlike, get_like_state,
+    #   report_play
 
 
 def _truncate_error(error: Exception, max_length: int = 200) -> str:
