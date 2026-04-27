@@ -77,11 +77,32 @@ Both criteria require a running daemon with active provider sessions. The daemon
 
 ---
 
+## Code Review Results
+
+**Review 1 Result**: FAILED (1 Important issue: #5 bare track_id in liked IDs)
+**Review 2 Result**: PASSED WITH NOTES (fix applied, 10 minor issues accepted)
+
+| # | Severity | File | Issue | Status |
+|---|----------|------|-------|--------|
+| 1 | Minor | stream_proxy.py:401 | TOCTOU race in semaphore fast-reject (benign) | Accepted |
+| 2 | Minor | stream_proxy.py:356 | Private `_value` attribute access (CPython-specific) | Accepted |
+| 3 | Minor | stream_proxy.py:455 | Log message math off by one in finally block | Accepted |
+| 4 | Minor | stream_proxy.py | Legacy `_active_connections`/`_connection_lock` dead code | Accepted |
+| 5 | Important | daemon.py | Bare track_id in liked IDs (fixed: compound provider:track_id) | Fixed |
+| 6 | Minor | uv.lock | ruamel-yaml transitive dev dependency | Accepted |
+| 7 | Minor | PHASE_02_SUMMARY.md | Stale "No providers/ package" claim | Accepted |
+| 8 | Minor | uv.lock/pyproject.toml | Duplicate dev dependency sections | Accepted |
+| 9 | Minor | stream_proxy.py:343 | CancelledError swallowed in _decrement_counter (nil impact) | Accepted |
+| 10 | Minor | daemon.py | _quality_for_provider hardcodes CD/Lo (placeholder) | Accepted |
+
+---
+
 ## Fix Cycle History
 
 | Attempt | Type | Target | Description | Result |
 |---------|------|--------|-------------|--------|
 | 1 | inline | daemon.py, test_search_json.py | Adapt Phase 2 code from old ytmusic_client API to provider registry pattern | Success |
+| 2 | spark-fix | daemon.py, test_search_json.py | Code review #5: compound provider:track_id keys in _get_liked_ids and _cmd_search_json | Success |
 
 ### Fix Details
 
