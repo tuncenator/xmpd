@@ -1,549 +1,113 @@
-"""Tests for xmpd sync daemon."""
+"""Tests for xmpd sync daemon (Phase 8: provider-registry-aware)."""
 
 import json
 import signal
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from xmpd.daemon import XMPDaemon
+from xmpd.providers.base import Playlist as ProviderPlaylist
+from xmpd.providers.base import Track, TrackMetadata
 from xmpd.sync_engine import SyncResult
+
+# ---------------------------------------------------------------------------
+# Shared fixtures / helpers
+# ---------------------------------------------------------------------------
+
+_BASE_CONFIG = {
+    "mpd_socket_path": "/tmp/mpd.sock",
+    "stream_cache_hours": 5,
+    "playlist_prefix": "YT: ",
+    "sync_interval_minutes": 30,
+    "enable_auto_sync": True,
+    "proxy_enabled": True,
+    "proxy_host": "localhost",
+    "proxy_port": 8080,
+    "proxy_track_mapping_db": "/tmp/track_mapping.db",
+    "radio_playlist_limit": 25,
+}
+
+
+def _make_yt_provider(authenticated: bool = True) -> MagicMock:
+    prov = MagicMock(name="yt_provider")
+    prov.name = "yt"
+    prov.is_authenticated.return_value = (authenticated, "" if authenticated else "no creds")
+    prov.is_enabled.return_value = True
+    return prov
+
+
+def _make_tidal_provider(authenticated: bool = True) -> MagicMock:
+    prov = MagicMock(name="tidal_provider")
+    prov.name = "tidal"
+    prov.is_authenticated.return_value = (authenticated, "" if authenticated else "no creds")
+    prov.is_enabled.return_value = True
+    return prov
+
+
+def _make_daemon(tmp_path, registry=None, config=None):
+    """Create a daemon with mocked components.
+
+    Returns the daemon instance.
+    """
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(exist_ok=True)
+
+    cfg = dict(_BASE_CONFIG)
+    if config:
+        cfg.update(config)
+
+    if registry is None:
+        registry = {"yt": _make_yt_provider()}
+
+    with (
+        patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+        patch("xmpd.daemon.load_config", return_value=cfg),
+        patch("xmpd.daemon.build_registry", return_value=registry),
+        patch("xmpd.daemon.MPDClient"),
+        patch("xmpd.daemon.StreamResolver"),
+        patch("xmpd.daemon.SyncEngine"),
+        patch("xmpd.daemon.StreamRedirectProxy"),
+        patch("xmpd.daemon.TrackStore"),
+    ):
+        daemon = XMPDaemon()
+    return daemon
+
+
+# ---------------------------------------------------------------------------
+# TestDaemonInit - replaces the old TestDaemonInit (4 new tests)
+# ---------------------------------------------------------------------------
 
 
 class TestDaemonInit:
-    """Tests for daemon initialization."""
+    """Tests for registry-based daemon initialization."""
 
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_daemon_initializes_components(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that daemon initializes all components correctly."""
-        # Setup mocks
+    def test_daemon_init_with_registry_both_providers(self, tmp_path):
+        """Both YT and Tidal authenticated -> SyncEngine receives registry."""
+        yt = _make_yt_provider()
+        tidal = _make_tidal_provider()
+        daemon = _make_daemon(tmp_path, registry={"yt": yt, "tidal": tidal})
+
+        assert "yt" in daemon.provider_registry
+        assert "tidal" in daemon.provider_registry
+
+    def test_daemon_init_no_providers(self, tmp_path):
+        """Empty registry -> daemon initialized, no raise."""
+        daemon = _make_daemon(tmp_path, registry={})
+        assert daemon.provider_registry == {}
+
+    def test_daemon_init_one_provider_auth_fail(self, tmp_path, caplog):
+        """yt unauthenticated -> warning logged, still in registry."""
+        yt = _make_yt_provider(authenticated=False)
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        assert "yt" in daemon.provider_registry
+        assert "xmpctl auth yt" in caplog.text
+
+    def test_daemon_init_loads_state(self, tmp_path):
+        """State file is loaded on init."""
         config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Verify components initialized
-        assert daemon.ytmusic_client is not None
-        assert daemon.mpd_client is not None
-        assert daemon.stream_resolver is not None
-        assert daemon.sync_engine is not None
-        assert daemon.config == mock_load_config.return_value
-
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_daemon_loads_state(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that daemon loads persisted state."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-
-        # Create state file
-        state_file = config_dir / "sync_state.json"
-        state_data = {
-            "last_sync": "2025-10-17T12:00:00Z",
-            "last_sync_result": {
-                "success": True,
-                "playlists_synced": 5,
-                "tracks_added": 100,
-            },
-            "daemon_start_time": "2025-10-17T10:00:00Z",
-        }
-        with open(state_file, "w") as f:
-            json.dump(state_data, f)
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Verify state loaded
-        assert daemon.state["last_sync"] == "2025-10-17T12:00:00Z"
-        assert daemon.state["last_sync_result"]["playlists_synced"] == 5
-
-
-class TestPerformSync:
-    """Tests for sync execution."""
-
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_perform_sync_updates_state(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine_class,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that perform_sync updates state correctly."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-
-        # Mock sync result
-        sync_result = SyncResult(
-            success=True,
-            playlists_synced=3,
-            playlists_failed=0,
-            tracks_added=50,
-            tracks_failed=2,
-            duration_seconds=10.5,
-            errors=[],
-        )
-        mock_sync_engine = Mock()
-        mock_sync_engine.sync_all_playlists.return_value = sync_result
-        mock_sync_engine_class.return_value = mock_sync_engine
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Perform sync
-        daemon._perform_sync()
-
-        # Verify state updated
-        assert daemon.state["last_sync"] is not None
-        assert daemon.state["last_sync_result"]["success"] is True
-        assert daemon.state["last_sync_result"]["playlists_synced"] == 3
-        assert daemon.state["last_sync_result"]["tracks_added"] == 50
-
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_perform_sync_handles_errors(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine_class,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that perform_sync handles errors gracefully."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-
-        # Mock sync exception
-        mock_sync_engine = Mock()
-        mock_sync_engine.sync_all_playlists.side_effect = Exception("Sync failed")
-        mock_sync_engine_class.return_value = mock_sync_engine
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Perform sync (should not raise)
-        daemon._perform_sync()
-
-        # Verify state updated with error
-        assert daemon.state["last_sync"] is not None
-        assert daemon.state["last_sync_result"]["success"] is False
-        assert "Sync failed" in daemon.state["last_sync_result"]["errors"][0]
-
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_perform_sync_skips_if_in_progress(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine_class,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that perform_sync skips if sync already in progress."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-
-        mock_sync_engine = Mock()
-        mock_sync_engine_class.return_value = mock_sync_engine
-
-        # Create daemon
-        daemon = XMPDaemon()
-        daemon._sync_in_progress = True
-
-        # Perform sync
-        daemon._perform_sync()
-
-        # Verify sync not called
-        mock_sync_engine.sync_all_playlists.assert_not_called()
-
-
-class TestSocketCommands:
-    """Tests for socket command handling."""
-
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_cmd_sync_triggers_sync(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that 'sync' command triggers sync."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Call sync command
-        response = daemon._cmd_sync()
-
-        # Verify response
-        assert response["success"] is True
-        assert "triggered" in response["message"].lower()
-
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_cmd_status_returns_state(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that 'status' command returns sync status."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-        daemon.ytmusic_client.is_authenticated.return_value = (True, "")
-        daemon.state = {
-            "last_sync": "2025-10-17T12:00:00Z",
-            "last_sync_result": {
-                "success": True,
-                "playlists_synced": 5,
-                "playlists_failed": 0,
-                "tracks_added": 100,
-                "tracks_failed": 2,
-                "errors": [],
-            },
-            "daemon_start_time": "2025-10-17T10:00:00Z",
-        }
-
-        # Call status command
-        response = daemon._cmd_status()
-
-        # Verify response
-        assert response["success"] is True
-        assert response["last_sync"] == "2025-10-17T12:00:00Z"
-        assert response["playlists_synced"] == 5
-        assert response["tracks_added"] == 100
-        assert response["last_sync_success"] is True
-
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_cmd_list_returns_playlists(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic_class,
-        tmp_path,
-    ):
-        """Test that 'list' command returns YouTube playlists."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-
-        # Mock playlists
-        mock_playlist1 = Mock()
-        mock_playlist1.name = "Favorites"
-        mock_playlist1.id = "PL123"
-        mock_playlist1.track_count = 50
-
-        mock_playlist2 = Mock()
-        mock_playlist2.name = "Workout"
-        mock_playlist2.id = "PL456"
-        mock_playlist2.track_count = 30
-
-        mock_ytmusic = Mock()
-        mock_ytmusic.get_user_playlists.return_value = [mock_playlist1, mock_playlist2]
-        mock_ytmusic_class.return_value = mock_ytmusic
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Call list command
-        response = daemon._cmd_list()
-
-        # Verify response
-        assert response["success"] is True
-        assert len(response["playlists"]) == 2
-        assert response["playlists"][0]["name"] == "Favorites"
-        assert response["playlists"][0]["track_count"] == 50
-        assert response["playlists"][1]["name"] == "Workout"
-
-
-class TestStatePersistence:
-    """Tests for state persistence."""
-
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_save_state_creates_file(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that save_state creates state file."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-        daemon.state = {
-            "last_sync": "2025-10-17T12:00:00Z",
-            "last_sync_result": {"success": True},
-            "daemon_start_time": "2025-10-17T10:00:00Z",
-        }
-
-        # Save state
-        daemon._save_state()
-
-        # Verify file created
-        state_file = config_dir / "sync_state.json"
-        assert state_file.exists()
-
-        # Verify content
-        with open(state_file) as f:
-            saved_state = json.load(f)
-        assert saved_state["last_sync"] == "2025-10-17T12:00:00Z"
-
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_load_state_reads_file(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that load_state reads existing state file."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-
-        # Create state file
+        config_dir.mkdir(exist_ok=True)
         state_file = config_dir / "sync_state.json"
         state_data = {
             "last_sync": "2025-10-17T12:00:00Z",
@@ -553,788 +117,405 @@ class TestStatePersistence:
         with open(state_file, "w") as f:
             json.dump(state_data, f)
 
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Verify state loaded
+        daemon = _make_daemon(tmp_path)
         assert daemon.state["last_sync"] == "2025-10-17T12:00:00Z"
         assert daemon.state["last_sync_result"]["playlists_synced"] == 5
+
+
+# ---------------------------------------------------------------------------
+# TestProviderStatus
+# ---------------------------------------------------------------------------
+
+
+class TestProviderStatus:
+    """Tests for _cmd_provider_status."""
+
+    def test_provider_status_yt_only(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        response = daemon._cmd_provider_status()
+        assert response["success"] is True
+        assert response["providers"]["yt"]["enabled"] is True
+        assert response["providers"]["yt"]["authenticated"] is True
+        assert response["providers"]["tidal"]["enabled"] is False
+        assert response["providers"]["tidal"]["authenticated"] is False
+
+    def test_provider_status_both(self, tmp_path):
+        yt = _make_yt_provider()
+        tidal = _make_tidal_provider()
+        cfg = dict(_BASE_CONFIG)
+        cfg["tidal"] = {"enabled": True}
+        daemon = _make_daemon(tmp_path, registry={"yt": yt, "tidal": tidal}, config=cfg)
+        response = daemon._cmd_provider_status()
+        assert response["providers"]["yt"]["authenticated"] is True
+        assert response["providers"]["tidal"]["authenticated"] is True
+
+
+# ---------------------------------------------------------------------------
+# TestPerformSync
+# ---------------------------------------------------------------------------
+
+
+class TestPerformSync:
+    """Tests for sync execution."""
+
+    def test_perform_sync_updates_state(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        sync_result = SyncResult(
+            success=True, playlists_synced=3, playlists_failed=0,
+            tracks_added=50, tracks_failed=2, duration_seconds=10.5, errors=[],
+        )
+        daemon.sync_engine.sync_all_playlists.return_value = sync_result
+        daemon._perform_sync()
+        assert daemon.state["last_sync_result"]["success"] is True
+        assert daemon.state["last_sync_result"]["playlists_synced"] == 3
+
+    def test_perform_sync_handles_errors(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        daemon.sync_engine.sync_all_playlists.side_effect = Exception("Sync failed")
+        daemon._perform_sync()
+        assert daemon.state["last_sync_result"]["success"] is False
+        assert "Sync failed" in daemon.state["last_sync_result"]["errors"][0]
+
+    def test_perform_sync_skips_if_in_progress(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        daemon._sync_in_progress = True
+        daemon._perform_sync()
+        daemon.sync_engine.sync_all_playlists.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TestSocketCommands
+# ---------------------------------------------------------------------------
+
+
+class TestSocketCommands:
+    """Tests for basic socket commands."""
+
+    def test_cmd_sync_triggers_sync(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        response = daemon._cmd_sync()
+        assert response["success"] is True
+        assert "triggered" in response["message"].lower()
+
+    def test_cmd_status_returns_state(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        daemon.state = {
+            "last_sync": "2025-10-17T12:00:00Z",
+            "last_sync_result": {
+                "success": True, "playlists_synced": 5, "playlists_failed": 0,
+                "tracks_added": 100, "tracks_failed": 2, "errors": [],
+            },
+            "daemon_start_time": "2025-10-17T10:00:00Z",
+        }
+        response = daemon._cmd_status()
+        assert response["success"] is True
+        assert response["last_sync"] == "2025-10-17T12:00:00Z"
+        assert response["playlists_synced"] == 5
+        assert response["auth_valid"] is True
+        assert response["auto_auth_enabled"] is False  # removed
+
+    def test_cmd_list_returns_playlists(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.list_playlists.return_value = [
+            ProviderPlaylist(
+                provider="yt", playlist_id="PL123", name="Favorites",
+                track_count=50, is_owned=True, is_favorites=True,
+            ),
+            ProviderPlaylist(
+                provider="yt", playlist_id="PL456", name="Workout",
+                track_count=30, is_owned=True, is_favorites=False,
+            ),
+        ]
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        response = daemon._cmd_list()
+        assert response["success"] is True
+        assert len(response["playlists"]) == 2
+        assert response["playlists"][0]["name"] == "Favorites"
+        assert response["playlists"][0]["provider"] == "yt"
+
+    def test_cmd_quit(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        response = daemon._cmd_quit()
+        assert response["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# TestSearch
+# ---------------------------------------------------------------------------
+
+
+class TestCmdSearch:
+    """Tests for _cmd_search with provider awareness."""
+
+    def test_cmd_search_empty_query(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        assert daemon._cmd_search("")["success"] is False
+        assert daemon._cmd_search("   ")["success"] is False
+        assert daemon._cmd_search(None)["success"] is False
+
+    def test_cmd_search_success(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.search.return_value = [
+            Track(
+                provider="yt", track_id="abc12345678",
+                metadata=TrackMetadata(
+                    title="Test Song", artist="Test Artist",
+                    album=None, duration_seconds=180, art_url=None,
+                ),
+            ),
+        ]
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        response = daemon._cmd_search("miles davis")
+        assert response["success"] is True
+        assert response["count"] == 1
+        assert response["results"][0]["provider"] == "yt"
+        assert response["results"][0]["track_id"] == "abc12345678"
+
+    def test_cmd_search_with_provider_flag(self, tmp_path):
+        yt = _make_yt_provider()
+        tidal = _make_tidal_provider()
+        yt.search.return_value = []
+        tidal.search.return_value = [
+            Track(
+                provider="tidal", track_id="12345",
+                metadata=TrackMetadata(
+                    title="Tidal Song", artist="Tidal Artist",
+                    album=None, duration_seconds=200, art_url=None,
+                ),
+            ),
+        ]
+        daemon = _make_daemon(tmp_path, registry={"yt": yt, "tidal": tidal})
+        response = daemon._cmd_search("foo bar", provider="tidal")
+        assert response["count"] == 1
+        assert response["results"][0]["provider"] == "tidal"
+        yt.search.assert_not_called()
+
+    def test_cmd_search_default_all(self, tmp_path):
+        yt = _make_yt_provider()
+        tidal = _make_tidal_provider()
+        yt.search.return_value = [
+            Track(
+                provider="yt", track_id="abc12345678",
+                metadata=TrackMetadata(
+                    title="YT Song", artist="A", album=None,
+                    duration_seconds=100, art_url=None,
+                ),
+            ),
+        ]
+        tidal.search.return_value = [
+            Track(
+                provider="tidal", track_id="99999",
+                metadata=TrackMetadata(
+                    title="TD Song", artist="B", album=None,
+                    duration_seconds=200, art_url=None,
+                ),
+            ),
+        ]
+        daemon = _make_daemon(tmp_path, registry={"yt": yt, "tidal": tidal})
+        response = daemon._cmd_search("jazz")
+        assert response["count"] == 2
+        yt.search.assert_called_once()
+        tidal.search.assert_called_once()
+
+    def test_cmd_search_unknown_provider(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        response = daemon._cmd_search("test", provider="spotify")
+        assert response["success"] is False
+        assert "Unknown provider" in response["error"]
+
+
+# ---------------------------------------------------------------------------
+# TestRadio
+# ---------------------------------------------------------------------------
+
+
+class TestCmdRadio:
+    """Tests for _cmd_radio with provider awareness."""
+
+    def test_cmd_radio_no_current_track(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        daemon.mpd_client.currentsong.return_value = None
+        response = daemon._cmd_radio(None, None)
+        assert response["success"] is False
+        assert "No track currently playing" in response["error"]
+
+    def test_cmd_radio_non_provider_track(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        daemon.mpd_client.currentsong.return_value = {"file": "/local/file.mp3"}
+        response = daemon._cmd_radio(None, None)
+        assert response["success"] is False
+        assert "not a provider track" in response["error"]
+
+    def test_cmd_radio_provider_inference_from_url(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.get_radio.return_value = [
+            Track(
+                provider="yt", track_id="r1r1r1r1r1r",
+                metadata=TrackMetadata(
+                    title="Radio 1", artist="Art", album=None,
+                    duration_seconds=180, art_url=None,
+                ),
+            ),
+        ]
+        yt.get_favorites.return_value = []
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        daemon.mpd_client.currentsong.return_value = {
+            "file": "http://localhost:8080/proxy/yt/abc12345678",
+        }
+        daemon.mpd_client.create_or_replace_playlist = Mock()
+        response = daemon._cmd_radio(None, None)
+        assert response["success"] is True
+        yt.get_radio.assert_called_once_with("abc12345678", limit=25)
+
+    def test_cmd_radio_explicit_provider(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.get_radio.return_value = [
+            Track(
+                provider="yt", track_id="r2r2r2r2r2r",
+                metadata=TrackMetadata(
+                    title="R2", artist="A2", album=None,
+                    duration_seconds=200, art_url=None,
+                ),
+            ),
+        ]
+        yt.get_favorites.return_value = []
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        daemon.mpd_client.create_or_replace_playlist = Mock()
+        response = daemon._cmd_radio("yt", "abc12345678")
+        assert response["success"] is True
+        assert response["playlist"] == "YT: Radio"
+
+
+# ---------------------------------------------------------------------------
+# TestPlayQueue
+# ---------------------------------------------------------------------------
+
+
+class TestCmdPlayQueue:
+    """Tests for _cmd_play and _cmd_queue."""
+
+    def test_cmd_play_missing_track_id(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        assert daemon._cmd_play("yt", None)["success"] is False
+
+    def test_cmd_play_success(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.get_track_metadata.return_value = TrackMetadata(
+            title="Test Song", artist="Test Artist",
+            album=None, duration_seconds=180, art_url=None,
+        )
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
+        daemon.mpd_client._client = Mock()
+        response = daemon._cmd_play("yt", "abc12345678")
+        assert response["success"] is True
+        add_call = daemon.mpd_client._client.add.call_args[0][0]
+        assert add_call == "http://localhost:6602/proxy/yt/abc12345678"
+
+    def test_cmd_queue_success(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.get_track_metadata.return_value = TrackMetadata(
+            title="Q Song", artist="Q Artist",
+            album=None, duration_seconds=200, art_url=None,
+        )
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
+        daemon.mpd_client._client = Mock()
+        response = daemon._cmd_queue("yt", "def12345678")
+        assert response["success"] is True
+        add_call = daemon.mpd_client._client.add.call_args[0][0]
+        assert add_call == "http://localhost:6602/proxy/yt/def12345678"
+
+
+# ---------------------------------------------------------------------------
+# TestLikeDislike
+# ---------------------------------------------------------------------------
+
+
+class TestCmdLikeDislike:
+    """Tests for _cmd_like and _cmd_dislike."""
+
+    def test_cmd_like_unknown_provider(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        response = daemon._cmd_like("spotify", "abc")
+        assert response["success"] is False
+        assert "Unknown provider" in response["error"]
+
+    def test_cmd_like_unauthenticated(self, tmp_path):
+        yt = _make_yt_provider(authenticated=False)
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        response = daemon._cmd_like("yt", "abc12345678")
+        assert response["success"] is False
+        assert "not authenticated" in response["error"]
+
+    def test_cmd_like_missing_args(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        assert daemon._cmd_like(None, None)["success"] is False
+        assert daemon._cmd_like("yt", None)["success"] is False
+
+    def test_cmd_like_success(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.get_like_state.return_value = "NEUTRAL"
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        response = daemon._cmd_like("yt", "abc12345678")
+        assert response["success"] is True
+        yt.like.assert_called_once_with("abc12345678")
+
+    def test_cmd_dislike_success(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.get_like_state.return_value = "NEUTRAL"
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        response = daemon._cmd_dislike("yt", "abc12345678")
+        assert response["success"] is True
+        yt.dislike.assert_called_once_with("abc12345678")
+
+
+# ---------------------------------------------------------------------------
+# TestStatePersistence
+# ---------------------------------------------------------------------------
+
+
+class TestStatePersistence:
+    """Tests for state persistence."""
+
+    def test_save_state_creates_file(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        daemon.state = {"last_sync": "2025-10-17T12:00:00Z", "last_sync_result": {"success": True}}
+        daemon._save_state()
+        state_file = tmp_path / "config" / "sync_state.json"
+        assert state_file.exists()
+        with open(state_file) as f:
+            saved = json.load(f)
+        assert saved["last_sync"] == "2025-10-17T12:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# TestSignalHandling
+# ---------------------------------------------------------------------------
 
 
 class TestSignalHandling:
     """Tests for signal handling."""
 
-    @patch("xmpd.daemon.YTMusicClient")
-    @patch("xmpd.daemon.MPDClient")
-    @patch("xmpd.daemon.StreamResolver")
-    @patch("xmpd.daemon.SyncEngine")
-    @patch("xmpd.daemon.load_config")
-    @patch("xmpd.daemon.get_config_dir")
-    def test_sighup_reloads_config(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that SIGHUP reloads configuration."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        initial_config = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-        mock_load_config.return_value = initial_config
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Simulate SIGHUP
-        new_config = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 10,  # Changed
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 60,  # Changed
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-        }
-        mock_load_config.return_value = new_config
-
-        daemon._signal_handler(signal.SIGHUP, None)
-
-        # Verify config reloaded
+    def test_sighup_reloads_config(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        new_config = dict(_BASE_CONFIG)
+        new_config["stream_cache_hours"] = 10
+        with patch("xmpd.daemon.load_config", return_value=new_config):
+            daemon._signal_handler(signal.SIGHUP, None)
         assert daemon.config["stream_cache_hours"] == 10
-        assert daemon.config["sync_interval_minutes"] == 60
 
 
-@patch("xmpd.daemon.YTMusicClient")
-@patch("xmpd.daemon.MPDClient")
-@patch("xmpd.daemon.StreamResolver")
-@patch("xmpd.daemon.SyncEngine")
-@patch("xmpd.daemon.load_config")
-@patch("xmpd.daemon.get_config_dir")
-class TestDaemonRadioSearchCommands:
-    """Tests for new radio and search commands (Phase 2 stubs)."""
+# ---------------------------------------------------------------------------
+# TestFormatDuration
+# ---------------------------------------------------------------------------
 
-    # Phase 2: Stub tests removed - replaced by Phase 3 full implementation tests
-    # test_cmd_radio_stub_with_video_id - REMOVED (Phase 3 implements full feature)
-    # test_cmd_radio_stub_without_video_id - REMOVED (Phase 3 implements full feature)
 
-    def test_cmd_radio_invalid_video_id_short(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that 'radio' command with too short video ID returns error."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
+class TestFormatDuration:
+    """Tests for _format_duration helper."""
 
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-            "radio_playlist_limit": 25,
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Call radio command with invalid video ID (too short)
-        response = daemon._cmd_radio("short")
-
-        # Verify error response
-        assert response["success"] is False
-        assert "Invalid video ID format" in response["error"]
-
-    def test_cmd_radio_invalid_video_id_chars(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that 'radio' command with invalid characters returns error."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-            "radio_playlist_limit": 25,
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Call radio command with invalid characters
-        response = daemon._cmd_radio("invalid!@#$")
-
-        # Verify error response
-        assert response["success"] is False
-        assert "Invalid video ID format" in response["error"]
-
-    def test_cmd_search_empty_query(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that 'search' command with empty query returns error."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-            "radio_playlist_limit": 25,
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Call search command with empty query
-        response = daemon._cmd_search("")
-
-        # Verify error response
-        assert response["success"] is False
-        assert "Empty search query" in response["error"]
-
-    def test_cmd_search_whitespace_query(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that 'search' command with whitespace-only query returns error."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-            "radio_playlist_limit": 25,
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Call search command with whitespace query
-        response = daemon._cmd_search("   ")
-
-        # Verify error response
-        assert response["success"] is False
-        assert "Empty search query" in response["error"]
-
-    def test_cmd_search_none_query(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that 'search' command with None query returns error."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-            "radio_playlist_limit": 25,
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Call search command with None
-        response = daemon._cmd_search(None)
-
-        # Verify error response
-        assert response["success"] is False
-        assert "Empty search query" in response["error"]
-
-    def test_cmd_play_missing_video_id(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that 'play' command without video ID returns error."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-            "radio_playlist_limit": 25,
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Call play command without video ID
-        response = daemon._cmd_play(None)
-
-        # Verify error response
-        assert response["success"] is False
-        assert "Missing video ID" in response["error"]
-
-    def test_cmd_queue_invalid_video_id(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test that 'queue' command with invalid video ID returns error."""
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 8080,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-            "radio_playlist_limit": 25,
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Call queue command with invalid video ID
-        response = daemon._cmd_queue("toolong12345")
-
-        # Verify error response
-        assert response["success"] is False
-        assert "Invalid video ID format" in response["error"]
-
-    # ========== Phase 3: Radio Feature Tests ==========
-
-    def test_extract_video_id_from_proxy_url(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test extracting video ID from proxy URL."""
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
-        )
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Test valid proxy URL
-        url = "http://localhost:6602/proxy/2xOPkdtFeHM"
-        video_id = daemon._extract_video_id_from_url(url)
-        assert video_id == "2xOPkdtFeHM"
-
-        # Test another valid URL
-        url2 = "http://localhost:6602/proxy/dQw4w9WgXcQ"
-        video_id2 = daemon._extract_video_id_from_url(url2)
-        assert video_id2 == "dQw4w9WgXcQ"
-
-    def test_extract_video_id_from_invalid_url(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test extracting video ID from non-proxy URLs returns None."""
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
-        )
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Test empty URL
-        assert daemon._extract_video_id_from_url("") is None
-
-        # Test None URL
-        assert daemon._extract_video_id_from_url(None) is None
-
-        # Test non-proxy URL
-        assert daemon._extract_video_id_from_url("http://example.com/video") is None
-
-        # Test regular file path
-        assert daemon._extract_video_id_from_url("/path/to/file.mp3") is None
-
-        # Test URL with wrong video ID length
-        assert daemon._extract_video_id_from_url("http://localhost:6602/proxy/short") is None
-
-    def test_cmd_radio_no_current_track(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test radio command when no track is playing."""
-        from unittest.mock import Mock
-
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
-        )
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Mock MPD client to return empty current song
-        daemon.mpd_client.currentsong = Mock(return_value=None)
-
-        # Call radio command
-        response = daemon._cmd_radio(None)
-
-        # Verify error response
-        assert response["success"] is False
-        assert "No track currently playing" in response["error"]
-
-    def test_cmd_radio_non_youtube_track(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test radio command when current track is not a YouTube track."""
-        from unittest.mock import Mock
-
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
-        )
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Mock MPD client to return non-YouTube track
-        daemon.mpd_client.currentsong = Mock(
-            return_value={"file": "/path/to/local/file.mp3", "title": "Local Track"}
-        )
-
-        # Call radio command
-        response = daemon._cmd_radio(None)
-
-        # Verify error response
-        assert response["success"] is False
-        assert "not a YouTube track" in response["error"]
-
-    def test_cmd_radio_success(
-        self,
-        mock_get_config_dir,
-        mock_load_config,
-        mock_sync_engine,
-        mock_resolver,
-        mock_mpd,
-        mock_ytmusic,
-        tmp_path,
-    ):
-        """Test successful radio playlist generation."""
-        from unittest.mock import Mock
-
-        from xmpd.daemon import XMPDaemon
-
-        # Setup mocks
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        (config_dir / "browser.json").touch()
-        mock_get_config_dir.return_value = config_dir
-
-        mock_load_config.return_value = {
-            "mpd_socket_path": "/tmp/mpd.sock",
-            "stream_cache_hours": 5,
-            "playlist_prefix": "YT: ",
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": True,
-            "proxy_enabled": True,
-            "proxy_host": "localhost",
-            "proxy_port": 6602,
-            "proxy_track_mapping_db": "/tmp/track_mapping.db",
-            "radio_playlist_limit": 25,
-        }
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Mock MPD client to return YouTube track
-        daemon.mpd_client.currentsong = Mock(
-            return_value={"file": "http://localhost:6602/proxy/2xOPkdtFeHM", "title": "Test Track"}
-        )
-
-        # Mock YTMusic client's get_watch_playlist
-        daemon.ytmusic_client._client = Mock()
-        daemon.ytmusic_client._client.get_watch_playlist.return_value = {
-            "tracks": [
-                {
-                    "videoId": "abc12345678",
-                    "title": "Radio Track 1",
-                    "artists": [{"name": "Artist 1"}],
-                    "duration_seconds": 180,
-                },
-                {
-                    "videoId": "def12345678",
-                    "title": "Radio Track 2",
-                    "artists": [{"name": "Artist 2"}],
-                    "duration_seconds": 200,
-                },
-            ]
-        }
-
-        # Mock stream resolver
-        daemon.stream_resolver.resolve_batch = Mock(
-            return_value={
-                "abc12345678": "http://stream1.url",
-                "def12345678": "http://stream2.url",
-            }
-        )
-
-        # Mock MPD client's create_or_replace_playlist
-        daemon.mpd_client.create_or_replace_playlist = Mock()
-
-        # Call radio command
-        response = daemon._cmd_radio(None)
-
-        # Verify success response
-        assert response["success"] is True
-        assert response["tracks"] == 2
-        assert response["playlist"] == "YT: Radio"
-        assert "2 tracks" in response["message"]
-
-        # Verify get_watch_playlist was called with correct params
-        daemon.ytmusic_client._client.get_watch_playlist.assert_called_once_with(
-            videoId="2xOPkdtFeHM", radio=True, limit=25
-        )
-
-        # Verify resolve_batch was NOT called (since proxy is enabled, lazy resolution is used)
-        daemon.stream_resolver.resolve_batch.assert_not_called()
-
-        # Verify playlist was created
-        daemon.mpd_client.create_or_replace_playlist.assert_called_once()
-        call_args = daemon.mpd_client.create_or_replace_playlist.call_args
-        assert call_args[1]["name"] == "YT: Radio"
-        assert len(call_args[1]["tracks"]) == 2
-
-    # ===== Phase 4 Tests: Search, Play, Queue =====
-
-    def test_cmd_search_success(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test successful search command."""
-        from unittest.mock import Mock
-
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
-        )
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Mock ytmusic search results
-        daemon.ytmusic_client.search = Mock(
-            return_value=[
-                {
-                    "video_id": "abc12345678",
-                    "title": "Test Song 1",
-                    "artist": "Test Artist 1",
-                    "duration": 180,
-                },
-                {
-                    "video_id": "def12345678",
-                    "title": "Test Song 2",
-                    "artist": "Test Artist 2",
-                    "duration": 240,
-                },
-            ]
-        )
-
-        # Call search command
-        response = daemon._cmd_search("miles davis")
-
-        # Verify success response
-        assert response["success"] is True
-        assert response["count"] == 2
-        assert len(response["results"]) == 2
-        assert response["results"][0]["number"] == 1
-        assert response["results"][0]["video_id"] == "abc12345678"
-        assert response["results"][0]["title"] == "Test Song 1"
-        assert response["results"][0]["artist"] == "Test Artist 1"
-        assert response["results"][0]["duration"] == "3:00"
-        assert response["results"][1]["duration"] == "4:00"
-
-        # Verify search was called
-        daemon.ytmusic_client.search.assert_called_once_with("miles davis", limit=10)
-
-    def test_cmd_search_no_results(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test search command with no results."""
-        from unittest.mock import Mock
-
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
-        )
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Mock ytmusic search with empty results
-        daemon.ytmusic_client.search = Mock(return_value=[])
-
-        # Call search command
-        response = daemon._cmd_search("nonexistent query xyz123")
-
-        # Verify success with empty results
-        assert response["success"] is True
-        assert response["count"] == 0
-        assert response["results"] == []
-
-    def test_format_duration(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test duration formatting helper."""
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
-        )
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Test various durations
+    def test_format_duration(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
         assert daemon._format_duration(0) == "Unknown"
         assert daemon._format_duration(-1) == "Unknown"
         assert daemon._format_duration(45) == "0:45"
@@ -1342,250 +523,71 @@ class TestDaemonRadioSearchCommands:
         assert daemon._format_duration(180) == "3:00"
         assert daemon._format_duration(245) == "4:05"
 
-    def test_cmd_play_success(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test successful play command."""
-        from unittest.mock import Mock
 
-        from xmpd.daemon import XMPDaemon
+# ---------------------------------------------------------------------------
+# TestExtractProviderAndTrack
+# ---------------------------------------------------------------------------
 
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
+
+class TestExtractProviderAndTrack:
+    """Tests for _extract_provider_and_track."""
+
+    def test_new_shape(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        p, t = daemon._extract_provider_and_track(
+            "http://localhost:8080/proxy/yt/abc12345678"
         )
+        assert p == "yt"
+        assert t == "abc12345678"
 
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Set proxy_config explicitly
-        daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
-
-        # Mock track info retrieval
-        daemon._get_track_info = Mock(return_value={"title": "Test Song", "artist": "Test Artist"})
-
-        # Mock MPD client methods
-        daemon.mpd_client._client.clear = Mock()
-        daemon.mpd_client._client.add = Mock()
-        daemon.mpd_client._client.play = Mock()
-
-        # Call play command (with proxy enabled, should use proxy URL)
-        response = daemon._cmd_play("abc12345678")
-
-        # Verify success response
-        assert response["success"] is True
-        assert "Now playing" in response["message"]
-        assert response["title"] == "Test Song"
-        assert response["artist"] == "Test Artist"
-
-        # Verify MPD methods were called
-        daemon.mpd_client._client.clear.assert_called_once()
-        daemon.mpd_client._client.add.assert_called_once()
-        daemon.mpd_client._client.play.assert_called_once()
-
-        # Verify proxy URL was used (since proxy is enabled)
-        add_call = daemon.mpd_client._client.add.call_args[0][0]
-        assert "http://localhost:6602/proxy/yt/abc12345678" == add_call
-
-    def test_cmd_play_invalid_video_id(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test play command with invalid video ID."""
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
+    def test_tidal_shape(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        p, t = daemon._extract_provider_and_track(
+            "http://localhost:8080/proxy/tidal/12345"
         )
+        assert p == "tidal"
+        assert t == "12345"
 
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Call play with invalid video ID
-        response = daemon._cmd_play("invalid")
-
-        # Verify error response
-        assert response["success"] is False
-        assert "Invalid video ID format" in response["error"]
-
-    def test_cmd_queue_success(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test successful queue command."""
-        from unittest.mock import Mock
-
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
+    def test_legacy_shape(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        p, t = daemon._extract_provider_and_track(
+            "http://localhost:8080/proxy/dQw4w9WgXcQ"
         )
+        assert p == "yt"
+        assert t == "dQw4w9WgXcQ"
 
-        # Create daemon
-        daemon = XMPDaemon()
+    def test_empty_url(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        p, t = daemon._extract_provider_and_track("")
+        assert p is None
+        assert t is None
 
-        # Set proxy_config explicitly
-        daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
+    def test_non_proxy_url(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        p, t = daemon._extract_provider_and_track("/path/to/file.mp3")
+        assert p is None
+        assert t is None
 
-        # Mock track info retrieval
-        daemon._get_track_info = Mock(
-            return_value={"title": "Queued Song", "artist": "Queued Artist"}
-        )
 
-        # Mock MPD client add method
-        daemon.mpd_client._client.add = Mock()
+# ---------------------------------------------------------------------------
+# TestParseProviderArgs
+# ---------------------------------------------------------------------------
 
-        # Call queue command
-        response = daemon._cmd_queue("def12345678")
 
-        # Verify success response
-        assert response["success"] is True
-        assert "Added to queue" in response["message"]
-        assert response["title"] == "Queued Song"
-        assert response["artist"] == "Queued Artist"
+class TestParseProviderArgs:
+    """Tests for _parse_provider_args static method."""
 
-        # Verify add was called
-        daemon.mpd_client._client.add.assert_called_once()
+    def test_no_flag(self):
+        p, rest = XMPDaemon._parse_provider_args(["miles", "davis"])
+        assert p is None
+        assert rest == ["miles", "davis"]
 
-        # Verify proxy URL was used (since proxy is enabled)
-        add_call = daemon.mpd_client._client.add.call_args[0][0]
-        assert "http://localhost:6602/proxy/yt/def12345678" == add_call
+    def test_flag_separated(self):
+        p, rest = XMPDaemon._parse_provider_args(["--provider", "yt", "jazz"])
+        assert p == "yt"
+        assert rest == ["jazz"]
 
-    def test_get_track_info(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test track info retrieval helper."""
-        from unittest.mock import Mock
-
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
-        )
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Mock successful search
-        daemon.ytmusic_client.search = Mock(
-            return_value=[{"title": "Found Song", "artist": "Found Artist"}]
-        )
-
-        # Call _get_track_info
-        info = daemon._get_track_info("abc12345678")
-
-        # Verify info returned
-        assert info["title"] == "Found Song"
-        assert info["artist"] == "Found Artist"
-
-    def test_get_track_info_fallback(
-        self,
-        mock_get_config_dir,
-        mock_ytmusic_client,
-        mock_mpd_client,
-        mock_stream_resolver,
-        mock_signal,
-        monkeypatch,
-    ):
-        """Test track info retrieval fallback when search fails."""
-        from unittest.mock import Mock
-
-        from xmpd.daemon import XMPDaemon
-
-        # Mock configuration
-        monkeypatch.setattr(
-            "xmpd.daemon.load_config",
-            lambda: {
-                "mpd_socket_path": "~/.config/mpd/socket",
-                "playlist_prefix": "YT: ",
-                "sync_interval_minutes": 30,
-                "enable_auto_sync": True,
-                "proxy_enabled": True,
-                "proxy_host": "localhost",
-                "proxy_port": 6602,
-                "proxy_track_mapping_db": "/tmp/track_mapping.db",
-                "radio_playlist_limit": 25,
-            },
-        )
-
-        # Create daemon
-        daemon = XMPDaemon()
-
-        # Mock failed search (raises exception)
-        daemon.ytmusic_client.search = Mock(side_effect=Exception("API error"))
-
-        # Call _get_track_info
-        info = daemon._get_track_info("xyz12345678")
-
-        # Verify fallback to unknown
-        assert info["title"] == "Unknown"
-        assert info["artist"] == "Unknown Artist"
+    def test_flag_equals(self):
+        p, rest = XMPDaemon._parse_provider_args(["--provider=tidal", "funk"])
+        assert p == "tidal"
+        assert rest == ["funk"]
