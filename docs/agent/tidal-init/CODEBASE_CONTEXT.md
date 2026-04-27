@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 5 (Phase 8), 2026-04-27
+> Last updated by: Checkpoint 6 (Phase 9), 2026-04-27
 
 ---
 
@@ -33,11 +33,13 @@ External AirPlay surface lives in `extras/airplay-bridge/`, a separate sub-proje
 | `xmpd/__main__.py` | CLI entry | `python -m xmpd` runs the daemon. |
 | `xmpd/daemon.py` | XMPDaemon orchestrator | LIVE (Phase 8): `__init__` builds `provider_registry: dict[str, Provider]` via `build_registry()` and injects into `SyncEngine`, `HistoryReporter`, `StreamRedirectProxy`. No longer imports `YTMusicClient`, `FirefoxCookieExtractor`, `CookieExtractionError`, `send_notification`. Imports `build_registry`, `Provider`, `RatingAction`, `RatingManager`, `apply_to_provider`. Auto-auth loop and reactive refresh fully removed. New socket commands: `provider-status`, `like`, `dislike`. Extended: `search` (--provider), `radio` (provider-aware), `play`/`queue` (provider + track_id). Helper: `_extract_provider_and_track` replaces `_extract_video_id_from_url`. `_build_yt_config()` bridges legacy config to registry-compatible shape. `_build_playlist_prefix()` normalizes string prefix to `dict[str, str]`. Status backward compat: `auto_auth_enabled`, `last_auto_refresh`, `auto_refresh_failures` fields hardcoded/zeroed. |
 | `xmpd/config.py` | Config loader | `load_config()` deep-merges YAML at `~/.config/xmpd/config.yaml` with hardcoded defaults; `get_config_dir()` returns `~/.config/xmpd/`. **Phase 11 must accept the new nested `yt:` / `tidal:` shape and reject the legacy top-level `auto_auth:` shape with a clear error.** |
-| `xmpd/providers/__init__.py` | Provider registry | `get_enabled_provider_names(config)` + `build_registry(config)`. Instantiates `YTMusicProvider` when `yt` enabled (Phase 2); Phase 9 fills `tidal`. `get_enabled_provider_names` returns insertion order (yt before tidal). Re-exports all shared types via `__all__`. |
+| `xmpd/providers/__init__.py` | Provider registry | `get_enabled_provider_names(config)` + `build_registry(config)`. Instantiates `YTMusicProvider` when `yt` enabled (Phase 2); LIVE (Phase 9) `TidalProvider` when `config["tidal"]["enabled"]` is True (lazy import). `get_enabled_provider_names` returns insertion order (yt before tidal). Re-exports all shared types via `__all__`. |
 | `xmpd/providers/base.py` | Shared provider types | `TrackMetadata`, `Track`, `Playlist` frozen dataclasses + 14-method `@runtime_checkable Provider` Protocol. Cross-provider exchange shape. |
-| `xmpd/auth/__init__.py` | Auth package marker | Package marker. Contains `ytmusic_cookie.py` (Phase 2); Phase 9 adds `tidal_oauth.py`. |
+| `xmpd/auth/__init__.py` | Auth package marker | Package marker. Contains `ytmusic_cookie.py` (Phase 2) and `tidal_oauth.py` (Phase 9). |
 | `xmpd/auth/ytmusic_cookie.py` | FirefoxCookieExtractor | Relocated from `xmpd/cookie_extract.py` in Phase 2. Browser cookie extraction for YT auth. `prefix="xmpd_cookies_"` (fixed from ytmpd). |
+| `xmpd/auth/tidal_oauth.py` | Tidal OAuth device flow + token persistence | LIVE (Phase 9). Functions: `run_oauth_flow(session_path, fn_print)`, `load_session(session_path)`, `save_session(session, session_path)`, `_copy_to_clipboard(url)`. `load_session` parses stored ISO-8601 `expiry_time` string via `datetime.fromisoformat()` before calling `session.load_oauth_session(expiry_time=datetime)`. Atomic write-tmp-chmod-rename for 0600 file mode. Clipboard: prefers `$WAYLAND_DISPLAY` + `wl-copy` over `$DISPLAY` + `xclip`. |
 | `xmpd/providers/ytmusic.py` | YTMusicProvider + YTMusicClient | LIVE (Phase 3): full 14-method Provider Protocol. `YTMusicProvider(config, stream_resolver=None)`. `isinstance(YTMusicProvider({}), Provider)` is True. `_local_track_to_provider` helper DRYs LocalTrack->ProviderTrack conversion. `get_radio` accesses `self._client._client` directly (only abstraction breach). `YTMusicClient` wraps `ytmusicapi` (unchanged). |
+| `xmpd/providers/tidal.py` | TidalProvider scaffold | LIVE (Phase 9). `name` property returns `"tidal"`. `is_enabled()` reads `config["tidal"]["enabled"]`. `is_authenticated() -> tuple[bool, str]` matches Protocol exactly. `_ensure_session()` loads via `load_session()` and raises `TidalAuthRequired` if session missing/invalid. 12 remaining Protocol methods raise `NotImplementedError("Phase 10")`. `_session: Any` annotation avoids tidalapi import at class-definition time. |
 | `xmpd/sync_engine.py` | SyncEngine | LIVE (Phase 6): registry-iterating multi-provider sync. Constructor takes `provider_registry: dict[str, Provider]`, `track_store` (required), `playlist_prefix: dict[str, str]`. New methods: `_sync_one_provider`, `_sync_provider_playlist`. `DEFAULT_FAVORITES_NAMES` module-level constant. No imports of `ytmusic_client`, `stream_resolver`, `sync_liked_songs`, or `liked_songs_playlist_name`. **Phase 8 must wire into `daemon.py`.** |
 | `xmpd/track_store.py` | TrackStore (SQLite) | Compound-key `(provider, track_id)` with PRAGMA user_version migration (Phase 5). `SCHEMA_VERSION = 1`. All methods take `(provider, track_id)`. New `update_metadata` method for sparse writes. Logging via `logging.getLogger(__name__)`. |
 | `xmpd/stream_proxy.py` | StreamRedirectProxy (aiohttp) | LIVE (Phase 4). Route `/proxy/{provider}/{track_id}` with TRACK_ID_PATTERNS (`yt`: 11-char alphanumeric, `tidal`: 1-20 digits). Per-provider TTL via `stream_cache_hours` dict. Registry-aware `_refresh_stream_url` with legacy `stream_resolver` fallback for yt through Phase 8. Successor of `ICYProxyServer` (deleted `icy_proxy.py`). |
@@ -61,9 +63,11 @@ External AirPlay surface lives in `extras/airplay-bridge/`, a separate sub-proje
 | `tests/test_history_integration.py` | History integration tests | LIVE (Phase 8): `_make_daemon` updated to use `build_registry` mock; `test_track_change_triggers_report` fixed for new HistoryReporter constructor. |
 | `tests/integration/test_auto_auth.py` | Auto-auth integration tests | LIVE (Phase 8): `test_status_includes_auto_auth_fields_when_enabled` updated to use `build_registry` mock and asserts `auto_auth_enabled=False`. |
 | `tests/test_auto_auth_daemon.py` | (DELETED) | Removed in Phase 8. All tested code was removed: auto-auth loop, `_attempt_auto_refresh`, reactive refresh. |
+| `tests/test_tidal_oauth.py` | Tidal OAuth tests | LIVE (Phase 9): 20 tests for save/load/clipboard/run_oauth_flow. All mocked (tidalapi.Session, subprocess.run). No live network. |
+| `tests/test_providers_tidal_scaffold.py` | TidalProvider scaffold tests | LIVE (Phase 9): 12 tests for name, is_enabled, is_authenticated, _ensure_session, parametrized Phase-10 stub check, build_registry tidal branch. |
 | `tests/fixtures/ytmusic_samples.json` | YTMusic API samples | Real search results + fallback shapes (Phase 3). |
 | `xmpd/notify.py` | Desktop notify wrapper | `send_notification(title, body, urgency)`. |
-| `xmpd/exceptions.py` | Exception hierarchy | Base `XMPDError`; YTMusic, MPD, Proxy, Config, CookieExtraction subtrees. **Phase 9 adds `TidalAuthRequired` here.** |
+| `xmpd/exceptions.py` | Exception hierarchy | Base `XMPDError`; YTMusic, MPD, Proxy, Config, CookieExtraction subtrees. LIVE (Phase 9): `TidalAuthRequired(XMPDError)` added (`# noqa: N818`, name mandated by spec). Caught by SyncEngine per-provider failure isolation. |
 | `bin/xmpctl` | CLI controller | LIVE (Phase 8): provider-aware CLI. `cmd_auth(provider, manual)` replaces `cmd_auth(auto)`. Like/dislike round-trip through daemon socket. `get_current_track_from_mpd()` returns `(provider, track_id, title, artist)`. `parse_provider_flag()` helper. Search/radio accept `--provider` flag. Backward-compat shims: bare `xmpctl auth` -> `auth yt`, `xmpctl auth --auto` -> `auth yt`. Hand-rolled argv dispatch preserved. Subcommands: `sync`, `status`, `list-playlists`, `auth <provider>`, `search`, `radio`, `like`, `dislike`, `help`. |
 | `bin/xmpd-status` | i3blocks widget | Pretty-prints current track + playback progress. |
 | `bin/xmpd-status-preview` | Standalone preview | For widget styling work. |
@@ -396,10 +400,10 @@ daemon.py
   +-- providers/                              [Phase 1+]
   |   +-- base.py (Provider, Track, Playlist, TrackMetadata)
   |   +-- ytmusic.py -> YTMusicProvider       [LIVE Phase 3: full 14-method Protocol]
-  |   +-- tidal.py -> TidalProvider           [Phase 9 scaffold, Phase 10 methods]
+  |   +-- tidal.py -> TidalProvider           [LIVE Phase 9 scaffold, Phase 10 methods]
   +-- auth/                                   [Phase 1+]
   |   +-- ytmusic_cookie.py (FirefoxCookieExtractor)  [LIVE, relocated Phase 2]
-  |   +-- tidal_oauth.py                              [Phase 9]
+  |   +-- tidal_oauth.py                              [LIVE Phase 9]
   +-- sync_engine.py (SyncEngine)             [LIVE Phase 6: registry-aware, provider_registry ctor]
   +-- stream_proxy.py (StreamRedirectProxy)   [LIVE Phase 4: /proxy/{provider}/{track_id}]
   +-- proxy_url.py (build_proxy_url)          [LIVE Phase 4]
@@ -410,7 +414,7 @@ daemon.py
   +-- rating.py (RatingManager + apply_to_provider) [LIVE Phase 7]
   +-- stream_resolver.py (StreamResolver)     [stays YT-internal]
   +-- notify.py (send_notification)           [unchanged]
-  +-- exceptions.py                           [Phase 9: + TidalAuthRequired]
+  +-- exceptions.py                           [LIVE Phase 9: + TidalAuthRequired]
 ```
 
 ### AirPlay bridge integration
@@ -450,7 +454,7 @@ Backward-compat: bare `xmpctl auth` -> `auth yt`, `xmpctl auth --auto` -> `auth 
 - **Config file**: `~/.config/xmpd/config.yaml`. Phase 11 introduces the new shape; legacy shape is rejected with a clear error pointing at `install.sh` / `docs/MIGRATION.md`.
 - **Auth files**:
   - YT Music: `~/.config/xmpd/browser.json` (Firefox cookies via auto-auth) or `oauth.json`.
-  - Tidal: `~/.config/xmpd/tidal_session.json` (Phase 9 introduces).
+  - Tidal: `~/.config/xmpd/tidal_session.json` (LIVE Phase 9). 5-key JSON (`token_type`, `access_token`, `refresh_token`, `expiry_time`, `is_pkce`), mode 0600. Written by `save_session`, read by `load_session`. `expiry_time` is ISO-8601 string in the file, parsed to `datetime` on load. NOT in repo.
 - **Track DB**: `~/.config/xmpd/track_mapping.db`.
 - **Stream cache**: `~/.config/xmpd/stream_cache.json` (StreamResolver persistent cache).
 - **Log file**: `~/.config/xmpd/xmpd.log`.
@@ -521,7 +525,7 @@ Phase 11 reshapes this to nest `auto_auth:` under `yt:`, add `tidal:` with `enab
 ## External Services & APIs
 
 - **YouTube Music** (via `ytmusicapi`): used in Phases 1-8 (refactor). No new research needed -- the existing `YTMusicClient` is the source of truth for current usage; Phase 3 wraps it.
-- **Tidal HiFi** (via `tidalapi`, unofficial): used in Phases 9-12. Full reference is in the Phase 9 and Phase 10 plan files under their "Technical Reference" sections (research findings from setup step 6b).
+- **Tidal HiFi** (via `tidalapi>=0.8.11,<0.9`, unofficial): LIVE (Phase 9). `tidalapi==0.8.11` installed. OAuth device flow (`Session.login_oauth()`), session persistence (`Session.load_oauth_session(token_type, access_token, refresh_token, expiry_time: Optional[datetime])`), `Quality.high_lossless` ceiling. PKCE / HiRes deferred. Key evidence captured: `Quality` enum members `['low_96k', 'low_320k', 'high_lossless', 'hi_res_lossless']`; `LinkLogin` shape with `verification_uri_complete` (no scheme prefix); `session.user.id` is `int` (not `str`). Full reference in Phase 9/10 plan files.
 - **iTunes Search API** + **MusicBrainz/CAA** (via `extras/airplay-bridge/mpd_owntone_metadata.py`): existing fallback chain for album art; not modified by this feature.
 - **MPD** (via `python-mpd2`): existing integration in `MPDClient` and `HistoryReporter`. Not modified by this feature.
 
