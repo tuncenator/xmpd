@@ -1,7 +1,8 @@
-"""Sync daemon for xmpd - periodically syncs YouTube Music playlists to MPD.
+"""Sync daemon for xmpd - multi-provider music sync to MPD.
 
-This module implements the XMPDaemon class which coordinates YouTube Music
-playlist syncing to MPD, with support for periodic auto-sync and manual triggers.
+This module implements the XMPDaemon class which coordinates provider-agnostic
+playlist syncing to MPD, with support for periodic auto-sync, history reporting,
+rating dispatch, and an HTTP stream-redirect proxy.
 """
 
 import asyncio
@@ -15,13 +16,13 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from xmpd.auth.ytmusic_cookie import FirefoxCookieExtractor
 from xmpd.config import get_config_dir, load_config
-from xmpd.exceptions import CookieExtractionError, MPDConnectionError
+from xmpd.exceptions import MPDConnectionError
 from xmpd.history_reporter import HistoryReporter
 from xmpd.mpd_client import MPDClient
-from xmpd.notify import send_notification
-from xmpd.providers.ytmusic import YTMusicClient
+from xmpd.providers import build_registry
+from xmpd.providers.base import Provider
+from xmpd.rating import RatingAction, RatingManager, apply_to_provider
 from xmpd.stream_proxy import StreamRedirectProxy
 from xmpd.stream_resolver import StreamResolver
 from xmpd.sync_engine import SyncEngine
@@ -30,18 +31,47 @@ from xmpd.track_store import TrackStore
 logger = logging.getLogger(__name__)
 
 
+def _build_yt_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Synthesize a ``yt`` provider config section from legacy top-level keys.
+
+    During the Phase 8-10 transition the user's ``config.yaml`` may still
+    use the legacy flat shape (no ``yt:`` section).  This helper bridges
+    the gap so ``build_registry`` always receives a well-formed dict.
+    """
+    if "yt" in config and isinstance(config["yt"], dict):
+        # Already has the new shape; ensure ``enabled`` defaults to True
+        section = dict(config["yt"])
+        section.setdefault("enabled", True)
+        return section
+    # Legacy config: synthesize from top-level keys
+    return {"enabled": True}
+
+
+def _build_playlist_prefix(config: dict[str, Any]) -> dict[str, str]:
+    """Normalise ``playlist_prefix`` into a per-provider dict.
+
+    Phase 11 will make the config natively a dict.  Until then, a bare
+    string is treated as the ``yt`` prefix.
+    """
+    raw = config.get("playlist_prefix", "YT: ")
+    if isinstance(raw, dict):
+        return raw
+    return {"yt": str(raw)}
+
+
 class XMPDaemon:
-    """Sync daemon that periodically syncs YouTube Music playlists to MPD.
+    """Multi-provider sync daemon for xmpd.
 
     The daemon:
-    - Initializes sync components (YTMusicClient, MPDClient, StreamResolver, SyncEngine)
+    - Builds a provider registry from config and probes authentication
+    - Injects the registry into SyncEngine, HistoryReporter, StreamRedirectProxy
     - Runs periodic sync loop in background thread
     - Listens for manual sync triggers via Unix socket
     - Persists sync state between runs
     - Handles signals for graceful shutdown and config reload
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the daemon with all sync components."""
         logger.info("Initializing xmpd sync daemon...")
 
@@ -49,35 +79,18 @@ class XMPDaemon:
         self.config = load_config()
         logger.info("Configuration loaded")
 
-        # Get auth file path (browser.json or oauth.json)
-        config_dir = get_config_dir()
-        browser_auth = config_dir / "browser.json"
-        oauth_auth = config_dir / "oauth.json"
+        # Runtime control (set early so lambdas referencing _running resolve)
+        self._running = False
 
-        # Prefer browser.json if it exists, fall back to oauth.json
-        if browser_auth.exists():
-            auth_file = browser_auth
-            logger.info("Using browser.json for authentication")
-        elif oauth_auth.exists():
-            auth_file = oauth_auth
-            logger.info("Using oauth.json for authentication")
-        else:
-            raise FileNotFoundError(
-                "No authentication file found. Please create either:\n"
-                f"  - {browser_auth} (recommended, via ytmusicapi setup_browser)\n"
-                f"  - {oauth_auth} (via ytmusicapi setup_oauth)"
-            )
-
-        # Initialize components
+        # Initialize core components
         try:
-            self.ytmusic_client = YTMusicClient(auth_file=auth_file)
             self.mpd_client = MPDClient(
                 socket_path=self.config["mpd_socket_path"],
                 playlist_directory=self.config.get("mpd_playlist_directory"),
             )
+
             # Persistent cache file for stream URLs
             cache_file = get_config_dir() / "stream_cache.json"
-
             self.stream_resolver = StreamResolver(
                 cache_hours=self.config["stream_cache_hours"],
                 should_stop_callback=lambda: not self._running,
@@ -92,11 +105,40 @@ class XMPDaemon:
             if self.config.get("proxy_enabled", True):
                 logger.info("Initializing stream proxy server...")
                 self.track_store = TrackStore(self.config["proxy_track_mapping_db"])
-                # TODO(phase-8): build provider_registry from config; drop stream_resolver kwarg.
+
+            # ----- Provider registry -----
+            # Ensure config has a yt section for build_registry
+            registry_config = dict(self.config)
+            registry_config["yt"] = _build_yt_config(self.config)
+
+            raw_registry = build_registry(registry_config)
+
+            self.provider_registry: dict[str, Provider] = {}
+            for name, provider in raw_registry.items():
+                try:
+                    is_auth, err = provider.is_authenticated()
+                except Exception as exc:
+                    logger.warning("%s authentication probe raised: %s", name, exc)
+                    is_auth, err = False, str(exc)
+
+                if is_auth:
+                    logger.info("Provider %s: ready", name)
+                else:
+                    logger.warning(
+                        "%s not configured (%s); run 'xmpctl auth %s'",
+                        name, err or "no credentials", name,
+                    )
+                # Keep all providers in registry for provider-status reporting;
+                # downstream consumers (sync, proxy, history) guard with
+                # is_authenticated() before network calls.
+                self.provider_registry[name] = provider
+
+            # ----- Proxy server -----
+            if self.config.get("proxy_enabled", True) and self.track_store is not None:
                 self.proxy_server = StreamRedirectProxy(
                     track_store=self.track_store,
-                    provider_registry={},  # placeholder; Phase 8 wires the real registry
-                    stream_resolver=self.stream_resolver,  # legacy YT path until Phase 8
+                    provider_registry=self.provider_registry,
+                    stream_resolver=self.stream_resolver,
                     host=self.config["proxy_host"],
                     port=self.config["proxy_port"],
                     stream_cache_hours={"yt": self.config["stream_cache_hours"]},
@@ -107,43 +149,45 @@ class XMPDaemon:
                     "port": self.config["proxy_port"],
                 }
                 logger.info(
-                    f"Proxy server initialized at "
-                    f"{self.config['proxy_host']}:{self.config['proxy_port']} "
-                    f"with URL refresh support and YouTube Premium auth"
+                    "Proxy server initialized at %s:%s",
+                    self.config["proxy_host"],
+                    self.config["proxy_port"],
                 )
 
+            # ----- Playlist prefix -----
+            playlist_prefix = _build_playlist_prefix(self.config)
+
+            # ----- SyncEngine -----
             self.sync_engine = SyncEngine(
-                ytmusic_client=self.ytmusic_client,
+                provider_registry=self.provider_registry,
                 mpd_client=self.mpd_client,
-                stream_resolver=self.stream_resolver,
-                playlist_prefix=self.config["playlist_prefix"],
-                track_store=self.track_store,
+                track_store=self.track_store or TrackStore(":memory:"),
+                playlist_prefix=playlist_prefix,
                 proxy_config=self.proxy_config,
                 should_stop_callback=lambda: not self._running,
                 playlist_format=self.config.get("playlist_format", "m3u"),
                 mpd_music_directory=self.config.get("mpd_music_directory"),
-                sync_liked_songs=self.config.get("sync_liked_songs", True),
-                liked_songs_playlist_name=self.config.get(
-                    "liked_songs_playlist_name", "Liked Songs"
-                ),
+                sync_favorites=self.config.get("sync_liked_songs", True),
                 like_indicator=self.config.get(
                     "like_indicator", {"enabled": False, "tag": "+1", "alignment": "right"}
                 ),
             )
+
+            # ----- Rating manager -----
+            self._rating_manager = RatingManager()
+
         except Exception as e:
-            logger.error(f"Failed to initialize components: {e}")
+            logger.error("Failed to initialize components: %s", e)
             raise
 
         # State management
         self.state_file = get_config_dir() / "sync_state.json"
         self.state = self._load_state()
 
-        # Runtime control
-        self._running = False
+        # Runtime control (threads)
         self._sync_thread: threading.Thread | None = None
         self._socket_thread: threading.Thread | None = None
         self._proxy_thread: threading.Thread | None = None
-        self._auto_auth_thread: threading.Thread | None = None
         self._sync_in_progress = False
         self._sync_lock = threading.Lock()
 
@@ -154,18 +198,6 @@ class XMPDaemon:
         self._proxy_loop: asyncio.AbstractEventLoop | None = None
         self._proxy_shutdown_event: asyncio.Event | None = None
 
-        # Auto-auth configuration
-        self.auto_auth_config = self.config.get("auto_auth", {})
-        self._auto_auth_enabled = self.auto_auth_config.get("enabled", False)
-        self._auto_auth_shutdown = threading.Event()
-        self._last_reactive_refresh: float = 0.0
-        self._reactive_refresh_cooldown: float = 300.0  # 5 minutes
-
-        if self._auto_auth_enabled:
-            logger.info("Auto-auth enabled (browser: %s)", self.auto_auth_config.get("browser"))
-        else:
-            logger.info("Auto-auth disabled")
-
         # History reporting
         self._history_reporter: HistoryReporter | None = None
         self._history_thread: threading.Thread | None = None
@@ -174,7 +206,7 @@ class XMPDaemon:
         if history_config.get("enabled", False) and self.track_store is not None:
             self._history_reporter = HistoryReporter(
                 mpd_socket_path=self.config["mpd_socket_path"],
-                ytmusic=self.ytmusic_client,
+                provider_registry=self.provider_registry,
                 track_store=self.track_store,
                 proxy_config=self.proxy_config or {},
                 min_play_seconds=history_config.get("min_play_seconds", 30),
@@ -221,12 +253,6 @@ class XMPDaemon:
             logger.info("Starting stream proxy server...")
             self._proxy_thread = threading.Thread(target=self._run_proxy_server, daemon=True)
             self._proxy_thread.start()
-
-        # Start auto-auth refresh thread if enabled
-        if self._auto_auth_enabled:
-            logger.info("Starting auto-auth refresh thread...")
-            self._auto_auth_thread = threading.Thread(target=self._auto_auth_loop, daemon=True)
-            self._auto_auth_thread.start()
 
         # Start history reporting thread if enabled (after proxy so URLs resolve)
         if self._history_reporter is not None:
@@ -280,9 +306,6 @@ class XMPDaemon:
             if self._history_thread.is_alive():
                 logger.warning("History reporter thread did not stop in time")
 
-        # Signal auto-auth thread to stop
-        self._auto_auth_shutdown.set()
-
         # Note: Sync will detect _running=False and cancel itself gracefully
         if self._sync_in_progress:
             logger.info("Sync in progress will be cancelled...")
@@ -307,7 +330,7 @@ class XMPDaemon:
                 # Signal the proxy server to shut down
                 if self._proxy_shutdown_event:
 
-                    def set_shutdown_event():
+                    def set_shutdown_event() -> None:
                         if self._proxy_shutdown_event:
                             self._proxy_shutdown_event.set()
 
@@ -353,8 +376,6 @@ class XMPDaemon:
             threads_alive.append("socket")
         if self._proxy_thread and self._proxy_thread.is_alive():
             threads_alive.append("proxy")
-        if self._auto_auth_thread and self._auto_auth_thread.is_alive():
-            threads_alive.append("auto_auth")
         if self._history_thread and self._history_thread.is_alive():
             threads_alive.append("history")
 
@@ -403,7 +424,7 @@ class XMPDaemon:
             asyncio.set_event_loop(self._proxy_loop)
 
             # Run proxy server in this loop
-            async def run_server():
+            async def run_server() -> None:
                 """Async wrapper to run the proxy server."""
                 # Create shutdown event in the async context
                 self._proxy_shutdown_event = asyncio.Event()
@@ -439,41 +460,6 @@ class XMPDaemon:
                 self._proxy_loop.close()
             logger.info("Proxy server thread stopped")
 
-    def _auto_auth_loop(self) -> None:
-        """Background thread for periodic auto-auth refresh."""
-        logger.info("Starting auto-auth refresh loop")
-
-        interval_hours = self.auto_auth_config.get("refresh_interval_hours", 12)
-        interval_seconds = interval_hours * 3600
-
-        try:
-            while self._running:
-                # Wait for the configured interval (or shutdown signal)
-                if self._auto_auth_shutdown.wait(timeout=interval_seconds):
-                    # Shutdown was signalled
-                    break
-
-                if not self._running:
-                    break
-
-                logger.info("Proactive auto-auth refresh triggered")
-                success = self._attempt_auto_refresh()
-                if success:
-                    logger.info("Proactive auto-auth refresh succeeded")
-                else:
-                    logger.warning("Proactive auto-auth refresh failed")
-                    send_notification(
-                        "xmpd: Auth Refresh Failed",
-                        "Proactive cookie refresh failed. "
-                        "Open YouTube Music in Firefox to refresh cookies.",
-                        urgency="normal",
-                    )
-
-        except Exception as e:
-            logger.error(f"Error in auto-auth loop: {e}", exc_info=True)
-
-        logger.info("Auto-auth refresh loop stopped")
-
     def _history_loop(self) -> None:
         """Run history reporter in background thread."""
         try:
@@ -487,50 +473,6 @@ class XMPDaemon:
             logger.error("History reporter crashed: %s", e, exc_info=True)
         finally:
             logger.info("History reporting stopped")
-
-    def _attempt_auto_refresh(self) -> bool:
-        """Attempt to refresh authentication via cookie extraction.
-
-        Returns:
-            True if refresh succeeded, False otherwise.
-        """
-        config_dir = get_config_dir()
-        browser_json = config_dir / "browser.json"
-
-        try:
-            extractor = FirefoxCookieExtractor(
-                browser=self.auto_auth_config.get("browser", "firefox-dev"),
-                profile=self.auto_auth_config.get("profile"),
-                container=self.auto_auth_config.get("container"),
-            )
-
-            # Write to a temp file first, then rename for atomicity
-            tmp_path = browser_json.with_suffix(".json.tmp")
-            extractor.build_browser_json(tmp_path)
-            tmp_path.rename(browser_json)
-
-            # Reinitialize the ytmusicapi client
-            if not self.ytmusic_client.refresh_auth(browser_json):
-                self.state["auto_refresh_failures"] = self.state.get("auto_refresh_failures", 0) + 1
-                self._save_state()
-                return False
-
-            # Update state on success
-            self.state["last_auto_refresh"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            self.state["auto_refresh_failures"] = 0
-            self._save_state()
-            return True
-
-        except CookieExtractionError as e:
-            logger.error(f"Cookie extraction failed: {e}")
-            self.state["auto_refresh_failures"] = self.state.get("auto_refresh_failures", 0) + 1
-            self._save_state()
-            return False
-        except Exception as e:
-            logger.error(f"Auto-auth refresh failed: {e}", exc_info=True)
-            self.state["auto_refresh_failures"] = self.state.get("auto_refresh_failures", 0) + 1
-            self._save_state()
-            return False
 
     def _perform_sync(self) -> None:
         """Execute sync and update state."""
@@ -580,49 +522,7 @@ class XMPDaemon:
                         logger.error(f"  - {error}")
 
             except Exception as e:
-                logger.error(f"Sync failed with exception: {e}", exc_info=True)
-
-                # Attempt reactive auto-refresh on auth-related failures
-                is_auth_error = any(
-                    kw in str(e).lower()
-                    for kw in ("auth", "credential", "unauthorized", "forbidden")
-                )
-                if is_auth_error and self._auto_auth_enabled:
-                    now = time.time()
-                    if now - self._last_reactive_refresh >= self._reactive_refresh_cooldown:
-                        logger.info("Attempting reactive auto-auth refresh after auth failure")
-                        self._last_reactive_refresh = now
-                        if self._attempt_auto_refresh():
-                            logger.info("Reactive refresh succeeded, retrying sync")
-                            try:
-                                result = self.sync_engine.sync_all_playlists()
-                                self.state["last_sync"] = (
-                                    datetime.now(UTC).isoformat().replace("+00:00", "Z")
-                                )
-                                self.state["last_sync_result"] = {
-                                    "success": result.success,
-                                    "playlists_synced": result.playlists_synced,
-                                    "playlists_failed": result.playlists_failed,
-                                    "tracks_added": result.tracks_added,
-                                    "tracks_failed": result.tracks_failed,
-                                    "duration_seconds": result.duration_seconds,
-                                    "errors": result.errors,
-                                }
-                                self._save_state()
-                                return
-                            except Exception as retry_e:
-                                logger.error(f"Sync retry after refresh also failed: {retry_e}")
-                                e = retry_e  # Use the retry error for state
-                        else:
-                            logger.error("Reactive auto-auth refresh failed")
-                            send_notification(
-                                "xmpd: Authentication Failed",
-                                "Auto-refresh failed. "
-                                "Open YouTube Music in Firefox to refresh cookies.",
-                                urgency="critical",
-                            )
-                    else:
-                        logger.info("Skipping reactive refresh (cooldown active)")
+                logger.error("Sync failed with exception: %s", e, exc_info=True)
 
                 # Update state with failure
                 self.state["last_sync"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -690,28 +590,25 @@ class XMPDaemon:
 
         logger.info("Socket listener stopped")
 
+    # ------------------------------------------------------------------
+    # Socket command dispatch
+    # ------------------------------------------------------------------
+
     def _handle_socket_connection(self, conn: socket.socket) -> None:
-        """Handle a single socket connection.
-
-        Args:
-            conn: Socket connection to handle.
-        """
+        """Handle a single socket connection."""
         try:
-            # Set timeout to prevent indefinite blocking (5 seconds)
             conn.settimeout(5.0)
-
-            # Read command (up to 1KB)
             data = conn.recv(1024).decode("utf-8").strip()
             if not data:
                 return
 
-            logger.debug(f"Received command: {data}")
+            logger.debug("Received command: %s", data)
 
-            # Parse command
             parts = data.split()
             cmd = parts[0] if parts else ""
+            args = parts[1:]
 
-            # Handle commands
+            # Dispatch
             if cmd == "sync":
                 response = self._cmd_sync()
             elif cmd == "status":
@@ -720,73 +617,143 @@ class XMPDaemon:
                 response = self._cmd_list()
             elif cmd == "quit":
                 response = self._cmd_quit()
+            elif cmd == "provider-status":
+                response = self._cmd_provider_status()
             elif cmd == "radio":
-                # Extract video_id argument if provided
-                video_id = parts[1] if len(parts) > 1 else None
-                response = self._cmd_radio(video_id)
+                provider, remaining = self._parse_provider_args(args)
+                track_id = remaining[0] if remaining else None
+                # Backward compat: bare `radio <11char>` -> yt
+                if provider is None and track_id and len(track_id) == 11:
+                    provider = "yt"
+                response = self._cmd_radio(provider, track_id)
             elif cmd == "search":
-                # Extract search query (everything after "search")
-                query = " ".join(parts[1:]) if len(parts) > 1 else None
-                response = self._cmd_search(query)
+                provider, remaining = self._parse_provider_args(args)
+                query = " ".join(remaining) if remaining else None
+                response = self._cmd_search(query, provider=provider)
             elif cmd == "play":
-                # Extract video_id argument
-                video_id = parts[1] if len(parts) > 1 else None
-                response = self._cmd_play(video_id)
+                provider, track_id = self._parse_play_queue_args(args)
+                response = self._cmd_play(provider, track_id)
             elif cmd == "queue":
-                # Extract video_id argument
-                video_id = parts[1] if len(parts) > 1 else None
-                response = self._cmd_queue(video_id)
+                provider, track_id = self._parse_play_queue_args(args)
+                response = self._cmd_queue(provider, track_id)
+            elif cmd == "like":
+                provider = args[0] if len(args) > 0 else None
+                track_id = args[1] if len(args) > 1 else None
+                response = self._cmd_like(provider, track_id)
+            elif cmd == "dislike":
+                provider = args[0] if len(args) > 0 else None
+                track_id = args[1] if len(args) > 1 else None
+                response = self._cmd_dislike(provider, track_id)
             else:
                 response = {"success": False, "error": f"Unknown command: {cmd}"}
 
-            # Send response
             conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
 
         except TimeoutError:
             logger.warning("Socket connection timed out waiting for command")
             try:
-                error_response = {"success": False, "error": "Connection timeout"}
-                conn.sendall((json.dumps(error_response) + "\n").encode("utf-8"))
+                conn.sendall(
+                    (json.dumps({"success": False, "error": "Connection timeout"}) + "\n").encode()
+                )
             except Exception:
                 pass
         except BrokenPipeError:
-            # Client disconnected before we could send response - this is fine
             logger.debug("Client disconnected before response could be sent (broken pipe)")
         except Exception as e:
-            logger.error(f"Error handling socket connection: {e}", exc_info=True)
+            logger.error("Error handling socket connection: %s", e, exc_info=True)
             try:
-                error_response = {"success": False, "error": str(e)}
-                conn.sendall((json.dumps(error_response) + "\n").encode("utf-8"))
-            except (BrokenPipeError, ConnectionResetError):
-                # Client already gone, can't send error response
+                conn.sendall(
+                    (json.dumps({"success": False, "error": str(e)}) + "\n").encode()
+                )
+            except (BrokenPipeError, ConnectionResetError, Exception):
                 pass
-            except Exception:
-                pass
-
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
 
+    # ------------------------------------------------------------------
+    # Argument helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_provider_args(args: list[str]) -> tuple[str | None, list[str]]:
+        """Pop ``--provider <name>`` from *args*.
+
+        Returns ``(provider_name_or_none, remaining_args)``.
+        """
+        remaining: list[str] = []
+        provider: str | None = None
+        it = iter(args)
+        for tok in it:
+            if tok == "--provider":
+                provider = next(it, None)
+            elif tok.startswith("--provider="):
+                provider = tok.split("=", 1)[1]
+            else:
+                remaining.append(tok)
+        return provider, remaining
+
+    @staticmethod
+    def _parse_play_queue_args(args: list[str]) -> tuple[str, str | None]:
+        """Parse args for play/queue: ``[provider] track_id``.
+
+        Returns ``(provider, track_id)``.  If only one arg, assumes ``yt``.
+        """
+        if len(args) >= 2:
+            return args[0], args[1]
+        if len(args) == 1:
+            return "yt", args[0]
+        return "yt", None
+
+    def _extract_provider_and_track(
+        self, url: str,
+    ) -> tuple[str | None, str | None]:
+        """Extract (provider, track_id) from a proxy URL.
+
+        Handles ``/proxy/{provider}/{track_id}`` (new) and
+        ``/proxy/{11-char-id}`` (legacy, assumes yt).
+        """
+        if not url:
+            return None, None
+        # New shape: /proxy/yt/VIDEO_ID or /proxy/tidal/12345
+        match = re.search(r"/proxy/([a-z]+)/([^/?]+)", url)
+        if match:
+            return match.group(1), match.group(2)
+        # Legacy shape: /proxy/VIDEO_ID (11-char YT id)
+        legacy = re.search(r"/proxy/([A-Za-z0-9_-]{11})$", url)
+        if legacy:
+            return "yt", legacy.group(1)
+        return None, None
+
+    # ------------------------------------------------------------------
+    # Socket commands
+    # ------------------------------------------------------------------
+
     def _cmd_sync(self) -> dict[str, Any]:
-        """Handle 'sync' command - trigger immediate sync."""
+        """Handle 'sync' command."""
         logger.info("Manual sync triggered via socket")
-
-        # Trigger sync in background
         threading.Thread(target=self._perform_sync, daemon=True).start()
-
-        return {
-            "success": True,
-            "message": "Sync triggered",
-        }
+        return {"success": True, "message": "Sync triggered"}
 
     def _cmd_status(self) -> dict[str, Any]:
-        """Handle 'status' command - return sync status."""
+        """Handle 'status' command - return sync status.
+
+        Backward-compatible: shape matches pre-Phase-8.  The ``auth_valid``
+        field probes the first authenticated provider (yt in practice).
+        """
         last_sync_result = self.state.get("last_sync_result", {})
 
-        # Check authentication status
-        auth_valid, auth_error = self.ytmusic_client.is_authenticated()
+        # Auth status: use the yt provider if present, else report False
+        yt = self.provider_registry.get("yt")
+        if yt is not None:
+            try:
+                auth_valid, auth_error = yt.is_authenticated()
+            except Exception:
+                auth_valid, auth_error = False, "probe failed"
+        else:
+            auth_valid, auth_error = False, "yt provider not in registry"
 
         return {
             "success": True,
@@ -801,21 +768,36 @@ class XMPDaemon:
             "last_sync_success": last_sync_result.get("success", False),
             "auth_valid": auth_valid,
             "auth_error": auth_error,
-            "auto_auth_enabled": self._auto_auth_enabled,
+            # Legacy fields retained for backward compat (auto-auth removed)
+            "auto_auth_enabled": False,
             "last_auto_refresh": self.state.get("last_auto_refresh"),
             "auto_refresh_failures": self.state.get("auto_refresh_failures", 0),
         }
 
     def _cmd_list(self) -> dict[str, Any]:
-        """Handle 'list' command - list YouTube playlists."""
+        """Handle 'list' command - list playlists from all providers."""
         try:
-            playlists = self.ytmusic_client.get_user_playlists()
-            playlist_data = [
-                {"name": p.name, "id": p.id, "track_count": p.track_count} for p in playlists
-            ]
-            return {"success": True, "playlists": playlist_data}
+            all_playlists: list[dict[str, Any]] = []
+            for name, provider in self.provider_registry.items():
+                try:
+                    is_auth, _ = provider.is_authenticated()
+                    if not is_auth:
+                        continue
+                    playlists = provider.list_playlists()
+                    for p in playlists:
+                        all_playlists.append(
+                            {
+                                "name": p.name,
+                                "id": p.playlist_id,
+                                "track_count": p.track_count,
+                                "provider": name,
+                            }
+                        )
+                except Exception as e:
+                    logger.warning("Error listing playlists for %s: %s", name, e)
+            return {"success": True, "playlists": all_playlists}
         except Exception as e:
-            logger.error(f"Error listing playlists: {e}", exc_info=True)
+            logger.error("Error listing playlists: %s", e, exc_info=True)
             return {"success": False, "error": str(e)}
 
     def _cmd_quit(self) -> dict[str, Any]:
@@ -824,184 +806,184 @@ class XMPDaemon:
         threading.Thread(target=self.stop, daemon=True).start()
         return {"success": True, "message": "Shutting down"}
 
-    def _validate_video_id(self, video_id: str | None) -> tuple[bool, str | None]:
-        """Validate YouTube video ID format.
+    def _cmd_provider_status(self) -> dict[str, Any]:
+        """Return per-provider enabled/authenticated status."""
+        statuses: dict[str, dict[str, bool]] = {}
+        for name in ("yt", "tidal"):
+            cfg_section = self.config.get(name, {})
+            default = True if name == "yt" else False
+            if isinstance(cfg_section, dict):
+                enabled = cfg_section.get("enabled", default)
+            else:
+                enabled = default
+
+            provider = self.provider_registry.get(name)
+            if provider is not None:
+                try:
+                    is_auth, _ = provider.is_authenticated()
+                except Exception:
+                    is_auth = False
+            else:
+                is_auth = False
+            statuses[name] = {"enabled": bool(enabled), "authenticated": bool(is_auth)}
+        return {"success": True, "providers": statuses}
+
+    def _cmd_search(
+        self, query: str | None, *, provider: str | None = None,
+    ) -> dict[str, Any]:
+        """Handle 'search' command - search across providers.
 
         Args:
-            video_id: Video ID to validate.
-
-        Returns:
-            Tuple of (is_valid, error_message).
-            If valid, error_message is None.
+            query: Search query string.
+            provider: Restrict to a single provider, or None for all.
         """
-        if video_id is None:
-            return False, "Missing video ID"
+        logger.info("Search command: query=%s provider=%s", query, provider)
 
-        if len(video_id) != 11:
-            return False, "Invalid video ID format (must be 11 characters)"
+        try:
+            if query is None or not query.strip():
+                return {"success": False, "error": "Empty search query"}
 
-        # YouTube video IDs are alphanumeric plus - and _
-        if not all(c.isalnum() or c in "-_" for c in video_id):
-            return False, "Invalid video ID format (invalid characters)"
+            # Determine which providers to search
+            if provider and provider != "all":
+                if provider not in self.provider_registry:
+                    return {"success": False, "error": f"Unknown provider: {provider}"}
+                targets = {provider: self.provider_registry[provider]}
+            else:
+                targets = self.provider_registry
 
-        return True, None
+            formatted: list[dict[str, Any]] = []
+            global_idx = 1
+            for pname, prov in targets.items():
+                try:
+                    is_auth, _ = prov.is_authenticated()
+                    if not is_auth:
+                        continue
+                    results = prov.search(query, limit=10)
+                    for track in results:
+                        formatted.append({
+                            "number": global_idx,
+                            "provider": pname,
+                            "track_id": track.track_id,
+                            "title": track.metadata.title,
+                            "artist": track.metadata.artist or "Unknown Artist",
+                            "duration": self._format_duration(
+                                track.metadata.duration_seconds or 0
+                            ),
+                        })
+                        global_idx += 1
+                except Exception as e:
+                    logger.warning("Search failed for provider %s: %s", pname, e)
 
-    def _extract_video_id_from_url(self, url: str) -> str | None:
-        """Extract YouTube video ID from proxy URL.
+            logger.info("Found %d results for: %s", len(formatted), query)
+            return {"success": True, "results": formatted, "count": len(formatted)}
 
-        Proxy URLs follow pattern: http://localhost:PORT/proxy/yt/VIDEO_ID
+        except Exception as e:
+            logger.error("Search failed: %s", e)
+            return {"success": False, "error": f"Search failed: {e}"}
 
-        Args:
-            url: URL to extract video ID from.
-
-        Returns:
-            11-character video ID or None if not a proxy URL.
-        """
-        if not url:
-            return None
-
-        # Match pattern: */proxy/yt/{video_id} or legacy */proxy/{video_id}
-        match = re.search(r"/proxy/(?:yt/)?([A-Za-z0-9_-]{11})$", url)
-        return match.group(1) if match else None
-
-    def _cmd_radio(self, video_id: str | None) -> dict[str, Any]:
+    def _cmd_radio(
+        self, provider: str | None, track_id: str | None,
+    ) -> dict[str, Any]:
         """Handle 'radio' command - generate radio playlist.
 
         Args:
-            video_id: YouTube video ID, or None to use current track.
-
-        Returns:
-            Response dict with success status and track count.
+            provider: Provider name, or None to infer from current track.
+            track_id: Track ID, or None to infer from current track.
         """
-        logger.info(f"Radio command received: video_id={video_id}")
+        logger.info("Radio command: provider=%s track_id=%s", provider, track_id)
 
         try:
-            # If no video_id provided, extract from current MPD track
-            if video_id is None:
+            # Infer provider + track_id from current MPD track if needed
+            if track_id is None:
                 try:
                     current = self.mpd_client.currentsong()
                 except Exception as e:
-                    logger.error(f"Failed to get current song from MPD: {e}")
+                    logger.error("Failed to get current song from MPD: %s", e)
                     return {"success": False, "error": "Failed to get current track"}
 
                 if not current:
                     return {"success": False, "error": "No track currently playing"}
 
-                # Extract video ID from proxy URL
                 file_url = current.get("file", "")
-                video_id = self._extract_video_id_from_url(file_url)
+                provider, track_id = self._extract_provider_and_track(file_url)
 
-                if not video_id:
-                    return {"success": False, "error": "Current track is not a YouTube track"}
+                if not provider or not track_id:
+                    return {"success": False, "error": "Current track is not a provider track"}
 
-                logger.info(f"Extracted video ID from current track: {video_id}")
-            else:
-                # Validate provided video_id
-                is_valid, error = self._validate_video_id(video_id)
-                if not is_valid:
-                    return {"success": False, "error": error}
-
-            # Get radio playlist from YouTube Music
-            logger.info(f"Fetching radio playlist for video ID: {video_id}")
-            radio_tracks = self.ytmusic_client._client.get_watch_playlist(
-                videoId=video_id, radio=True, limit=self.config.get("radio_playlist_limit", 25)
-            )
-
-            if not radio_tracks:
-                return {"success": False, "error": "Failed to generate radio playlist"}
-
-            # Extract video IDs from radio tracks
-            # get_watch_playlist returns a dict with "tracks" key
-            tracks = (
-                radio_tracks.get("tracks", []) if isinstance(radio_tracks, dict) else radio_tracks
-            )
-            video_ids = []
-            for track in tracks:
-                if isinstance(track, dict) and "videoId" in track:
-                    video_ids.append(track["videoId"])
-
-            if not video_ids:
-                return {"success": False, "error": "No tracks found in radio playlist"}
-
-            logger.info(f"Fetched {len(video_ids)} tracks from radio playlist")
-
-            # Build TrackWithMetadata objects for playlist creation
-            from xmpd.mpd_client import TrackWithMetadata
-
-            track_objects = []
-
-            # Check if proxy is enabled for on-demand resolution
-            lazy_resolution = self.proxy_config and self.proxy_config.get("enabled", False)
-
-            if lazy_resolution:
                 logger.info(
-                    f"Proxy enabled - skipping URL resolution for {len(video_ids)} tracks "
-                    f"(will resolve on-demand when played)"
+                    "Inferred from current track: provider=%s track_id=%s", provider, track_id,
                 )
 
-            for track in tracks:
-                if isinstance(track, dict):
-                    vid = track.get("videoId")
-                    if vid and vid in video_ids:
-                        # Extract artist info
-                        artists = track.get("artists", [])
-                        if isinstance(artists, list) and artists:
-                            artist = ", ".join(
-                                [
-                                    a.get("name", "")
-                                    for a in artists
-                                    if isinstance(a, dict) and a.get("name")
-                                ]
-                            )
-                        else:
-                            artist = "Unknown Artist"
+            # Default provider to yt for backward compat
+            if provider is None:
+                provider = "yt"
 
-                        title = track.get("title", "Unknown Title")
-                        duration_seconds = track.get("duration_seconds")
+            if provider not in self.provider_registry:
+                return {"success": False, "error": f"Unknown provider: {provider}"}
 
-                        # Save track metadata to TrackStore for on-demand resolution
-                        if lazy_resolution and self.track_store:
-                            try:
-                                self.track_store.add_track(
-                                    provider="yt",
-                                    track_id=vid,
-                                    stream_url=None,  # Will be resolved on-demand by proxy
-                                    title=title,
-                                    artist=artist,
-                                )
-                                logger.debug(f"Saved track metadata for lazy resolution: {vid}")
-                            except Exception as e:
-                                logger.warning(f"Failed to save track metadata for {vid}: {e}")
+            prov = self.provider_registry[provider]
+            is_auth, err = prov.is_authenticated()
+            if not is_auth:
+                return {"success": False, "error": f"{provider} not authenticated: {err}"}
 
-                        track_objects.append(
-                            TrackWithMetadata(
-                                url="",  # Proxy will generate URL on-demand
-                                title=title,
-                                artist=artist,
-                                video_id=vid,
-                                duration_seconds=duration_seconds,
-                            )
+            # Fetch radio tracks via Provider Protocol
+            radio_tracks = prov.get_radio(
+                track_id, limit=self.config.get("radio_playlist_limit", 25),
+            )
+            if not radio_tracks:
+                return {"success": False, "error": "No tracks found in radio playlist"}
+
+            logger.info("Fetched %d radio tracks from %s", len(radio_tracks), provider)
+
+            # Build TrackWithMetadata objects for MPD playlist creation
+            from xmpd.mpd_client import TrackWithMetadata
+
+            track_objects: list[TrackWithMetadata] = []
+            for t in radio_tracks:
+                # Persist to TrackStore for on-demand proxy resolution
+                if self.track_store:
+                    try:
+                        self.track_store.add_track(
+                            provider=t.provider,
+                            track_id=t.track_id,
+                            stream_url=None,
+                            title=t.metadata.title,
+                            artist=t.metadata.artist,
                         )
+                    except Exception as e:
+                        logger.warning("Failed to save track %s: %s", t.track_id, e)
+
+                track_objects.append(
+                    TrackWithMetadata(
+                        url="",
+                        title=t.metadata.title,
+                        artist=t.metadata.artist or "Unknown Artist",
+                        video_id=t.track_id,
+                        duration_seconds=t.metadata.duration_seconds,
+                    )
+                )
 
             if not track_objects:
                 return {"success": False, "error": "No valid tracks to add to playlist"}
 
-            # Build liked video ID set for like indicator
+            # Build liked set for like indicator
             like_indicator = self.config.get(
-                "like_indicator", {"enabled": False, "tag": "+1", "alignment": "right"}
+                "like_indicator", {"enabled": False, "tag": "+1", "alignment": "right"},
             )
             liked_video_ids: set[str] = set()
             if like_indicator.get("enabled", False):
                 try:
-                    liked_tracks = self.ytmusic_client.get_liked_songs()
-                    if liked_tracks:
-                        liked_video_ids = {t.video_id for t in liked_tracks}
+                    favs = prov.get_favorites()
+                    liked_video_ids = {f.track_id for f in favs}
                 except Exception as e:
-                    logger.warning(f"Failed to fetch liked songs for like indicator: {e}")
+                    logger.warning("Failed to fetch favorites for like indicator: %s", e)
 
             # Create MPD playlist
-            playlist_name = "YT: Radio"
-            logger.info(f"Creating playlist '{playlist_name}' with {len(track_objects)} tracks")
+            prefix_map = _build_playlist_prefix(self.config)
+            prefix = prefix_map.get(provider, "YT: " if provider == "yt" else "TD: ")
+            playlist_name = f"{prefix}Radio"
+            logger.info("Creating playlist '%s' with %d tracks", playlist_name, len(track_objects))
+
             self.mpd_client.create_or_replace_playlist(
                 name=playlist_name,
                 tracks=track_objects,
@@ -1012,7 +994,6 @@ class XMPDaemon:
                 like_indicator=like_indicator,
             )
 
-            logger.info(f"Radio playlist created successfully: {len(track_objects)} tracks")
             return {
                 "success": True,
                 "message": f"Radio playlist created: {len(track_objects)} tracks",
@@ -1021,91 +1002,31 @@ class XMPDaemon:
             }
 
         except Exception as e:
-            logger.error(f"Radio generation failed: {e}")
-            return {"success": False, "error": f"Radio generation failed: {str(e)}"}
+            logger.error("Radio generation failed: %s", e)
+            return {"success": False, "error": f"Radio generation failed: {e}"}
 
-    def _cmd_search(self, query: str | None) -> dict[str, Any]:
-        """Handle 'search' command - search YouTube Music.
-
-        Args:
-            query: Search query string.
-
-        Returns:
-            Response dict with success status and search results.
-        """
-        logger.info(f"Search command received: query={query}")
-
-        try:
-            # Validate query
-            if query is None or not query.strip():
-                return {"success": False, "error": "Empty search query"}
-
-            # Search YouTube Music (limit to 10 results)
-            logger.info(f"Searching YouTube Music for: {query}")
-            results = self.ytmusic_client.search(query, limit=10)
-
-            if not results:
-                return {"success": True, "results": [], "count": 0}
-
-            # Format results
-            formatted = []
-            for idx, track in enumerate(results, 1):
-                formatted.append(
-                    {
-                        "number": idx,
-                        "video_id": track.get("video_id", ""),
-                        "title": track.get("title", "Unknown"),
-                        "artist": track.get("artist", "Unknown Artist"),
-                        "duration": self._format_duration(track.get("duration", 0)),
-                    }
-                )
-
-            logger.info(f"Found {len(formatted)} results for: {query}")
-            return {"success": True, "results": formatted, "count": len(formatted)}
-
-        except Exception as e:
-            logger.error(f"Search failed: {e}")
-            return {"success": False, "error": f"Search failed: {str(e)}"}
-
-    def _cmd_play(self, video_id: str | None) -> dict[str, Any]:
+    def _cmd_play(self, provider: str, track_id: str | None) -> dict[str, Any]:
         """Handle 'play' command - play track immediately.
 
-        Clears the current queue, adds the track, and starts playback.
-
         Args:
-            video_id: YouTube video ID.
-
-        Returns:
-            Response dict with success status and track info.
+            provider: Provider canonical name (e.g. 'yt').
+            track_id: Track identifier.
         """
-        logger.info(f"Play command received: video_id={video_id}")
+        logger.info("Play command: provider=%s track_id=%s", provider, track_id)
 
         try:
-            # Validate video_id
-            is_valid, error = self._validate_video_id(video_id)
-            if not is_valid:
-                return {"success": False, "error": error}
+            if not track_id:
+                return {"success": False, "error": "Missing track ID"}
 
-            # Get track metadata
-            track_info = self._get_track_info(video_id)
+            # Get track metadata via provider
+            track_info = self._get_track_info(provider, track_id)
 
-            # Check if proxy is enabled for on-demand resolution
-            lazy_resolution = self.proxy_config and self.proxy_config.get("enabled", False)
-
-            if lazy_resolution:
-                # Use proxy URL directly (stream will be resolved on-demand)
-                proxy_port = self.proxy_config.get("port", 6602)
-                proxy_url = f"http://localhost:{proxy_port}/proxy/yt/{video_id}"
-                logger.info(f"Using proxy URL for on-demand resolution: {proxy_url}")
-            else:
-                # Resolve stream URL now
-                logger.info(f"Resolving stream URL for video ID: {video_id}")
-                proxy_url = self.stream_resolver.resolve_video_id(video_id)
-                if not proxy_url:
-                    return {"success": False, "error": "Failed to resolve stream URL"}
+            # Build proxy URL
+            proxy_port = (self.proxy_config or {}).get("port", 8080)
+            proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
 
             # Clear queue, add track, start playback
-            logger.info(f"Playing track: {track_info['title']} - {track_info['artist']}")
+            logger.info("Playing: %s - %s", track_info["title"], track_info["artist"])
             self.mpd_client._client.clear()
             self.mpd_client._client.add(proxy_url)
             self.mpd_client._client.play()
@@ -1118,48 +1039,28 @@ class XMPDaemon:
             }
 
         except Exception as e:
-            logger.error(f"Play command failed: {e}")
-            return {"success": False, "error": f"Play failed: {str(e)}"}
+            logger.error("Play command failed: %s", e)
+            return {"success": False, "error": f"Play failed: {e}"}
 
-    def _cmd_queue(self, video_id: str | None) -> dict[str, Any]:
-        """Handle 'queue' command - add track to queue.
-
-        Adds track to MPD queue without interrupting current playback.
+    def _cmd_queue(self, provider: str, track_id: str | None) -> dict[str, Any]:
+        """Handle 'queue' command - add track to MPD queue.
 
         Args:
-            video_id: YouTube video ID.
-
-        Returns:
-            Response dict with success status and track info.
+            provider: Provider canonical name.
+            track_id: Track identifier.
         """
-        logger.info(f"Queue command received: video_id={video_id}")
+        logger.info("Queue command: provider=%s track_id=%s", provider, track_id)
 
         try:
-            # Validate video_id
-            is_valid, error = self._validate_video_id(video_id)
-            if not is_valid:
-                return {"success": False, "error": error}
+            if not track_id:
+                return {"success": False, "error": "Missing track ID"}
 
-            # Get track metadata
-            track_info = self._get_track_info(video_id)
+            track_info = self._get_track_info(provider, track_id)
 
-            # Check if proxy is enabled for on-demand resolution
-            lazy_resolution = self.proxy_config and self.proxy_config.get("enabled", False)
+            proxy_port = (self.proxy_config or {}).get("port", 8080)
+            proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
 
-            if lazy_resolution:
-                # Use proxy URL directly (stream will be resolved on-demand)
-                proxy_port = self.proxy_config.get("port", 6602)
-                proxy_url = f"http://localhost:{proxy_port}/proxy/yt/{video_id}"
-                logger.info(f"Using proxy URL for on-demand resolution: {proxy_url}")
-            else:
-                # Resolve stream URL now
-                logger.info(f"Resolving stream URL for video ID: {video_id}")
-                proxy_url = self.stream_resolver.resolve_video_id(video_id)
-                if not proxy_url:
-                    return {"success": False, "error": "Failed to resolve stream URL"}
-
-            # Add to queue (doesn't interrupt current playback)
-            logger.info(f"Adding to queue: {track_info['title']} - {track_info['artist']}")
+            logger.info("Adding to queue: %s - %s", track_info["title"], track_info["artist"])
             self.mpd_client._client.add(proxy_url)
 
             return {
@@ -1170,48 +1071,107 @@ class XMPDaemon:
             }
 
         except Exception as e:
-            logger.error(f"Queue command failed: {e}")
-            return {"success": False, "error": f"Queue failed: {str(e)}"}
+            logger.error("Queue command failed: %s", e)
+            return {"success": False, "error": f"Queue failed: {e}"}
+
+    def _cmd_like(self, provider: str | None, track_id: str | None) -> dict[str, Any]:
+        """Handle 'like' command."""
+        if not provider or not track_id:
+            return {"success": False, "error": "Usage: like <provider> <track_id>"}
+        if provider not in self.provider_registry:
+            return {"success": False, "error": f"Unknown provider: {provider}"}
+
+        prov = self.provider_registry[provider]
+        try:
+            is_auth, err = prov.is_authenticated()
+        except Exception as exc:
+            return {"success": False, "error": f"{provider} auth probe failed: {exc}"}
+        if not is_auth:
+            return {"success": False, "error": f"{provider} not authenticated: {err}"}
+
+        try:
+            raw_state = prov.get_like_state(track_id)
+            from xmpd.rating import RatingState
+            state_map = {
+                "LIKED": RatingState.LIKED,
+                "DISLIKED": RatingState.DISLIKED,
+                "NEUTRAL": RatingState.NEUTRAL,
+            }
+            current = state_map.get(raw_state, RatingState.NEUTRAL)
+            transition = self._rating_manager.apply_action(current, RatingAction.LIKE)
+            apply_to_provider(prov, transition, track_id)
+            return {
+                "success": True,
+                "message": transition.user_message,
+                "new_state": transition.new_state.value,
+            }
+        except Exception as e:
+            logger.error("Like failed: %s", e, exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    def _cmd_dislike(self, provider: str | None, track_id: str | None) -> dict[str, Any]:
+        """Handle 'dislike' command."""
+        if not provider or not track_id:
+            return {"success": False, "error": "Usage: dislike <provider> <track_id>"}
+        if provider not in self.provider_registry:
+            return {"success": False, "error": f"Unknown provider: {provider}"}
+
+        prov = self.provider_registry[provider]
+        try:
+            is_auth, err = prov.is_authenticated()
+        except Exception as exc:
+            return {"success": False, "error": f"{provider} auth probe failed: {exc}"}
+        if not is_auth:
+            return {"success": False, "error": f"{provider} not authenticated: {err}"}
+
+        try:
+            raw_state = prov.get_like_state(track_id)
+            from xmpd.rating import RatingState
+            state_map = {
+                "LIKED": RatingState.LIKED,
+                "DISLIKED": RatingState.DISLIKED,
+                "NEUTRAL": RatingState.NEUTRAL,
+            }
+            current = state_map.get(raw_state, RatingState.NEUTRAL)
+            transition = self._rating_manager.apply_action(current, RatingAction.DISLIKE)
+            apply_to_provider(prov, transition, track_id)
+            return {
+                "success": True,
+                "message": transition.user_message,
+                "new_state": transition.new_state.value,
+            }
+        except Exception as e:
+            logger.error("Dislike failed: %s", e, exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _format_duration(self, seconds: int) -> str:
-        """Format duration in seconds as MM:SS.
-
-        Args:
-            seconds: Duration in seconds.
-
-        Returns:
-            Formatted duration string (e.g., "3:45").
-        """
+        """Format duration in seconds as MM:SS."""
         if not seconds or seconds <= 0:
             return "Unknown"
         mins = seconds // 60
         secs = seconds % 60
         return f"{mins}:{secs:02d}"
 
-    def _get_track_info(self, video_id: str) -> dict[str, str]:
-        """Get track metadata from YouTube Music.
+    def _get_track_info(self, provider: str, track_id: str) -> dict[str, str]:
+        """Get track metadata via the provider registry.
 
-        Args:
-            video_id: YouTube video ID.
-
-        Returns:
-            Dictionary with 'title' and 'artist' keys.
+        Falls back to "Unknown" if the provider or metadata lookup fails.
         """
-        try:
-            # Use YTMusicClient to search for track info by video ID
-            # The search API doesn't support direct video ID lookup, so we use a workaround
-            # by searching for the video ID itself (which often returns the track)
-            results = self.ytmusic_client.search(video_id, limit=1)
-            if results and len(results) > 0:
-                track = results[0]
-                return {
-                    "title": track.get("title", "Unknown"),
-                    "artist": track.get("artist", "Unknown Artist"),
-                }
-        except Exception as e:
-            logger.warning(f"Failed to get track info for {video_id}: {e}")
-
-        # Fallback to unknown metadata
+        prov = self.provider_registry.get(provider)
+        if prov is not None:
+            try:
+                meta = prov.get_track_metadata(track_id)
+                if meta is not None:
+                    return {
+                        "title": meta.title or "Unknown",
+                        "artist": meta.artist or "Unknown Artist",
+                    }
+            except Exception as e:
+                logger.warning("Failed to get track info for %s/%s: %s", provider, track_id, e)
         return {"title": "Unknown", "artist": "Unknown Artist"}
 
     def _signal_handler(self, signum: int, frame: Any) -> None:
@@ -1244,7 +1204,7 @@ class XMPDaemon:
         Returns:
             State dictionary.
         """
-        default_state = {
+        default_state: dict[str, Any] = {
             "last_sync": None,
             "last_sync_result": {},
             "daemon_start_time": None,
@@ -1258,11 +1218,11 @@ class XMPDaemon:
 
         try:
             with open(self.state_file) as f:
-                state = json.load(f)
+                state: dict[str, Any] = json.load(f)
             # Ensure all default keys exist (for upgrades from older state files)
             for key, value in default_state.items():
                 state.setdefault(key, value)
-            logger.info(f"State loaded from {self.state_file}")
+            logger.info("State loaded from %s", self.state_file)
             return state
         except Exception as e:
             logger.warning(f"Error loading state file: {e}, starting fresh")
