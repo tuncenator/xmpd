@@ -1,22 +1,25 @@
-"""
-Playlist sync engine for xmpd.
+"""Playlist synchronization engine for xmpd.
 
-This module orchestrates the synchronization of YouTube Music playlists to MPD,
-handling playlist fetching, stream URL resolution, and MPD playlist management.
+This module orchestrates the synchronization of music playlists from one or
+more providers to MPD, handling playlist fetching, track store persistence,
+and MPD playlist management.
 """
 
 import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Optional
 
-from xmpd.exceptions import MPDConnectionError, MPDPlaylistError, YTMusicAPIError
+from xmpd.exceptions import MPDConnectionError, MPDPlaylistError
 from xmpd.mpd_client import MPDClient, TrackWithMetadata
-from xmpd.stream_resolver import StreamResolver
-from xmpd.ytmusic import Playlist, YTMusicClient
+from xmpd.providers.base import Playlist, Provider, Track
+from xmpd.proxy_url import build_proxy_url
+from xmpd.track_store import TrackStore
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_FAVORITES_NAMES: dict[str, str] = {"yt": "Liked Songs", "tidal": "Favorites"}
 
 
 def _truncate_error(error: Exception, max_length: int = 120) -> str:
@@ -44,7 +47,7 @@ class SyncResult:
         playlists_synced: Number of playlists successfully synced.
         playlists_failed: Number of playlists that failed to sync.
         tracks_added: Total number of tracks added to MPD.
-        tracks_failed: Total number of tracks that failed to resolve.
+        tracks_failed: Total number of tracks that failed to add.
         duration_seconds: Time taken for sync operation.
         errors: List of error messages encountered during sync.
     """
@@ -58,14 +61,15 @@ class SyncResult:
     errors: list[str]
 
 
+# TODO(xmpd): rename SyncPreview.youtube_playlists -> playlist_names
 @dataclass
 class SyncPreview:
     """Preview of what would be synced without making changes.
 
     Attributes:
-        youtube_playlists: List of YouTube playlist names.
+        youtube_playlists: List of playlist names across all providers.
         total_tracks: Total number of tracks across all playlists.
-        existing_mpd_playlists: List of existing MPD playlists with the prefix.
+        existing_mpd_playlists: List of existing MPD playlists with a known prefix.
     """
 
     youtube_playlists: list[str]
@@ -74,18 +78,31 @@ class SyncPreview:
 
 
 class SyncEngine:
-    """Core sync engine for YouTube Music to MPD synchronization.
+    """Core sync engine for multi-provider music synchronization to MPD.
 
-    This class orchestrates the entire sync process:
-    1. Fetch YouTube Music playlists
-    2. Resolve video IDs to stream URLs
-    3. Create/update MPD playlists with proper prefixing
+    This class orchestrates the entire sync process across all enabled providers:
+    1. Iterate each provider in the registry
+    2. Fetch playlists and favorites from each provider
+    3. Persist track metadata to TrackStore
+    4. Create/update MPD playlists with per-provider prefixes
+
+    Provider failures are isolated: a flaky provider logs a warning and is
+    skipped for the cycle; other providers continue unaffected.
 
     Example:
-        ytmusic = YTMusicClient(auth_file=Path("~/.config/xmpd/browser.json"))
+        from xmpd.providers import build_registry
+        from xmpd.mpd_client import MPDClient
+        from xmpd.track_store import TrackStore
+
+        registry = build_registry({"yt": {"enabled": True}})
         mpd = MPDClient("~/.config/mpd/socket")
-        resolver = StreamResolver(cache_hours=5)
-        engine = SyncEngine(ytmusic, mpd, resolver, playlist_prefix="YT: ")
+        store = TrackStore("~/.config/xmpd/track_mapping.db")
+        engine = SyncEngine(
+            provider_registry=registry,
+            mpd_client=mpd,
+            track_store=store,
+            playlist_prefix={"yt": "YT: "},
+        )
 
         mpd.connect()
         result = engine.sync_all_playlists()
@@ -95,246 +112,436 @@ class SyncEngine:
 
     def __init__(
         self,
-        ytmusic_client: YTMusicClient,
+        provider_registry: dict[str, Provider],
         mpd_client: MPDClient,
-        stream_resolver: StreamResolver,
-        playlist_prefix: str = "YT: ",
-        track_store: Optional["TrackStore"] = None,  # noqa: F821
+        track_store: TrackStore,
+        playlist_prefix: dict[str, str],
         proxy_config: dict | None = None,
-        should_stop_callback: Callable | None = None,
+        should_stop_callback: Callable[[], bool] | None = None,
         playlist_format: str = "m3u",
         mpd_music_directory: str | None = None,
-        sync_liked_songs: bool = True,
-        liked_songs_playlist_name: str = "Liked Songs",
+        sync_favorites: bool = True,
+        favorites_playlist_name_per_provider: dict[str, str] | None = None,
         like_indicator: dict | None = None,
-    ):
-        """Initialize sync engine with dependencies.
+    ) -> None:
+        """Initialize sync engine with a provider registry.
+
+        NOTE: Phase 8 wires this constructor into XMPDaemon. Until Phase 8 lands,
+        `python -m xmpd` may fail to start; only `pytest -q tests/test_sync_engine.py`
+        is the live verification surface for this phase.
 
         Args:
-            ytmusic_client: Client for fetching YouTube Music playlists.
+            provider_registry: Dict of canonical provider name -> Provider instance.
             mpd_client: Client for MPD playlist management.
-            stream_resolver: Resolver for converting video IDs to stream URLs.
-            playlist_prefix: Prefix to add to YouTube playlists in MPD (default: "YT: ").
-            track_store: Optional TrackStore for saving track metadata mappings.
+            track_store: TrackStore for persisting track metadata.
+            playlist_prefix: Per-provider playlist prefix dict (e.g. {"yt": "YT: "}).
             proxy_config: Optional proxy configuration dict for generating proxy URLs.
-            should_stop_callback: Optional callback that returns True when sync should be cancelled.
+            should_stop_callback: Optional callback returning True when sync should cancel.
             playlist_format: Playlist format - "m3u" or "xspf" (default: "m3u").
             mpd_music_directory: Path to MPD's music directory (required for XSPF format).
-            sync_liked_songs: Whether to sync liked songs as a playlist (default: True).
-            liked_songs_playlist_name: Name for the liked songs playlist (default: "Liked Songs").
-            like_indicator: Optional like indicator config dict with 'enabled', 'tag', 'alignment'.
+            sync_favorites: Whether to sync favorites as a synthetic playlist (default: True).
+            favorites_playlist_name_per_provider: Per-provider override for favorites name.
+            like_indicator: Optional like indicator config dict.
         """
-        self.ytmusic = ytmusic_client
+        self.providers = provider_registry
         self.mpd = mpd_client
-        self.resolver = stream_resolver
-        self.prefix = playlist_prefix
         self.track_store = track_store
-        self.proxy_config = proxy_config
+        self.playlist_prefix = playlist_prefix
+        self.proxy_config = proxy_config or {}
         self.should_stop = should_stop_callback or (lambda: False)
         self.playlist_format = playlist_format
         self.mpd_music_directory = mpd_music_directory
-        self.sync_liked_songs = sync_liked_songs
-        self.liked_songs_playlist_name = liked_songs_playlist_name
+        self.sync_favorites = sync_favorites
+        # Merge defaults with overrides; overrides win.
+        self.favorites_names = {
+            **DEFAULT_FAVORITES_NAMES,
+            **(favorites_playlist_name_per_provider or {}),
+        }
         self.like_indicator = like_indicator or {
             "enabled": False,
             "tag": "+1",
             "alignment": "right",
         }
         logger.info(
-            f"SyncEngine initialized with prefix '{self.prefix}', format '{self.playlist_format}', "
-            f"sync_liked_songs={self.sync_liked_songs}"
+            f"SyncEngine initialized with providers={list(self.providers.keys())}, "
+            f"format={self.playlist_format}, sync_favorites={self.sync_favorites}"
         )
 
     def sync_all_playlists(self) -> SyncResult:
-        """Perform a full sync of all YouTube Music playlists to MPD.
+        """Perform a full sync of all playlists from all providers to MPD.
 
-        This method:
-        1. Fetches all YouTube Music playlists
-        2. For each playlist:
-           a. Gets tracks from YouTube Music
-           b. Resolves video IDs to stream URLs
-           c. Creates/updates MPD playlist with prefix
-        3. Returns statistics about the sync operation
+        Iterates each provider in the registry in insertion order. Per-provider
+        failures are isolated: one failing provider yields a warning and the next
+        provider runs unaffected.
 
         Returns:
-            SyncResult with statistics and any errors encountered.
+            SyncResult with aggregated statistics and any errors encountered.
         """
         start_time = time.time()
-        playlists_synced = 0
-        playlists_failed = 0
-        tracks_added = 0
-        tracks_failed = 0
+        totals: dict[str, int] = {
+            "playlists_synced": 0,
+            "playlists_failed": 0,
+            "tracks_added": 0,
+            "tracks_failed": 0,
+        }
         errors: list[str] = []
 
-        logger.info("Starting full playlist sync")
+        logger.info(f"Starting sync across {len(self.providers)} provider(s)")
 
-        try:
-            # Fetch all YouTube Music playlists
-            playlists = self.ytmusic.get_user_playlists()
-            logger.info(f"Found {len(playlists)} playlists to sync")
-
-            # Create a list to sync (playlists + liked songs if enabled)
-            playlists_to_sync = list(playlists)
-
-            # Add liked songs as a special "playlist" if enabled
-            liked_video_ids: set[str] = set()
-            if self.sync_liked_songs:
-                try:
-                    liked_tracks = self.ytmusic.get_liked_songs()
-                    if liked_tracks:
-                        # Create a fake Playlist object for liked songs
-                        liked_playlist = Playlist(
-                            id="__LIKED_SONGS__",
-                            name=self.liked_songs_playlist_name,
-                            track_count=len(liked_tracks),
-                        )
-                        playlists_to_sync.append(liked_playlist)
-                        logger.info(f"Found {len(liked_tracks)} liked songs to sync")
-                        # Build liked video ID set for like indicator
-                        if self.like_indicator.get("enabled", False):
-                            liked_video_ids = {t.video_id for t in liked_tracks}
-                    else:
-                        logger.info("No liked songs found")
-                except Exception as e:
-                    error_msg = f"Failed to fetch liked songs: {e}"
-                    logger.warning(error_msg)
-                    errors.append(error_msg)
-            elif self.like_indicator.get("enabled", False):
-                # Like indicator enabled but sync_liked_songs is off -- fetch just for the set
-                try:
-                    indicator_liked = self.ytmusic.get_liked_songs()
-                    if indicator_liked:
-                        liked_video_ids = {t.video_id for t in indicator_liked}
-                        logger.info(
-                            f"Fetched {len(liked_video_ids)} liked song IDs for like indicator"
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to fetch liked songs for like indicator: {e}")
-
-            if not playlists_to_sync:
-                logger.info("No playlists to sync")
-                duration = time.time() - start_time
-                return SyncResult(
-                    success=True,
-                    playlists_synced=0,
-                    playlists_failed=0,
-                    tracks_added=0,
-                    tracks_failed=0,
-                    duration_seconds=duration,
-                    errors=[],
+        for provider_name, provider in self.providers.items():
+            if self.should_stop():
+                logger.info(
+                    f"Sync cancelled before provider '{provider_name}' (requested by daemon)"
                 )
+                break
 
-            # Sync each playlist
-            for idx, playlist in enumerate(playlists_to_sync, 1):
-                # Check if we should stop (e.g., daemon shutting down)
-                if self.should_stop():
-                    logger.info(
-                        f"Sync cancelled after {playlists_synced} playlists (requested by daemon)"
-                    )
-                    break
+            logger.info(f"Syncing provider '{provider_name}'")
+            try:
+                per_provider = self._sync_one_provider(provider_name, provider)
+            except Exception as e:
+                msg = f"Provider '{provider_name}' sync failed: {_truncate_error(e)}"
+                logger.warning(msg)
+                errors.append(msg)
+                continue
 
-                logger.info(f"Syncing playlist: {playlist.name} ({idx}/{len(playlists)})")
+            for k in totals:
+                totals[k] += per_provider.get(k, 0)
+            errors.extend(per_provider.get("errors", []))
 
-                try:
-                    result = self._sync_single_playlist_internal(
-                        playlist, liked_video_ids=liked_video_ids
-                    )
-                    playlists_synced += 1
-                    tracks_added += result["tracks_added"]
-                    tracks_failed += result["tracks_failed"]
-
-                    if result["tracks_failed"] > 0:
-                        logger.warning(
-                            f"Playlist '{playlist.name}': {result['tracks_added']} tracks added, "
-                            f"{result['tracks_failed']} tracks failed"
-                        )
-
-                except Exception as e:
-                    playlists_failed += 1
-                    error_msg = f"Failed to sync playlist '{playlist.name}': {_truncate_error(e)}"
-                    logger.error(error_msg)
-                    errors.append(error_msg)
-                    # Continue with next playlist - don't let one failure stop sync
-
-        except YTMusicAPIError as e:
-            error_msg = f"Failed to fetch playlists from YouTube Music: {e}"
-            logger.error(error_msg)
-            errors.append(error_msg)
-            duration = time.time() - start_time
-            return SyncResult(
-                success=False,
-                playlists_synced=playlists_synced,
-                playlists_failed=playlists_failed,
-                tracks_added=tracks_added,
-                tracks_failed=tracks_failed,
-                duration_seconds=duration,
-                errors=errors,
-            )
-
-        except Exception as e:
-            error_msg = f"Unexpected error during sync: {e}"
-            logger.error(error_msg)
-            errors.append(error_msg)
-            duration = time.time() - start_time
-            return SyncResult(
-                success=False,
-                playlists_synced=playlists_synced,
-                playlists_failed=playlists_failed,
-                tracks_added=tracks_added,
-                tracks_failed=tracks_failed,
-                duration_seconds=duration,
-                errors=errors,
-            )
-
-        # Calculate final statistics
         duration = time.time() - start_time
-        success = playlists_failed == 0 and len(errors) == 0
-
+        success = totals["playlists_failed"] == 0 and not errors
         logger.info(
-            f"Sync complete: {playlists_synced} playlists synced, "
-            f"{playlists_failed} failed, {tracks_added} tracks added, "
-            f"{tracks_failed} tracks failed ({duration:.1f}s)"
+            f"Sync complete across {len(self.providers)} provider(s): "
+            f"{totals['playlists_synced']} synced, {totals['playlists_failed']} failed, "
+            f"{totals['tracks_added']} tracks added, {totals['tracks_failed']} failed "
+            f"({duration:.1f}s)"
         )
-
         return SyncResult(
             success=success,
-            playlists_synced=playlists_synced,
-            playlists_failed=playlists_failed,
-            tracks_added=tracks_added,
-            tracks_failed=tracks_failed,
+            playlists_synced=totals["playlists_synced"],
+            playlists_failed=totals["playlists_failed"],
+            tracks_added=totals["tracks_added"],
+            tracks_failed=totals["tracks_failed"],
             duration_seconds=duration,
             errors=errors,
         )
 
-    def sync_single_playlist(self, playlist_name: str) -> SyncResult:
-        """Sync a specific playlist by name.
+    def _sync_one_provider(self, provider_name: str, provider: Provider) -> dict:
+        """Sync all playlists (and optionally favorites) for a single provider.
 
         Args:
-            playlist_name: Name of the YouTube Music playlist to sync.
+            provider_name: Canonical provider name (e.g. "yt", "tidal").
+            provider: Provider instance to sync from.
 
         Returns:
-            SyncResult with statistics for this single playlist sync.
-
-        Raises:
-            YTMusicAPIError: If playlist cannot be found or fetched.
+            Dict with keys: playlists_synced, playlists_failed, tracks_added,
+            tracks_failed, errors (list[str]).
         """
-        start_time = time.time()
-        logger.info(f"Syncing single playlist: {playlist_name}")
+        prefix = self.playlist_prefix.get(provider_name, f"{provider_name.upper()}: ")
+        favorites_name = self.favorites_names.get(provider_name, "Favorites")
+
+        counters: dict[str, int] = {
+            "playlists_synced": 0,
+            "playlists_failed": 0,
+            "tracks_added": 0,
+            "tracks_failed": 0,
+        }
+        errors: list[str] = []
+
+        # 1. Fetch user playlists.
+        playlists = provider.list_playlists()
+        logger.info(f"Provider '{provider_name}': fetched {len(playlists)} playlists")
+
+        # 2. Build the liked-track signature set (used by like_indicator). Always
+        #    fetch favorites if EITHER sync_favorites OR like_indicator is enabled.
+        favorites_tracks: list[Track] = []
+        fetch_favorites = self.sync_favorites or self.like_indicator.get("enabled", False)
+        if fetch_favorites:
+            try:
+                favorites_tracks = provider.get_favorites()
+                logger.info(
+                    f"Provider '{provider_name}': fetched {len(favorites_tracks)} favorites"
+                )
+            except Exception as e:
+                msg = f"Provider '{provider_name}' get_favorites failed: {_truncate_error(e)}"
+                logger.warning(msg)
+                errors.append(msg)
+
+        liked_track_ids: set[str] = {t.track_id for t in favorites_tracks}
+
+        # 3. Sync user playlists. Skip the synthetic favorites entry; step 4 below
+        #    syncs favorites under the configured name. Without this filter, the
+        #    same liked songs were written twice (YT: Liked Music + YT: Liked Songs).
+        regular_playlists = [pl for pl in playlists if not pl.is_favorites]
+        for idx, pl in enumerate(regular_playlists, 1):
+            if self.should_stop():
+                logger.info(
+                    f"Provider '{provider_name}': sync cancelled at "
+                    f"playlist {idx}/{len(regular_playlists)}"
+                )
+                break
+            logger.info(
+                f"Provider '{provider_name}': syncing '{pl.name}' "
+                f"({idx}/{len(regular_playlists)})"
+            )
+            try:
+                stats = self._sync_provider_playlist(
+                    provider_name=provider_name,
+                    provider=provider,
+                    playlist=pl,
+                    mpd_playlist_name=f"{prefix}{pl.name}",
+                    liked_track_ids=liked_track_ids,
+                    is_favorites_playlist=False,
+                )
+                counters["playlists_synced"] += 1
+                counters["tracks_added"] += stats["tracks_added"]
+                counters["tracks_failed"] += stats["tracks_failed"]
+            except Exception as e:
+                counters["playlists_failed"] += 1
+                msg = (
+                    f"Provider '{provider_name}' playlist '{pl.name}' failed: "
+                    f"{_truncate_error(e)}"
+                )
+                logger.error(msg)
+                errors.append(msg)
+                # Continue with next playlist for this provider.
+
+        # 4. Sync favorites as a synthetic playlist.
+        if self.sync_favorites and favorites_tracks:
+            synthetic = Playlist(
+                provider=provider_name,
+                playlist_id="__FAVORITES__",
+                name=favorites_name,
+                track_count=len(favorites_tracks),
+                is_owned=True,
+                is_favorites=True,
+            )
+            try:
+                stats = self._sync_provider_playlist(
+                    provider_name=provider_name,
+                    provider=provider,
+                    playlist=synthetic,
+                    mpd_playlist_name=f"{prefix}{favorites_name}",
+                    liked_track_ids=liked_track_ids,
+                    is_favorites_playlist=True,
+                    preloaded_tracks=favorites_tracks,
+                )
+                counters["playlists_synced"] += 1
+                counters["tracks_added"] += stats["tracks_added"]
+                counters["tracks_failed"] += stats["tracks_failed"]
+            except Exception as e:
+                counters["playlists_failed"] += 1
+                msg = (
+                    f"Provider '{provider_name}' favorites playlist failed: {_truncate_error(e)}"
+                )
+                logger.error(msg)
+                errors.append(msg)
+
+        result: dict = dict(counters)
+        result["errors"] = errors
+        return result
+
+    def _sync_provider_playlist(
+        self,
+        provider_name: str,
+        provider: Provider,
+        playlist: Playlist,
+        mpd_playlist_name: str,
+        liked_track_ids: set[str],
+        is_favorites_playlist: bool,
+        preloaded_tracks: list[Track] | None = None,
+    ) -> dict[str, int]:
+        """Sync a single playlist for a provider to MPD.
+
+        Args:
+            provider_name: Canonical provider name.
+            provider: Provider instance.
+            playlist: Playlist metadata object.
+            mpd_playlist_name: Full MPD playlist name (prefix + playlist.name).
+            liked_track_ids: Set of track_ids that are liked (for like indicator).
+            is_favorites_playlist: Whether this is the favorites/liked playlist.
+            preloaded_tracks: If provided, skip fetching tracks from provider.
+
+        Returns:
+            Dict with keys: tracks_added, tracks_failed.
+        """
+        if preloaded_tracks is not None:
+            tracks = preloaded_tracks
+        else:
+            tracks = provider.get_playlist_tracks(playlist.playlist_id)
+
+        if not tracks:
+            logger.warning(
+                f"Provider '{provider_name}' playlist '{playlist.name}' has no tracks, skipping"
+            )
+            return {"tracks_added": 0, "tracks_failed": 0}
+
+        proxy_host = self.proxy_config.get("host", "localhost")
+        proxy_port = int(self.proxy_config.get("port", 8080))
+        use_proxy = bool(self.proxy_config.get("enabled", False))
+
+        tracks_with_metadata: list[TrackWithMetadata] = []
+        tracks_added = 0
+        tracks_failed = 0
+
+        for t in tracks:
+            try:
+                self.track_store.add_track(
+                    provider=provider_name,
+                    track_id=t.track_id,
+                    stream_url=None,
+                    title=t.metadata.title,
+                    artist=t.metadata.artist,
+                    album=t.metadata.album,
+                    duration_seconds=t.metadata.duration_seconds,
+                    art_url=t.metadata.art_url,
+                )
+
+                proxy_url = (
+                    build_proxy_url(provider_name, t.track_id, proxy_host, proxy_port)
+                    if use_proxy
+                    else ""
+                )
+
+                # TODO(xmpd): rename TrackWithMetadata.video_id -> track_id
+                tracks_with_metadata.append(
+                    TrackWithMetadata(
+                        url=proxy_url,
+                        title=t.metadata.title,
+                        artist=t.metadata.artist or "",
+                        video_id=t.track_id,
+                        duration_seconds=t.metadata.duration_seconds,
+                        provider=provider_name,
+                    )
+                )
+                tracks_added += 1
+            except Exception as e:
+                tracks_failed += 1
+                logger.warning(
+                    f"Provider '{provider_name}' track '{t.track_id}' add failed: "
+                    f"{_truncate_error(e)}"
+                )
+
+        self.mpd.create_or_replace_playlist(
+            mpd_playlist_name,
+            tracks_with_metadata,
+            proxy_config=self.proxy_config or None,
+            playlist_format=self.playlist_format,
+            mpd_music_directory=self.mpd_music_directory,
+            liked_video_ids=liked_track_ids,
+            like_indicator=self.like_indicator,
+            is_liked_playlist=is_favorites_playlist,
+        )
+
+        logger.info(
+            f"Provider '{provider_name}': MPD playlist '{mpd_playlist_name}' "
+            f"created with {tracks_added}/{len(tracks)} tracks"
+        )
+        return {"tracks_added": tracks_added, "tracks_failed": tracks_failed}
+
+    def get_sync_preview(self) -> SyncPreview:
+        """Get a preview of what would be synced without making changes.
+
+        Fetches playlist metadata from all providers and existing MPD playlists
+        with any known prefix. Does not sync anything.
+
+        Returns:
+            SyncPreview with aggregated playlist names, track counts, and
+            existing MPD playlist names.
+        """
+        logger.info("Generating sync preview across all providers")
+
+        all_playlist_names: list[str] = []
+        total_tracks = 0
+        existing_mpd_playlists: list[str] = []
+
+        for provider_name, provider in self.providers.items():
+            prefix = self.playlist_prefix.get(provider_name, f"{provider_name.upper()}: ")
+            try:
+                pls = provider.list_playlists()
+            except Exception as e:
+                logger.warning(
+                    f"Preview: provider '{provider_name}' list_playlists failed: "
+                    f"{_truncate_error(e)}"
+                )
+                continue
+            for pl in pls:
+                all_playlist_names.append(f"{prefix}{pl.name}")
+                total_tracks += pl.track_count
 
         try:
-            # Find the playlist by name
-            playlists = self.ytmusic.get_user_playlists()
-            matching_playlist: Playlist | None = None
+            all_mpd = self.mpd.list_playlists()
+            all_prefixes = tuple(self.playlist_prefix.values())
+            existing_mpd_playlists = [p for p in all_mpd if p.startswith(all_prefixes)]
+        except (MPDConnectionError, MPDPlaylistError) as e:
+            logger.warning(f"Preview: could not list MPD playlists: {e}")
 
-            for playlist in playlists:
-                if playlist.name == playlist_name:
-                    matching_playlist = playlist
-                    break
+        logger.info(
+            f"Preview: {len(all_playlist_names)} playlists across providers, "
+            f"{total_tracks} total tracks, "
+            f"{len(existing_mpd_playlists)} existing prefixed MPD playlists"
+        )
+        return SyncPreview(
+            youtube_playlists=all_playlist_names,
+            total_tracks=total_tracks,
+            existing_mpd_playlists=existing_mpd_playlists,
+        )
 
-            if not matching_playlist:
-                error_msg = f"Playlist '{playlist_name}' not found in YouTube Music"
-                logger.error(error_msg)
+    def sync_single_playlist(self, playlist_name: str) -> SyncResult:
+        """Sync a specific playlist by name, searching across all providers.
+
+        Args:
+            playlist_name: Name of the playlist to sync (without prefix).
+
+        Returns:
+            SyncResult for this single playlist sync. Returns failure result if
+            the playlist is not found in any provider.
+        """
+        start_time = time.time()
+        logger.info(f"Syncing single playlist by name: '{playlist_name}'")
+
+        for provider_name, provider in self.providers.items():
+            try:
+                pls = provider.list_playlists()
+            except Exception as e:
+                logger.warning(
+                    f"Provider '{provider_name}' list_playlists failed during single-sync: {e}"
+                )
+                continue
+            match = next((p for p in pls if p.name == playlist_name), None)
+            if match is None:
+                continue
+
+            prefix = self.playlist_prefix.get(provider_name, f"{provider_name.upper()}: ")
+            favs: list[Track] = []
+            if self.like_indicator.get("enabled", False):
+                try:
+                    favs = provider.get_favorites()
+                except Exception:
+                    favs = []
+            try:
+                stats = self._sync_provider_playlist(
+                    provider_name=provider_name,
+                    provider=provider,
+                    playlist=match,
+                    mpd_playlist_name=f"{prefix}{match.name}",
+                    liked_track_ids={t.track_id for t in favs},
+                    is_favorites_playlist=False,
+                )
                 duration = time.time() - start_time
+                return SyncResult(
+                    success=True,
+                    playlists_synced=1,
+                    playlists_failed=0,
+                    tracks_added=stats["tracks_added"],
+                    tracks_failed=stats["tracks_failed"],
+                    duration_seconds=duration,
+                    errors=[],
+                )
+            except Exception as e:
+                duration = time.time() - start_time
+                msg = f"Failed to sync playlist '{playlist_name}': {_truncate_error(e)}"
+                logger.error(msg)
                 return SyncResult(
                     success=False,
                     playlists_synced=0,
@@ -342,224 +549,18 @@ class SyncEngine:
                     tracks_added=0,
                     tracks_failed=0,
                     duration_seconds=duration,
-                    errors=[error_msg],
+                    errors=[msg],
                 )
 
-            # Sync the playlist
-            result = self._sync_single_playlist_internal(matching_playlist)
-            duration = time.time() - start_time
-
-            logger.info(
-                f"Playlist '{playlist_name}' synced: {result['tracks_added']} tracks added, "
-                f"{result['tracks_failed']} tracks failed ({duration:.1f}s)"
-            )
-
-            return SyncResult(
-                success=True,
-                playlists_synced=1,
-                playlists_failed=0,
-                tracks_added=result["tracks_added"],
-                tracks_failed=result["tracks_failed"],
-                duration_seconds=duration,
-                errors=[],
-            )
-
-        except Exception as e:
-            error_msg = f"Failed to sync playlist '{playlist_name}': {_truncate_error(e)}"
-            logger.error(error_msg)
-            duration = time.time() - start_time
-            return SyncResult(
-                success=False,
-                playlists_synced=0,
-                playlists_failed=1,
-                tracks_added=0,
-                tracks_failed=0,
-                duration_seconds=duration,
-                errors=[error_msg],
-            )
-
-    def get_sync_preview(self) -> SyncPreview:
-        """Get a preview of what would be synced without making changes.
-
-        This method fetches YouTube Music playlists and existing MPD playlists
-        but does not perform any sync operations.
-
-        Returns:
-            SyncPreview with counts and lists of playlists.
-
-        Raises:
-            YTMusicAPIError: If fetching YouTube playlists fails.
-            MPDConnectionError: If MPD is not connected.
-        """
-        logger.info("Generating sync preview")
-
-        # Fetch YouTube Music playlists
-        playlists = self.ytmusic.get_user_playlists()
-        youtube_playlist_names = [p.name for p in playlists]
-
-        # Calculate total tracks
-        total_tracks = sum(p.track_count for p in playlists)
-
-        # Get existing MPD playlists with our prefix
-        try:
-            all_mpd_playlists = self.mpd.list_playlists()
-            existing_mpd_playlists = [p for p in all_mpd_playlists if p.startswith(self.prefix)]
-        except (MPDConnectionError, MPDPlaylistError) as e:
-            logger.warning(f"Could not list MPD playlists: {e}")
-            existing_mpd_playlists = []
-
-        logger.info(
-            f"Preview: {len(playlists)} YouTube playlists, {total_tracks} total tracks, "
-            f"{len(existing_mpd_playlists)} existing MPD playlists with prefix"
+        duration = time.time() - start_time
+        msg = f"Playlist '{playlist_name}' not found in any provider"
+        logger.error(msg)
+        return SyncResult(
+            success=False,
+            playlists_synced=0,
+            playlists_failed=1,
+            tracks_added=0,
+            tracks_failed=0,
+            duration_seconds=duration,
+            errors=[msg],
         )
-
-        return SyncPreview(
-            youtube_playlists=youtube_playlist_names,
-            total_tracks=total_tracks,
-            existing_mpd_playlists=existing_mpd_playlists,
-        )
-
-    def _sync_single_playlist_internal(
-        self,
-        playlist: Playlist,
-        liked_video_ids: set[str] | None = None,
-    ) -> dict[str, int]:
-        """Internal method to sync a single playlist.
-
-        Args:
-            playlist: Playlist object to sync.
-            liked_video_ids: Set of video IDs that are liked, for like indicator.
-
-        Returns:
-            Dict with keys 'tracks_added' and 'tracks_failed'.
-
-        Raises:
-            YTMusicAPIError: If fetching tracks fails.
-            MPDConnectionError: If MPD connection is lost.
-            MPDPlaylistError: If creating playlist in MPD fails.
-        """
-        # Get tracks for this playlist
-        # Special handling for liked songs
-        if playlist.id == "__LIKED_SONGS__":
-            tracks = self.ytmusic.get_liked_songs()
-            logger.info(f"Retrieved {len(tracks)} liked songs")
-        else:
-            tracks = self.ytmusic.get_playlist_tracks(playlist.id)
-            logger.info(f"Retrieved {len(tracks)} tracks for playlist '{playlist.name}'")
-
-        if not tracks:
-            logger.warning(f"Playlist '{playlist.name}' has no tracks, skipping")
-            return {"tracks_added": 0, "tracks_failed": 0}
-
-        # Extract video IDs
-        video_ids = [track.video_id for track in tracks]
-
-        # When proxy is enabled, skip URL resolution - proxy will resolve on-demand
-        if self.proxy_config and self.proxy_config.get("enabled", False):
-            logger.info(
-                f"Proxy enabled - skipping URL resolution for {len(video_ids)} tracks "
-                f"(will resolve on-demand when played)"
-            )
-            # Use empty dict to signal lazy resolution
-            resolved_urls = {}
-            tracks_added = len(video_ids)
-            tracks_failed = 0
-        else:
-            # Resolve video IDs to stream URLs (batch processing for performance)
-            logger.debug(f"Resolving {len(video_ids)} video IDs to stream URLs")
-            resolved_urls = self.resolver.resolve_batch(video_ids)
-
-            # Count successes and failures
-            tracks_added = len(resolved_urls)
-            tracks_failed = len(video_ids) - tracks_added
-
-            if tracks_added == 0:
-                logger.error(
-                    f"No tracks could be resolved for playlist '{playlist.name}', skipping"
-                )
-                raise MPDPlaylistError(
-                    f"Failed to resolve any tracks for playlist '{playlist.name}'"
-                )
-
-            logger.info(f"Resolved {tracks_added}/{len(video_ids)} tracks for '{playlist.name}'")
-
-        # Create list of tracks with metadata in the same order as tracks
-        tracks_with_metadata = []
-        lazy_resolution = self.proxy_config and self.proxy_config.get("enabled", False)
-
-        for track in tracks:
-            # When proxy enabled, use placeholder URL (proxy will resolve on-demand)
-            if lazy_resolution:
-                # Placeholder URL - proxy URLs generated in create_or_replace_playlist
-                stream_url = None
-
-                # Save track mapping to TrackStore WITHOUT stream_url for lazy resolution
-                if self.track_store:
-                    try:
-                        self.track_store.add_track(
-                            video_id=track.video_id,
-                            stream_url=None,  # Will be resolved on-demand by proxy
-                            title=track.title,
-                            artist=track.artist,
-                        )
-                        logger.debug(f"Saved track metadata for lazy resolution: {track.video_id}")
-                    except Exception as e:
-                        logger.warning(f"Failed to save track metadata for {track.video_id}: {e}")
-
-                tracks_with_metadata.append(
-                    TrackWithMetadata(
-                        url=stream_url or "",  # Empty URL, proxy URL will be used from M3U
-                        title=track.title,
-                        artist=track.artist,
-                        video_id=track.video_id,
-                        duration_seconds=track.duration_seconds,
-                    )
-                )
-            # When proxy disabled, only include successfully resolved tracks
-            elif track.video_id in resolved_urls:
-                stream_url = resolved_urls[track.video_id]
-
-                # Save track mapping to TrackStore if enabled
-                if self.track_store:
-                    try:
-                        self.track_store.add_track(
-                            video_id=track.video_id,
-                            stream_url=stream_url,
-                            title=track.title,
-                            artist=track.artist,
-                        )
-                        logger.debug(f"Saved track mapping for {track.video_id}")
-                    except Exception as e:
-                        logger.warning(f"Failed to save track mapping for {track.video_id}: {e}")
-
-                tracks_with_metadata.append(
-                    TrackWithMetadata(
-                        url=stream_url,
-                        title=track.title,
-                        artist=track.artist,
-                        video_id=track.video_id,
-                        duration_seconds=track.duration_seconds,
-                    )
-                )
-            else:
-                logger.debug(f"Skipping unresolved track: {track.title} by {track.artist}")
-
-        # Create MPD playlist with prefix
-        mpd_playlist_name = f"{self.prefix}{playlist.name}"
-        logger.debug(f"Creating MPD playlist: {mpd_playlist_name}")
-
-        is_liked_playlist = playlist.id == "__LIKED_SONGS__"
-        self.mpd.create_or_replace_playlist(
-            mpd_playlist_name,
-            tracks_with_metadata,
-            proxy_config=self.proxy_config,
-            playlist_format=self.playlist_format,
-            mpd_music_directory=self.mpd_music_directory,
-            liked_video_ids=liked_video_ids,
-            like_indicator=self.like_indicator,
-            is_liked_playlist=is_liked_playlist,
-        )
-
-        logger.info(f"Successfully created MPD playlist: {mpd_playlist_name}")
-
-        return {"tracks_added": tracks_added, "tracks_failed": tracks_failed}

@@ -15,6 +15,10 @@ dependencies = [
     "python-mpd2>=3.1.0",
     "yt-dlp>=2023.0.0",
     "aiohttp>=3.9.0",
+    # Unofficial Tidal client. Pin to a known-good range; bump if Tidal's
+    # API changes break us. PKCE flow not used (HiRes deferred per
+    # PROJECT_PLAN.md Cross-Cutting Concerns > Tidal HiRes Streaming).
+    "tidalapi>=0.8.11,<0.9",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +28,7 @@ dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
     "pytest-cov>=4.0.0",
+    "ruamel.yaml>=0.18,<0.19",
 ]
 
 [project.scripts]
@@ -58,3 +63,6 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 norecursedirs = ["tests/research"]
+markers = [
+    "tidal_integration: live tests against the user's real Tidal account; requires XMPD_TIDAL_TEST=1",
+]

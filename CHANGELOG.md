@@ -1,23 +1,48 @@
 # Changelog
 
-## Unreleased
+## [Unreleased] - 2026-04-27
+
+### Added
+
+- Tidal HiFi as a second source provider alongside YouTube Music.
+- Provider abstraction (`xmpd/providers/`) with a `Provider` Protocol and per-provider implementations (`YTMusicProvider`, `TidalProvider`).
+- `xmpctl auth tidal` for the OAuth device-flow Tidal sign-in (clipboard handoff to browser).
+- Per-provider playlist prefix (`YT: ` / `TD: `).
+- Per-provider `stream_cache_hours` with a top-level fallback.
+- Per-provider `quality_ceiling` (Tidal only this release).
+- AirPlay bridge support for Tidal album art via xmpd's track-store SQLite DB.
+- Automatic config migration from the legacy `~/.config/ytmpd/` shape via `install.sh` and `scripts/migrate-config.py`.
+- `tests/test_migrate_config.py` covering the migration helper.
 
 ### Changed
 
-- Project renamed from `ytmpd` to `xmpd`. The Python package, CLI
-  binaries (`xmpctl`, `xmpd-status`, `xmpd-status-preview`), systemd
-  unit (`xmpd.service`), default config dir (`~/.config/xmpd/`),
-  internal class names (`XMPDaemon`, `XMPDError`), and environment
-  variables (`XMPD_STATUS_*`, `XMPD_AIRPLAY_NO_ONLINE_ART`) all follow
-  the new name. The airplay-bridge `_classify_album` source marker
-  changes from `"ytmpd"` to `"xmpd-yt"` (Tidal will add `"xmpd-tidal"`
-  in plan 2). Users with `YTMPD_STATUS_*` env vars in their i3blocks
-  config or shell profile must rename them to `XMPD_STATUS_*`.
-  The provider abstraction and Tidal integration follow in subsequent
-  commits.
+- Project renamed from `ytmpd` to `xmpd` (already done in 1.4.4; this entry summarizes the multi-source phase).
+- Stream proxy route from `/proxy/<id>` to `/proxy/<provider>/<id>`.
+- Track-store schema migrated to compound key `(provider, track_id)` with new nullable columns (`album`, `duration_seconds`, `art_url`). Idempotent via `PRAGMA user_version`.
+- Class `ICYProxyServer` -> `StreamRedirectProxy`.
+- File `xmpd/icy_proxy.py` -> `xmpd/stream_proxy.py`.
+- File `xmpd/cookie_extract.py` -> `xmpd/auth/ytmusic_cookie.py`.
+- File `xmpd/ytmusic.py` -> `xmpd/providers/ytmusic.py`.
+- Config shape: top-level `auto_auth:` is now nested under `yt:`. The legacy shape is rejected at daemon startup with a pointer to `docs/MIGRATION.md`.
+- `xmpctl auth` restructured: `xmpctl auth yt` (cookie auto-extract from Firefox), `xmpctl auth yt --manual` (paste headers), `xmpctl auth tidal` (OAuth device flow). Legacy `xmpctl auth --auto` is treated as `xmpctl auth yt`.
 
+### Deferred to future work
 
-All notable changes to ytmpd (YouTube Music MPD) will be documented in this file.
+- HI_RES_LOSSLESS streaming for Tidal (requires DASH-manifest muxing pipeline plus PKCE OAuth flow). The config key is preserved and accepted, but `TidalProvider.resolve_stream()` clamps to LOSSLESS for now. See `docs/MIGRATION.md` for the rationale.
+- Cross-provider liked-tracks sync (signature-based fuzzy matching across providers). The `Track.liked_signature` hook is reserved for a future spec.
+
+### Removed
+
+- `docs/ICY_PROXY.md` (replaced by `docs/STREAM_PROXY.md`).
+- Top-level `auto_auth:` config shape (now nested under `yt:`).
+- Daemon-side cookie auto-refresh loop (cookie work is CLI-side via `xmpctl auth yt`).
+
+### Migration
+
+- `install.sh` now performs the full ytmpd-to-xmpd migration: copies `~/.config/ytmpd/` to `~/.config/xmpd/` (renames `ytmpd.log` -> `xmpd.log`), runs `scripts/migrate-config.py` to rewrite the config shape (preserves user comments via `ruamel.yaml`), replaces the systemd unit, and cleans up legacy symlinks.
+- `uninstall.sh` gains a `--purge` flag for full cleanup; default behavior preserves the config dir.
+
+All notable changes to xmpd (multi-source MPD daemon) will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

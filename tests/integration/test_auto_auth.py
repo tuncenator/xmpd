@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from xmpd.cookie_extract import FirefoxCookieExtractor
+from xmpd.auth.ytmusic_cookie import FirefoxCookieExtractor
 from xmpd.exceptions import CookieExtractionError
 
 # ---------------------------------------------------------------------------
@@ -536,8 +536,11 @@ class TestDaemonStatusAutoAuth:
     def test_status_includes_auto_auth_fields_when_enabled(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Verify the daemon's status response shape includes auto-auth info."""
-        # This is a structural test - we mock the daemon to check field presence
+        """Verify the daemon's status response shape includes auto-auth fields.
+
+        Post-Phase-8: auto_auth_enabled is always False (auto-auth loop removed),
+        but the fields remain for backward compat.
+        """
         from unittest.mock import MagicMock, patch
 
         mock_config = {
@@ -567,9 +570,14 @@ class TestDaemonStatusAutoAuth:
             },
         }
 
+        yt_prov = MagicMock()
+        yt_prov.name = "yt"
+        yt_prov.is_authenticated.return_value = (True, "")
+        yt_prov.is_enabled.return_value = True
+
         with (
             patch("xmpd.daemon.load_config", return_value=mock_config),
-            patch("xmpd.daemon.YTMusicClient") as mock_yt,
+            patch("xmpd.daemon.build_registry", return_value={"yt": yt_prov}),
             patch("xmpd.daemon.SyncEngine"),
             patch("xmpd.daemon.MPDClient"),
             patch("xmpd.daemon.StreamResolver"),
@@ -577,16 +585,13 @@ class TestDaemonStatusAutoAuth:
             patch("pathlib.Path.exists", return_value=True),
             patch("pathlib.Path.mkdir"),
         ):
-            mock_yt_instance = MagicMock()
-            mock_yt_instance.is_authenticated.return_value = (True, "")
-            mock_yt.return_value = mock_yt_instance
-
             from xmpd.daemon import XMPDaemon
 
             daemon = XMPDaemon()
             status = daemon._cmd_status()
 
+            # Fields present for backward compat
             assert "auto_auth_enabled" in status
-            assert status["auto_auth_enabled"] is True
+            assert status["auto_auth_enabled"] is False  # auto-auth removed in Phase 8
             assert "auto_refresh_failures" in status
             assert "last_auto_refresh" in status

@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from xmpd.exceptions import YTMusicAuthError, YTMusicNotFoundError
-from xmpd.ytmusic import YTMusicClient
+from xmpd.providers.ytmusic import YTMusicClient
 
 
 class TestGetSong:
@@ -21,7 +21,7 @@ class TestGetSong:
     def client(self, tmp_path: Path, mock_ytmusic: Mock) -> YTMusicClient:
         auth_file = tmp_path / "browser.json"
         auth_file.write_text(json.dumps({"access_token": "t"}))
-        with patch("xmpd.ytmusic.YTMusic", return_value=mock_ytmusic):
+        with patch("xmpd.providers.ytmusic.YTMusic", return_value=mock_ytmusic):
             return YTMusicClient(auth_file=auth_file)
 
     def test_returns_song_dict(self, client: YTMusicClient, mock_ytmusic: Mock) -> None:
@@ -52,7 +52,7 @@ class TestGetSong:
     def test_raises_auth_error_when_not_initialised(self, tmp_path: Path) -> None:
         auth_file = tmp_path / "browser.json"
         auth_file.write_text(json.dumps({"access_token": "t"}))
-        with patch("xmpd.ytmusic.YTMusic", return_value=Mock()):
+        with patch("xmpd.providers.ytmusic.YTMusic", return_value=Mock()):
             client = YTMusicClient(auth_file=auth_file)
         client._client = None
 
@@ -86,7 +86,7 @@ class TestReportHistory:
     def client(self, tmp_path: Path, mock_ytmusic: Mock) -> YTMusicClient:
         auth_file = tmp_path / "browser.json"
         auth_file.write_text(json.dumps({"access_token": "t"}))
-        with patch("xmpd.ytmusic.YTMusic", return_value=mock_ytmusic):
+        with patch("xmpd.providers.ytmusic.YTMusic", return_value=mock_ytmusic):
             return YTMusicClient(auth_file=auth_file)
 
     def test_returns_true_on_success(self, client: YTMusicClient, mock_ytmusic: Mock) -> None:
@@ -120,7 +120,7 @@ class TestReportHistory:
     def test_returns_false_when_not_initialised(self, tmp_path: Path) -> None:
         auth_file = tmp_path / "browser.json"
         auth_file.write_text(json.dumps({"access_token": "t"}))
-        with patch("xmpd.ytmusic.YTMusic", return_value=Mock()):
+        with patch("xmpd.providers.ytmusic.YTMusic", return_value=Mock()):
             client = YTMusicClient(auth_file=auth_file)
         client._client = None
 
