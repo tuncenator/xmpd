@@ -54,9 +54,13 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 
 # ytmpd specific
 *.sock
 socket
 state.json
 oauth.json
+
+# Spark agent framework local settings
+.claude/settings.local.json

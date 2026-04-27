@@ -133,7 +133,7 @@ class TestTrackStoreThreadSafety:
         # Add some tracks
         for i in range(10):
             store.add_track(
-                video_id=f"video{i}",
+                "yt", f"video{i}",
                 stream_url=f"http://example.com/stream{i}",
                 title=f"Track {i}",
                 artist=f"Artist {i}",
@@ -143,17 +143,17 @@ class TestTrackStoreThreadSafety:
         results = []
         errors = []
 
-        def read_track(video_id):
+        def read_track(track_id):
             try:
-                track = store.get_track(video_id)
+                track = store.get_track("yt", track_id)
                 results.append(track)
             except Exception as e:
                 errors.append(e)
 
         threads = []
         for i in range(20):
-            video_id = f"video{i % 10}"
-            thread = threading.Thread(target=read_track, args=(video_id,))
+            track_id = f"video{i % 10}"
+            thread = threading.Thread(target=read_track, args=(track_id,))
             threads.append(thread)
             thread.start()
 
@@ -170,7 +170,7 @@ class TestTrackStoreThreadSafety:
 
         # Add initial track
         store.add_track(
-            video_id="video0",
+            "yt", "video0",
             stream_url="http://example.com/stream0",
             title="Track 0",
             artist="Artist 0",
@@ -178,15 +178,15 @@ class TestTrackStoreThreadSafety:
 
         errors = []
 
-        def write_track(video_id, stream_url):
+        def write_track(track_id, stream_url):
             try:
-                store.update_stream_url(video_id, stream_url)
+                store.update_stream_url("yt", track_id, stream_url)
             except Exception as e:
                 errors.append(e)
 
-        def read_track(video_id):
+        def read_track(track_id):
             try:
-                store.get_track(video_id)
+                store.get_track("yt", track_id)
             except Exception as e:
                 errors.append(e)
 
@@ -218,25 +218,25 @@ class TestTrackStoreThreadSafety:
 
         # Add track with URL
         store.add_track(
-            video_id="video1",
+            "yt", "video1",
             stream_url="http://example.com/stream1",
             title="Track 1",
             artist="Artist 1",
         )
 
-        track1 = store.get_track("video1")
+        track1 = store.get_track("yt", "video1")
         original_updated_at = track1["updated_at"]
         time.sleep(0.1)  # Ensure time difference
 
         # Update metadata only (stream_url=None)
         store.add_track(
-            video_id="video1",
+            "yt", "video1",
             stream_url=None,
             title="Track 1 Updated",
             artist="Artist 1 Updated",
         )
 
-        track2 = store.get_track("video1")
+        track2 = store.get_track("yt", "video1")
 
         # updated_at should NOT change when stream_url is None
         assert track2["updated_at"] == original_updated_at
@@ -260,7 +260,7 @@ class TestProxyURLValidation:
         # Create store with track that has None stream_url
         store = TrackStore(":memory:")
         store.add_track(
-            video_id="test1234567",  # 11 characters
+            "yt", "test1234567",
             stream_url=None,
             title="Test Track",
             artist="Test Artist",
@@ -282,7 +282,7 @@ class TestProxyURLValidation:
         # Create store with track that has invalid stream_url
         store = TrackStore(":memory:")
         store.add_track(
-            video_id="test1234567",  # 11 characters
+            "yt", "test1234567",
             stream_url="not-a-url",
             title="Test Track",
             artist="Test Artist",
@@ -303,7 +303,7 @@ class TestProxyURLValidation:
         # Create store with track that has valid stream_url
         store = TrackStore(":memory:")
         store.add_track(
-            video_id="test1234567",  # 11 characters
+            "yt", "test1234567",
             stream_url="https://example.com/stream",
             title="Test Track",
             artist="Test Artist",

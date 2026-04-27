@@ -152,7 +152,7 @@ class FirefoxCookieExtractor:
 
         origin_filter = self._resolve_container_filter(profile_dir)
 
-        tmpdir = tempfile.mkdtemp(prefix="ytmpd_cookies_")
+        tmpdir = tempfile.mkdtemp(prefix="xmpd_cookies_")
         try:
             tmp_db = Path(tmpdir) / "cookies.sqlite"
             shutil.copy2(cookies_db, tmp_db)

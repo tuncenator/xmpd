@@ -15,7 +15,7 @@ from mpd import MPDClient as MPDClientBase
 
 from xmpd.exceptions import MPDConnectionError
 from xmpd.track_store import TrackStore
-from xmpd.ytmusic import YTMusicClient
+from xmpd.providers.ytmusic import YTMusicClient
 
 logger = logging.getLogger(__name__)
 
