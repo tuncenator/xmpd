@@ -78,7 +78,30 @@ No helpers were required or used by Phase 10. No helper issues reported.
 
 ## Code Review Results
 
-> Pending. To be filled by code review agent.
+**Result**: REVIEW FAILED (2 Important + 2 Minor)
+**Reviewer**: spark-code-reviewer (claude-opus-4-6)
+**Diff range**: `a6e8cd6..df7d165`
+
+### Findings
+
+| Severity | # | File / Line | Description |
+|----------|---|-------------|-------------|
+| Important | 1 | `xmpd/providers/tidal.py:278-279` | `get_track_metadata` raises `XMPDError` on `ObjectNotFound` instead of returning `None` per Protocol contract (`base.py:83`: `get_track_metadata(track_id: str) -> TrackMetadata \| None`). The docstring even says "or None on not-found." but the code raises. YTMusic implementation returns `None` on not-found. Callers using `if meta is None:` get an unexpected exception. |
+| Important | 2 | `xmpd/providers/tidal.py:262-269` | `resolve_stream` retry block after `TooManyRequests` only catches `TooManyRequests` on the second attempt. If the retry call raises `AuthenticationError` (token expired between attempts) or `URLNotAvailable`, raw `tidalapi` exceptions leak past the provider boundary. Outer `except AuthenticationError` doesn't cover the inner `try` block. |
+| Minor | 3 | `xmpd/providers/tidal.py:158, 179` | `pl.num_tracks if pl.num_tracks is not None and pl.num_tracks >= 0 else 0` duplicated. Could be a helper. |
+| Minor | 4 | `xmpd/providers/tidal.py:111-117, 281-286` | Album art-URL extraction try/except duplicated between `_to_shared_track` and `get_track_metadata`. |
+
+### Notes (review pass items)
+
+- All 10 external interfaces in the phase plan have captured samples in PHASE_10_SUMMARY.md.
+- No token leaks in committed diff. `get_url()` evidence redacted to scheme+host+path-prefix.
+- HARD GUARDRAIL discipline correct in both live tests: sentinel selection skip, `try`/`finally` cleanup, `pre_count == post_count` RuntimeError on mismatch.
+- Quality clamp logic correct: `session.config.quality = Quality.high_lossless` set before every `track.get_url()`. One-time INFO log fires when `quality_ceiling == "HI_RES_LOSSLESS"` and `_hires_warned` is False; flag set after.
+- `_favorites_ids` cache invariants all correct (no lazy populate on write; lazy populate on first read; correct add/discard on like/unlike).
+- `dislike` correctly aliases `unlike` (no duplicated logic).
+- `report_play` correctly best-effort: catches `Exception`, logs warning, never raises.
+- No helper edits in the diff (no `scripts/spark-*.sh` changes).
+- Track id boundary discipline correct: `str(t.id)` everywhere.
 
 ---
 
