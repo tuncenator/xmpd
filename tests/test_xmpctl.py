@@ -4,13 +4,8 @@ These tests verify basic functionality without complex mocking.
 Full integration tests are in Phase 8.
 """
 
-import json
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
-
 
 XMPCTL = Path(__file__).parent.parent / "bin" / "xmpctl"
 
@@ -118,19 +113,72 @@ class TestYtmpctlSearch:
         )
         assert result.returncode == 0
         assert "search" in result.stdout.lower()
-        assert "interactive" in result.stdout.lower() or "youtube music" in result.stdout.lower()
 
     def test_search_command_requires_daemon(self):
         """Test that search command handles daemon not running gracefully."""
-        # Provide empty input to exit immediately
         result = subprocess.run(
             [str(XMPCTL), "search"],
             capture_output=True,
             text=True,
-            input="\n",  # Empty query to exit
+            input="\n",
         )
-        # Should either work (daemon running) or show daemon error
-        # Empty query should exit with code 0
         if result.returncode != 0:
-            # If daemon not running, should show helpful error
             assert "daemon" in result.stderr.lower() or "socket" in result.stderr.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 tests
+# ---------------------------------------------------------------------------
+
+
+class TestXmpctlAuth:
+    """Tests for the restructured auth subcommand."""
+
+    def test_xmpctl_auth_tidal_no_longer_prints_stub(self):
+        """xmpctl auth tidal no longer prints the old stub message.
+
+        The stub said 'future release'. Phase 11 replaces it with the real
+        OAuth flow. We verify the stub text is gone by checking the source.
+        We do NOT invoke the live OAuth flow in this unit test.
+        """
+        xmpctl_src = Path(XMPCTL).read_text()
+        # The old stub message contained these phrases:
+        assert "future xmpd release" not in xmpctl_src
+        assert "future release" not in xmpctl_src
+        # The real implementation calls run_oauth_flow
+        assert "run_oauth_flow" in xmpctl_src
+
+    def test_xmpctl_auth_unknown_provider(self):
+        """xmpctl auth spotify exits 1."""
+        result = subprocess.run(
+            [str(XMPCTL), "auth", "spotify"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+        assert "unknown provider" in result.stderr.lower()
+
+    def test_xmpctl_help_shows_auth_providers(self):
+        """Help text documents the new auth shape."""
+        result = subprocess.run(
+            [str(XMPCTL), "help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "auth yt" in result.stdout
+        assert "auth tidal" in result.stdout
+        assert "--provider" in result.stdout
+
+
+class TestXmpctlParseProviderFlag:
+    """Tests for the parse_provider_flag helper via subprocess."""
+
+    def test_help_shows_provider_flag(self):
+        """Help text documents --provider."""
+        result = subprocess.run(
+            [str(XMPCTL), "help"],
+            capture_output=True,
+            text=True,
+        )
+        assert "--provider" in result.stdout

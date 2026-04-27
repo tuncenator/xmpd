@@ -3,20 +3,20 @@
 This module tests the critical security and stability fixes:
 1. Path traversal vulnerability in playlist names
 2. Thread safety in TrackStore
-3. URL validation in ICY proxy
+3. URL validation in stream proxy
 4. Socket timeout handling
 """
 
-import pytest
-import tempfile
+import socket
 import threading
 import time
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 
+import pytest
+
+from xmpd.exceptions import MPDPlaylistError
 from xmpd.mpd_client import MPDClient, TrackWithMetadata
 from xmpd.track_store import TrackStore
-from xmpd.exceptions import MPDPlaylistError
 
 
 class TestPathTraversalProtection:
@@ -133,7 +133,7 @@ class TestTrackStoreThreadSafety:
         # Add some tracks
         for i in range(10):
             store.add_track(
-                video_id=f"video{i}",
+                "yt", f"video{i}",
                 stream_url=f"http://example.com/stream{i}",
                 title=f"Track {i}",
                 artist=f"Artist {i}",
@@ -143,17 +143,17 @@ class TestTrackStoreThreadSafety:
         results = []
         errors = []
 
-        def read_track(video_id):
+        def read_track(track_id):
             try:
-                track = store.get_track(video_id)
+                track = store.get_track("yt", track_id)
                 results.append(track)
             except Exception as e:
                 errors.append(e)
 
         threads = []
         for i in range(20):
-            video_id = f"video{i % 10}"
-            thread = threading.Thread(target=read_track, args=(video_id,))
+            track_id = f"video{i % 10}"
+            thread = threading.Thread(target=read_track, args=(track_id,))
             threads.append(thread)
             thread.start()
 
@@ -170,7 +170,7 @@ class TestTrackStoreThreadSafety:
 
         # Add initial track
         store.add_track(
-            video_id="video0",
+            "yt", "video0",
             stream_url="http://example.com/stream0",
             title="Track 0",
             artist="Artist 0",
@@ -178,15 +178,15 @@ class TestTrackStoreThreadSafety:
 
         errors = []
 
-        def write_track(video_id, stream_url):
+        def write_track(track_id, stream_url):
             try:
-                store.update_stream_url(video_id, stream_url)
+                store.update_stream_url("yt", track_id, stream_url)
             except Exception as e:
                 errors.append(e)
 
-        def read_track(video_id):
+        def read_track(track_id):
             try:
-                store.get_track(video_id)
+                store.get_track("yt", track_id)
             except Exception as e:
                 errors.append(e)
 
@@ -218,25 +218,25 @@ class TestTrackStoreThreadSafety:
 
         # Add track with URL
         store.add_track(
-            video_id="video1",
+            "yt", "video1",
             stream_url="http://example.com/stream1",
             title="Track 1",
             artist="Artist 1",
         )
 
-        track1 = store.get_track("video1")
+        track1 = store.get_track("yt", "video1")
         original_updated_at = track1["updated_at"]
         time.sleep(0.1)  # Ensure time difference
 
         # Update metadata only (stream_url=None)
         store.add_track(
-            video_id="video1",
+            "yt", "video1",
             stream_url=None,
             title="Track 1 Updated",
             artist="Artist 1 Updated",
         )
 
-        track2 = store.get_track("video1")
+        track2 = store.get_track("yt", "video1")
 
         # updated_at should NOT change when stream_url is None
         assert track2["updated_at"] == original_updated_at
@@ -248,72 +248,74 @@ class TestTrackStoreThreadSafety:
 
 
 class TestProxyURLValidation:
-    """Test URL validation in ICY proxy server."""
+    """Test URL validation in stream proxy server."""
 
     @pytest.mark.asyncio
     async def test_proxy_rejects_none_stream_url(self):
         """Test that proxy rejects None stream URLs."""
-        from xmpd.icy_proxy import ICYProxyServer
-        from aiohttp import web
         from aiohttp.test_utils import TestClient, TestServer
+
+        from xmpd.stream_proxy import StreamRedirectProxy
 
         # Create store with track that has None stream_url
         store = TrackStore(":memory:")
         store.add_track(
-            video_id="test1234567",  # 11 characters
+            "yt", "test1234567",
             stream_url=None,
             title="Test Track",
             artist="Test Artist",
         )
 
         # Create proxy without resolver (so it can't resolve URLs)
-        proxy = ICYProxyServer(track_store=store, stream_resolver=None)
+        proxy = StreamRedirectProxy(track_store=store, provider_registry={}, stream_resolver=None)
 
         async with TestClient(TestServer(proxy.app)) as client:
-            resp = await client.get("/proxy/test1234567")
+            resp = await client.get("/proxy/yt/test1234567")
             assert resp.status == 502  # Bad Gateway
 
     @pytest.mark.asyncio
     async def test_proxy_rejects_invalid_stream_url(self):
         """Test that proxy rejects invalid stream URLs."""
-        from xmpd.icy_proxy import ICYProxyServer
         from aiohttp.test_utils import TestClient, TestServer
+
+        from xmpd.stream_proxy import StreamRedirectProxy
 
         # Create store with track that has invalid stream_url
         store = TrackStore(":memory:")
         store.add_track(
-            video_id="test1234567",  # 11 characters
+            "yt", "test1234567",
             stream_url="not-a-url",
             title="Test Track",
             artist="Test Artist",
         )
 
-        proxy = ICYProxyServer(track_store=store)
+        proxy = StreamRedirectProxy(track_store=store, provider_registry={})
 
         async with TestClient(TestServer(proxy.app)) as client:
-            resp = await client.get("/proxy/test1234567")
+            resp = await client.get("/proxy/yt/test1234567")
             assert resp.status == 502  # Bad Gateway
 
     @pytest.mark.asyncio
     async def test_proxy_accepts_valid_stream_url(self):
         """Test that proxy accepts valid stream URLs."""
-        from xmpd.icy_proxy import ICYProxyServer
         from aiohttp.test_utils import TestClient, TestServer
+
+        from xmpd.stream_proxy import StreamRedirectProxy
 
         # Create store with track that has valid stream_url
         store = TrackStore(":memory:")
         store.add_track(
-            video_id="test1234567",  # 11 characters
+            "yt", "test1234567",
             stream_url="https://example.com/stream",
             title="Test Track",
             artist="Test Artist",
         )
 
-        proxy = ICYProxyServer(track_store=store)
+        proxy = StreamRedirectProxy(track_store=store, provider_registry={})
 
         async with TestClient(TestServer(proxy.app)) as client:
             # Don't follow redirects so we can verify the 307 response
-            resp = await client.get("/proxy/test1234567", allow_redirects=False)
+            resp = await client.get("/proxy/yt/test1234567", allow_redirects=False)
             # Should be 307 redirect
             assert resp.status == 307
             assert resp.headers["Location"] == "https://example.com/stream"
@@ -324,8 +326,6 @@ class TestSocketTimeout:
 
     def test_socket_has_timeout_set(self):
         """Test that socket timeout is configured when handling connection."""
-        import socket
-
         # Test that timeout is set to 5.0 seconds
         # This is a simpler unit test that doesn't require full daemon initialization
         mock_conn = Mock(spec=socket.socket)
@@ -333,9 +333,6 @@ class TestSocketTimeout:
         mock_conn.recv.return_value = b"status"
         mock_conn.sendall = Mock()
         mock_conn.close = Mock()
-
-        # Import the daemon module
-        import xmpd.daemon as daemon_module
 
         # The socket timeout should be set in _handle_socket_connection
         # We can verify the code sets it by checking the implementation

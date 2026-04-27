@@ -5,8 +5,13 @@ OwnTone watches `<audio-pipe>.metadata` for shairport-sync's XML+DMAP frames and
 forwards them as DACP metadata to the active AirPlay receiver. This daemon
 subscribes to MPD `idle player playlist` and emits a fresh metadata block on
 every track change containing artist/title/album/track-id/album-art. Album is
-tagged "xmpd" for YouTube tracks served via xmpd's proxy, the file's own
-album tag for local files (falling back to "local"), "stream" otherwise.
+tagged "xmpd-yt" for YouTube tracks and "xmpd-tidal" for Tidal tracks served
+via xmpd's proxy, the file's own album tag for local files (falling back to
+"local"), "stream" otherwise.
+
+Album art for Tidal tracks is read from xmpd's track-store SQLite DB
+(~/.config/xmpd/track_mapping.db) via the art_url column. YouTube art is
+fetched from YouTube's thumbnail CDN as before.
 
 Note: progress is NOT supported. OwnTone v29's pipe-input metadata reader
 silently drops both shairport `prgr` (logged as "unexpected") and DAAP `astm`
@@ -26,6 +31,7 @@ import os
 import re
 import signal
 import socket
+import sqlite3
 import sys
 import threading
 import time
@@ -41,8 +47,8 @@ RECONNECT_DELAY_SEC = 3.0
 # Album-art lookup
 ART_CACHE_DIR = Path.home() / ".cache" / "mpd-owntone-metadata"
 ART_FETCH_TIMEOUT_SEC = 5.0
-# xmpd serves YouTube tracks via http://localhost:<port>/proxy/<11-char video_id>
-YT_PROXY_RE = re.compile(r"/proxy/([A-Za-z0-9_-]{11})(?:[?#/]|$)")
+# xmpd serves tracks via http://localhost:<port>/proxy/(yt|tidal)/<track_id>
+XMPD_PROXY_RE = re.compile(r"/proxy/(yt|tidal)/([^/?\s#]+)")
 
 # Album-art cache for online lookups (iTunes / MusicBrainz+CAA). Keyed on
 # sha1(artist|album) to tolerate arbitrary Unicode and filesystem-unsafe
@@ -381,38 +387,85 @@ def _resolve_online(song: dict) -> bytes | None:
     return None
 
 
-def _resolve_yt_proxy(song: dict) -> bytes | None:
-    """Fetch YouTube thumbnail for tracks served via xmpd's proxy URL.
+TRACK_STORE_DB_PATH = Path("~/.config/xmpd/track_mapping.db").expanduser()
 
-    Cached per-video-id on disk under ART_CACHE_DIR. Cache hits are a local
-    Path.read_bytes() so this resolver stays fast even for repeated plays.
+
+def _read_tidal_art_url(track_id: str) -> str | None:
+    """Look up a Tidal track's art_url in xmpd's track_store. Read-only.
+
+    Returns the URL string if a row exists for (provider='tidal', track_id=<track_id>) and
+    that row has a non-NULL art_url. Returns None on every other path -- DB missing, row
+    missing, art_url NULL, sqlite3.Error. Never raises.
+    """
+    if not TRACK_STORE_DB_PATH.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(
+            f"file:{TRACK_STORE_DB_PATH}?mode=ro",
+            uri=True,
+            timeout=1.0,
+        )
+        try:
+            cur = conn.execute(
+                "SELECT art_url FROM tracks WHERE provider = ? AND track_id = ?",
+                ("tidal", track_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return row[0]
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        log.debug("track_store art_url lookup failed for %s: %s", track_id, e)
+        return None
+
+
+def _resolve_xmpd_proxy(song: dict) -> bytes | None:
+    """Fetch album art for tracks served via xmpd's proxy URL.
+
+    Dispatches on provider: YT uses YouTube's thumbnail CDN; Tidal reads the
+    art_url from xmpd's track-store SQLite DB. Cached per-provider-track-id on
+    disk under ART_CACHE_DIR as <provider>-<track_id>.jpg.
     """
     file_uri = song.get("file", "")
-    m = YT_PROXY_RE.search(file_uri)
+    m = XMPD_PROXY_RE.search(file_uri)
     if not m:
         return None
-    video_id = m.group(1)
-    cache_path = ART_CACHE_DIR / f"{video_id}.jpg"
+    provider, track_id = m.group(1), m.group(2)
+
+    cache_path = ART_CACHE_DIR / f"{provider}-{track_id}.jpg"
     if cache_path.exists():
         try:
             return cache_path.read_bytes()
         except OSError as e:
             log.warning("Could not read cached art %s: %s", cache_path, e)
-    url = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+
+    if provider == "yt":
+        url = f"https://img.youtube.com/vi/{track_id}/hqdefault.jpg"
+    elif provider == "tidal":
+        url = _read_tidal_art_url(track_id)
+        if not url:
+            log.debug("No art_url in track_store for tidal/%s", track_id)
+            return None
+    else:
+        return None
+
     try:
         ART_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(url, timeout=ART_FETCH_TIMEOUT_SEC) as resp:
+        req = urllib.request.Request(url, headers={"User-Agent": ART_HTTP_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=ART_FETCH_TIMEOUT_SEC) as resp:
             data = resp.read()
         cache_path.write_bytes(data)
-        log.info("Fetched YT art for %s (%d bytes)", video_id, len(data))
+        log.info("Fetched %s art for %s (%d bytes)", provider, track_id, len(data))
         return data
     except Exception as e:  # noqa: BLE001
-        log.warning("Failed to fetch YT art for %s: %s", video_id, e)
+        log.warning("Failed to fetch %s art for %s: %s", provider, track_id, e)
         return None
 
 
 _RESOLVERS = (
-    _resolve_yt_proxy,
+    _resolve_xmpd_proxy,
     _resolve_mpd_readpicture,
     _resolve_mpd_albumart,
     _resolve_online,
@@ -433,13 +486,15 @@ def fetch_album_art(song: dict) -> bytes | None:
 
 
 def derive_album(song: dict) -> str:
-    """Tag album by source: 'xmpd' for YouTube proxy URLs, MPD's album for
-    local files (falling back to 'local' if the file has no album tag),
-    'stream' for other HTTP sources.
+    """Tag album by source: 'xmpd-yt' / 'xmpd-tidal' for proxy URLs, MPD's
+    album for local files (falling back to 'local' if the file has no album
+    tag), 'stream' for other HTTP sources.
     """
     file_uri = song.get("file", "")
-    if YT_PROXY_RE.search(file_uri):
-        return "xmpd-yt"
+    m = XMPD_PROXY_RE.search(file_uri)
+    if m:
+        provider = m.group(1)
+        return f"xmpd-{provider}"
     if "://" in file_uri:
         return song.get("Album") or "stream"
     return song.get("Album") or "local"

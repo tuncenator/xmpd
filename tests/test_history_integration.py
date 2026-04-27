@@ -35,31 +35,27 @@ def _disabled_config() -> dict:
     return cfg
 
 
-# Shared decorator stack for mocking daemon dependencies
-_daemon_patches = [
-    "xmpd.daemon.YTMusicClient",
-    "xmpd.daemon.MPDClient",
-    "xmpd.daemon.StreamResolver",
-    "xmpd.daemon.SyncEngine",
-    "xmpd.daemon.load_config",
-    "xmpd.daemon.get_config_dir",
-]
+def _make_yt_provider() -> MagicMock:
+    prov = MagicMock(name="yt_provider")
+    prov.name = "yt"
+    prov.is_authenticated.return_value = (True, "")
+    prov.is_enabled.return_value = True
+    return prov
 
 
 def _make_daemon(tmp_path, config_dict):
     """Create a XMPDaemon with full mock stack and given config."""
     config_dir = tmp_path / "config"
     config_dir.mkdir(exist_ok=True)
-    (config_dir / "browser.json").touch()
 
     with (
         patch("xmpd.daemon.get_config_dir", return_value=config_dir),
         patch("xmpd.daemon.load_config", return_value=config_dict),
-        patch("xmpd.daemon.YTMusicClient"),
+        patch("xmpd.daemon.build_registry", return_value={"yt": _make_yt_provider()}),
         patch("xmpd.daemon.MPDClient"),
         patch("xmpd.daemon.StreamResolver"),
         patch("xmpd.daemon.SyncEngine"),
-        patch("xmpd.daemon.ICYProxyServer"),
+        patch("xmpd.daemon.StreamRedirectProxy"),
         patch("xmpd.daemon.TrackStore"),
         patch("xmpd.daemon.HistoryReporter") as mock_hr_cls,
     ):
@@ -158,30 +154,29 @@ class TestEndToEndMock:
     """Simulate track change and verify report_history is called."""
 
     def test_track_change_triggers_report(self) -> None:
-        """Full path: HistoryReporter detects track change -> calls report_history."""
-        ytmusic = MagicMock()
-        ytmusic.get_song.return_value = {"videoId": "dQw4w9WgXc0"}
-        ytmusic.report_history.return_value = True
+        """Full path: HistoryReporter detects track change -> calls report_play."""
+        yt_provider = MagicMock()
+        yt_provider.name = "yt"
+        yt_provider.report_play.return_value = True
 
         track_store = MagicMock()
 
         reporter = HistoryReporter(
             mpd_socket_path="/tmp/mpd.sock",
-            ytmusic=ytmusic,
+            provider_registry={"yt": yt_provider},
             track_store=track_store,
             proxy_config={"host": "localhost", "port": 8080, "enabled": True},
             min_play_seconds=5,
         )
 
         # Simulate: was playing a track long enough, then stopped
-        reporter._current_track_url = "http://localhost:8080/proxy/dQw4w9WgXc0"
+        reporter._current_track_url = "http://localhost:8080/proxy/yt/dQw4w9WgXc0"
         reporter._current_track_start = time.monotonic() - 60
         reporter._accumulated_play = 0.0
         reporter._pause_start = None
         reporter._last_state = "play"
 
         # Simulate _report_track directly
-        reporter._report_track("http://localhost:8080/proxy/dQw4w9WgXc0")
+        reporter._report_track("http://localhost:8080/proxy/yt/dQw4w9WgXc0", 60)
 
-        ytmusic.get_song.assert_called_once_with("dQw4w9WgXc0")
-        ytmusic.report_history.assert_called_once()
+        yt_provider.report_play.assert_called_once()

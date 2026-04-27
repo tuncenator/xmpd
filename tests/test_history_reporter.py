@@ -1,4 +1,4 @@
-"""Unit tests for HistoryReporter."""
+"""Unit tests for HistoryReporter (provider-aware, Phase 7+)."""
 
 import threading
 import time
@@ -6,30 +6,59 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from xmpd.history_reporter import HistoryReporter
+from xmpd.history_reporter import PROXY_URL_RE, HistoryReporter
+from xmpd.providers.base import Provider
+
+# ---------------------------------------------------------------------------
+# URL regex tests
+# ---------------------------------------------------------------------------
+
+
+def test_url_regex_yt_match():
+    m = PROXY_URL_RE.search("http://localhost:8080/proxy/yt/dQw4w9WgXcQ")
+    assert m is not None
+    assert m.groups() == ("yt", "dQw4w9WgXcQ")
+
+
+def test_url_regex_tidal_match():
+    m = PROXY_URL_RE.search("http://localhost:8080/proxy/tidal/12345678")
+    assert m is not None
+    assert m.groups() == ("tidal", "12345678")
+
+
+def test_url_regex_no_match_for_non_proxy_url():
+    assert PROXY_URL_RE.search("http://example.com/song.mp3") is None
+    assert PROXY_URL_RE.search("file:///home/user/Music/song.flac") is None
+
+
+def test_url_regex_underscore_dash_in_yt_id():
+    m = PROXY_URL_RE.search("http://localhost:8080/proxy/yt/abc_-9XYZ12")
+    assert m is not None
+    assert m.groups() == ("yt", "abc_-9XYZ12")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_reporter(min_play_seconds: int = 30) -> HistoryReporter:
-    """Build a HistoryReporter with mocked dependencies."""
+def _make_reporter(registry=None):
+    if registry is None:
+        registry = {}
     return HistoryReporter(
-        mpd_socket_path="/tmp/mpd.sock",
-        ytmusic=MagicMock(),
+        mpd_socket_path="/tmp/fake.sock",
+        provider_registry=registry,
         track_store=MagicMock(),
         proxy_config={"host": "localhost", "port": 8080, "enabled": True},
-        min_play_seconds=min_play_seconds,
+        min_play_seconds=30,
     )
 
 
 def _set_mpd_state(
     reporter: HistoryReporter,
     state: str = "play",
-    file_url: str | None = "http://localhost:8080/proxy/dQw4w9WgXcQ",
+    file_url: str | None = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ",
 ) -> None:
-    """Configure the mock MPD to return given state and song."""
     mpd = MagicMock()
     mpd.status.return_value = {"state": state}
     song: dict[str, str] = {}
@@ -40,34 +69,98 @@ def _set_mpd_state(
 
 
 # ---------------------------------------------------------------------------
-# Video ID extraction
+# Dispatch tests
 # ---------------------------------------------------------------------------
 
 
-class TestExtractVideoId:
-    def test_valid_proxy_url(self) -> None:
-        r = _make_reporter()
-        assert r._extract_video_id("http://localhost:8080/proxy/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+def test_dispatch_calls_provider_report_play():
+    yt = MagicMock(spec=Provider)
+    yt.report_play.return_value = True
+    reporter = _make_reporter({"yt": yt})
+    reporter._report_track("http://localhost:8080/proxy/yt/dQw4w9WgXcQ", 45)
+    yt.report_play.assert_called_once_with("dQw4w9WgXcQ", 45)
 
-    def test_valid_proxy_url_with_hyphens(self) -> None:
-        r = _make_reporter()
-        assert r._extract_video_id("http://localhost:8080/proxy/a-b_c123456") == "a-b_c123456"
 
-    def test_invalid_url_no_proxy(self) -> None:
-        r = _make_reporter()
-        assert r._extract_video_id("http://example.com/song.mp3") is None
+def test_dispatch_unknown_provider_skipped(caplog):
+    yt = MagicMock(spec=Provider)
+    reporter = _make_reporter({"yt": yt})
+    with caplog.at_level("WARNING"):
+        reporter._report_track("http://localhost:8080/proxy/spotify/abc123", 60)
+    yt.report_play.assert_not_called()
+    assert any("not in registry" in rec.message for rec in caplog.records)
 
-    def test_empty_string(self) -> None:
-        r = _make_reporter()
-        assert r._extract_video_id("") is None
 
-    def test_wrong_length_video_id(self) -> None:
-        r = _make_reporter()
-        assert r._extract_video_id("http://localhost:8080/proxy/short") is None
+def test_dispatch_swallows_exceptions(caplog):
+    yt = MagicMock(spec=Provider)
+    yt.report_play.side_effect = RuntimeError("upstream blew up")
+    reporter = _make_reporter({"yt": yt})
+    with caplog.at_level("WARNING"):
+        reporter._report_track("http://localhost:8080/proxy/yt/dQw4w9WgXcQ", 60)
+    assert any("report_play failed" in rec.message for rec in caplog.records)
 
-    def test_non_proxy_path(self) -> None:
-        r = _make_reporter()
-        assert r._extract_video_id("http://localhost:8080/stream/dQw4w9WgXcQ") is None
+
+def test_dispatch_skips_non_proxy_url(caplog):
+    yt = MagicMock(spec=Provider)
+    reporter = _make_reporter({"yt": yt})
+    with caplog.at_level("DEBUG"):
+        reporter._report_track("http://example.com/song.mp3", 60)
+    yt.report_play.assert_not_called()
+
+
+def test_dispatch_handles_empty_url():
+    yt = MagicMock(spec=Provider)
+    reporter = _make_reporter({"yt": yt})
+    reporter._report_track("", 60)
+    yt.report_play.assert_not_called()
+
+
+def test_dispatch_report_play_false_logs_warning(caplog):
+    yt = MagicMock(spec=Provider)
+    yt.report_play.return_value = False
+    reporter = _make_reporter({"yt": yt})
+    with caplog.at_level("WARNING"):
+        reporter._report_track("http://localhost:8080/proxy/yt/dQw4w9WgXcQ", 45)
+    assert any("returned False" in rec.message for rec in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Threshold gate tests
+# ---------------------------------------------------------------------------
+
+
+def test_min_play_seconds_threshold_gate(monkeypatch):
+    yt = MagicMock(spec=Provider)
+    reporter = _make_reporter({"yt": yt})
+    reporter._mpd = MagicMock()
+    reporter._mpd.status.return_value = {"state": "stop"}
+    reporter._mpd.currentsong.return_value = {}
+    reporter._last_state = "play"
+    reporter._current_track_url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+    reporter._current_track_start = 0.0
+    monkeypatch.setattr(reporter, "_compute_elapsed", lambda: 10.0)
+    spy = MagicMock()
+    monkeypatch.setattr(reporter, "_report_track", spy)
+    reporter._handle_player_event()
+    spy.assert_not_called()
+
+
+def test_min_play_seconds_threshold_passes(monkeypatch):
+    yt = MagicMock(spec=Provider)
+    reporter = _make_reporter({"yt": yt})
+    reporter._mpd = MagicMock()
+    reporter._mpd.status.return_value = {"state": "stop"}
+    reporter._mpd.currentsong.return_value = {}
+    reporter._last_state = "play"
+    reporter._current_track_url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+    reporter._current_track_start = 0.0
+    monkeypatch.setattr(reporter, "_compute_elapsed", lambda: 60.0)
+    spy = MagicMock()
+    monkeypatch.setattr(reporter, "_report_track", spy)
+    reporter._handle_player_event()
+    spy.assert_called_once()
+    args, _ = spy.call_args
+    assert args[0] == "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+    assert args[1] == 60
 
 
 # ---------------------------------------------------------------------------
@@ -76,115 +169,77 @@ class TestExtractVideoId:
 
 
 class TestHandlePlayerEvent:
-    """Tests for the _handle_player_event state machine."""
-
     def _setup_playing(
         self,
         reporter: HistoryReporter,
-        url: str = "http://localhost:8080/proxy/dQw4w9WgXcQ",
+        url: str = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ",
         elapsed: float = 60.0,
     ) -> None:
-        """Set reporter state as if a track has been playing for *elapsed* seconds."""
         reporter._current_track_url = url
         reporter._current_track_start = time.monotonic() - elapsed
         reporter._accumulated_play = 0.0
         reporter._pause_start = None
         reporter._last_state = "play"
 
-    # -- play -> play (different track), duration met --
-
-    def test_track_change_reports_previous(self) -> None:
-        r = _make_reporter(min_play_seconds=30)
-        self._setup_playing(r, elapsed=60)
-        _set_mpd_state(r, "play", "http://localhost:8080/proxy/AAAAAAAAAAA")
-
-        r._handle_player_event()
-
-        r._ytmusic.get_song.assert_called_once_with("dQw4w9WgXcQ")
-        r._ytmusic.report_history.assert_called_once()
-
-    # -- play -> play (different track), duration NOT met --
+    def test_track_change_triggers_report_above_threshold(self) -> None:
+        yt = MagicMock(spec=Provider)
+        yt.report_play.return_value = True
+        reporter = _make_reporter({"yt": yt})
+        self._setup_playing(reporter, elapsed=60)
+        _set_mpd_state(reporter, "play", "http://localhost:8080/proxy/yt/AAAAAAAAAAA")
+        reporter._handle_player_event()
+        yt.report_play.assert_called_once_with("dQw4w9WgXcQ", pytest.approx(60, abs=2))
 
     def test_track_change_skips_if_short(self) -> None:
-        r = _make_reporter(min_play_seconds=30)
-        self._setup_playing(r, elapsed=5)
-        _set_mpd_state(r, "play", "http://localhost:8080/proxy/AAAAAAAAAAA")
+        yt = MagicMock(spec=Provider)
+        reporter = _make_reporter({"yt": yt})
+        self._setup_playing(reporter, elapsed=5)
+        _set_mpd_state(reporter, "play", "http://localhost:8080/proxy/yt/AAAAAAAAAAA")
+        reporter._handle_player_event()
+        yt.report_play.assert_not_called()
 
-        r._handle_player_event()
-
-        r._ytmusic.get_song.assert_not_called()
-
-    # -- play -> stop, duration met --
-
-    def test_stop_reports_previous(self) -> None:
-        r = _make_reporter(min_play_seconds=30)
-        self._setup_playing(r, elapsed=45)
-        _set_mpd_state(r, "stop", None)
-
-        r._handle_player_event()
-
-        r._ytmusic.get_song.assert_called_once_with("dQw4w9WgXcQ")
-
-    # -- play -> pause (same track) --
+    def test_stop_triggers_report_above_threshold(self) -> None:
+        yt = MagicMock(spec=Provider)
+        yt.report_play.return_value = True
+        reporter = _make_reporter({"yt": yt})
+        self._setup_playing(reporter, elapsed=45)
+        _set_mpd_state(reporter, "stop", None)
+        reporter._handle_player_event()
+        yt.report_play.assert_called_once_with("dQw4w9WgXcQ", pytest.approx(45, abs=2))
 
     def test_pause_does_not_report(self) -> None:
-        r = _make_reporter(min_play_seconds=30)
-        url = "http://localhost:8080/proxy/dQw4w9WgXcQ"
-        self._setup_playing(r, url=url, elapsed=60)
-        _set_mpd_state(r, "pause", url)
-
-        r._handle_player_event()
-
-        r._ytmusic.get_song.assert_not_called()
-        assert r._pause_start is not None
-
-    # -- pause -> play (same track = resume) --
+        yt = MagicMock(spec=Provider)
+        reporter = _make_reporter({"yt": yt})
+        url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+        self._setup_playing(reporter, url=url, elapsed=60)
+        _set_mpd_state(reporter, "pause", url)
+        reporter._handle_player_event()
+        yt.report_play.assert_not_called()
+        assert reporter._pause_start is not None
 
     def test_resume_does_not_report(self) -> None:
-        r = _make_reporter(min_play_seconds=30)
-        url = "http://localhost:8080/proxy/dQw4w9WgXcQ"
-        r._current_track_url = url
-        r._current_track_start = time.monotonic() - 20
-        r._accumulated_play = 0.0
-        r._pause_start = time.monotonic() - 5
-        r._last_state = "pause"
-        _set_mpd_state(r, "play", url)
-
-        r._handle_player_event()
-
-        r._ytmusic.get_song.assert_not_called()
-        assert r._pause_start is None
-
-    # -- pause -> play (different track), duration met --
-
-    def test_pause_then_different_track_reports(self) -> None:
-        r = _make_reporter(min_play_seconds=10)
-        url_old = "http://localhost:8080/proxy/dQw4w9WgXcQ"
-        r._current_track_url = url_old
-        r._current_track_start = time.monotonic() - 25
-        r._accumulated_play = 0.0
-        r._pause_start = time.monotonic() - 5  # paused for 5s
-        r._last_state = "pause"
-        _set_mpd_state(r, "play", "http://localhost:8080/proxy/BBBBBBBBBBB")
-
-        r._handle_player_event()
-
-        # Should report old track (20s play - pause excluded via _compute_elapsed)
-        r._ytmusic.get_song.assert_called_once_with("dQw4w9WgXcQ")
-
-    # -- stop -> play --
+        yt = MagicMock(spec=Provider)
+        reporter = _make_reporter({"yt": yt})
+        url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+        reporter._current_track_url = url
+        reporter._current_track_start = time.monotonic() - 20
+        reporter._accumulated_play = 0.0
+        reporter._pause_start = time.monotonic() - 5
+        reporter._last_state = "pause"
+        _set_mpd_state(reporter, "play", url)
+        reporter._handle_player_event()
+        yt.report_play.assert_not_called()
+        assert reporter._pause_start is None
 
     def test_stop_to_play_starts_tracking(self) -> None:
-        r = _make_reporter()
-        r._last_state = "stop"
-        r._current_track_url = None
-        r._current_track_start = None
-        _set_mpd_state(r, "play", "http://localhost:8080/proxy/CCCCCCCCCCC")
-
-        r._handle_player_event()
-
-        assert r._current_track_url == "http://localhost:8080/proxy/CCCCCCCCCCC"
-        assert r._current_track_start is not None
+        reporter = _make_reporter()
+        reporter._last_state = "stop"
+        reporter._current_track_url = None
+        reporter._current_track_start = None
+        _set_mpd_state(reporter, "play", "http://localhost:8080/proxy/yt/CCCCCCCCCCC")
+        reporter._handle_player_event()
+        assert reporter._current_track_url == "http://localhost:8080/proxy/yt/CCCCCCCCCCC"
+        assert reporter._current_track_start is not None
 
 
 # ---------------------------------------------------------------------------
@@ -194,27 +249,21 @@ class TestHandlePlayerEvent:
 
 class TestPauseExclusion:
     def test_pause_time_not_counted(self) -> None:
-        r = _make_reporter(min_play_seconds=30)
-        url = "http://localhost:8080/proxy/dQw4w9WgXcQ"
-
-        # Simulate: played 20s, paused, resumed, played 15s more => 35s total play
-        r._current_track_url = url
-        r._accumulated_play = 20.0
-        r._current_track_start = time.monotonic() - 15  # 15s since resume
-        r._pause_start = None
-        r._last_state = "play"
-
-        elapsed = r._compute_elapsed()
+        reporter = _make_reporter()
+        reporter._current_track_url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+        reporter._accumulated_play = 20.0
+        reporter._current_track_start = time.monotonic() - 15
+        reporter._pause_start = None
+        reporter._last_state = "play"
+        elapsed = reporter._compute_elapsed()
         assert elapsed == pytest.approx(35.0, abs=1.0)
 
     def test_elapsed_while_paused(self) -> None:
-        r = _make_reporter()
-        r._current_track_start = time.monotonic() - 50
-        r._accumulated_play = 0.0
-        r._pause_start = time.monotonic() - 10  # paused 10s ago
-
-        elapsed = r._compute_elapsed()
-        # Should be ~40s (50s total - 10s paused)
+        reporter = _make_reporter()
+        reporter._current_track_start = time.monotonic() - 50
+        reporter._accumulated_play = 0.0
+        reporter._pause_start = time.monotonic() - 10
+        elapsed = reporter._compute_elapsed()
         assert elapsed == pytest.approx(40.0, abs=1.0)
 
 
@@ -225,17 +274,16 @@ class TestPauseExclusion:
 
 class TestNonProxyUrl:
     def test_non_proxy_url_not_reported(self) -> None:
-        r = _make_reporter(min_play_seconds=5)
-        r._current_track_url = "http://example.com/song.mp3"
-        r._current_track_start = time.monotonic() - 60
-        r._accumulated_play = 0.0
-        r._pause_start = None
-        r._last_state = "play"
-        _set_mpd_state(r, "stop", None)
-
-        r._handle_player_event()
-
-        r._ytmusic.get_song.assert_not_called()
+        yt = MagicMock(spec=Provider)
+        reporter = _make_reporter({"yt": yt})
+        reporter._current_track_url = "http://example.com/song.mp3"
+        reporter._current_track_start = time.monotonic() - 60
+        reporter._accumulated_play = 0.0
+        reporter._pause_start = None
+        reporter._last_state = "play"
+        _set_mpd_state(reporter, "stop", None)
+        reporter._handle_player_event()
+        yt.report_play.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -244,23 +292,21 @@ class TestNonProxyUrl:
 
 
 class TestErrorRecovery:
-    def test_ytmusic_failure_does_not_crash(self) -> None:
-        r = _make_reporter(min_play_seconds=5)
-        r._current_track_url = "http://localhost:8080/proxy/dQw4w9WgXcQ"
-        r._current_track_start = time.monotonic() - 60
-        r._accumulated_play = 0.0
-        r._pause_start = None
-        r._last_state = "play"
-        r._ytmusic.get_song.side_effect = Exception("API down")
-        _set_mpd_state(r, "stop", None)
-
-        # Should not raise
-        r._handle_player_event()
+    def test_provider_failure_does_not_crash(self) -> None:
+        yt = MagicMock(spec=Provider)
+        yt.report_play.side_effect = Exception("API down")
+        reporter = _make_reporter({"yt": yt})
+        reporter._current_track_url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+        reporter._current_track_start = time.monotonic() - 60
+        reporter._accumulated_play = 0.0
+        reporter._pause_start = None
+        reporter._last_state = "play"
+        _set_mpd_state(reporter, "stop", None)
+        reporter._handle_player_event()  # must not raise
 
     def test_mpd_reconnects_on_connection_loss(self) -> None:
-        r = _make_reporter()
+        reporter = _make_reporter()
         shutdown = threading.Event()
-
         call_count = 0
 
         def fake_connect() -> None:
@@ -268,23 +314,19 @@ class TestErrorRecovery:
             call_count += 1
             if call_count == 1:
                 raise Exception("Connection refused")
-            # Second call succeeds -- set up a mock MPD
             mpd = MagicMock()
             mpd.status.return_value = {"state": "stop"}
             mpd.currentsong.return_value = {}
             mpd.idle.side_effect = lambda *a: shutdown.set()
-            r._mpd = mpd
+            reporter._mpd = mpd
 
-        # Stop after two connect attempts
         def wait_side_effect(timeout: float = 0) -> bool:
             return call_count >= 2
 
         shutdown.wait = wait_side_effect  # type: ignore[assignment]
         shutdown.is_set = lambda: call_count >= 2  # type: ignore[assignment]
-
-        with patch.object(r, "_connect", side_effect=fake_connect):
-            r.run(shutdown)
-
+        with patch.object(reporter, "_connect", side_effect=fake_connect):
+            reporter.run(shutdown)
         assert call_count == 2
 
 
@@ -295,9 +337,8 @@ class TestErrorRecovery:
 
 class TestShutdown:
     def test_run_exits_on_shutdown_event(self) -> None:
-        r = _make_reporter()
+        reporter = _make_reporter()
         shutdown = threading.Event()
-
         mpd = MagicMock()
         mpd.status.return_value = {"state": "stop"}
         mpd.currentsong.return_value = {}
@@ -307,8 +348,8 @@ class TestShutdown:
             return ["player"]
 
         mpd.idle.side_effect = idle_blocks
-
-        with patch.object(r, "_connect", side_effect=lambda: setattr(r, "_mpd", mpd)):
-            r.run(shutdown)
-
+        with patch.object(
+            reporter, "_connect", side_effect=lambda: setattr(reporter, "_mpd", mpd)
+        ):
+            reporter.run(shutdown)
         assert shutdown.is_set()

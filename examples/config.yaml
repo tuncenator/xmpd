@@ -1,175 +1,66 @@
 # xmpd Configuration File
-# This file is automatically created at ~/.config/xmpd/config.yaml on first run
-# All paths can be absolute or relative to ~/.config/xmpd/
+# Created at ~/.config/xmpd/config.yaml on first run.
+# Multi-source layout: per-provider sections under `yt:` and `tidal:`.
+# Migrating from ytmpd? Run install.sh or see docs/MIGRATION.md.
 
-# ===== Core Settings =====
+# ===== YouTube Music =====
+yt:
+  enabled: true
+  stream_cache_hours: 5       # Stream URLs expire after ~6h on YT; 1h buffer
+  auto_auth:
+    enabled: false            # Auto-extract cookies from Firefox
+    browser: firefox-dev      # "firefox" or "firefox-dev"
+    container: null           # Multi-Account Container name, or null
+    profile: null             # Profile dir name, or null to auto-detect
+    refresh_interval_hours: 12
 
-# Path to the Unix socket for client-daemon communication
-# Default: ~/.config/xmpd/socket
-socket_path: ~/.config/xmpd/socket
+# ===== Tidal =====
+tidal:
+  enabled: false              # Opt-in; run `xmpctl auth tidal` first
+  stream_cache_hours: 1       # Tidal URLs expire faster than YT
+  quality_ceiling: HI_RES_LOSSLESS  # LOW | HIGH | LOSSLESS | HI_RES_LOSSLESS
+  sync_favorited_playlists: true
 
-# Path to the state persistence file
-# Default: ~/.config/xmpd/state.json
-state_file: ~/.config/xmpd/state.json
+# ===== Shared / Top-level Settings =====
 
-# Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-# Default: INFO
-log_level: INFO
+# Per-provider playlist prefix. Each enabled provider must have an entry.
+playlist_prefix:
+  yt: "YT: "
+  tidal: "TD: "
 
-# Path to the log file
-# Default: ~/.config/xmpd/xmpd.log
-log_file: ~/.config/xmpd/xmpd.log
-
-# ===== MPD Integration Settings =====
-
-# MPD connection (Unix socket or TCP)
-# For Unix socket (recommended): Use the socket file path
-# For TCP connection: Use "host:port" format (e.g., "localhost:6600")
-# Default: ~/.config/mpd/socket
-# Examples:
-#   - Unix socket: ~/.config/mpd/socket
-#   - TCP: localhost:6600
-#   - TCP remote: 192.168.1.100:6600
-mpd_socket_path: ~/.config/mpd/socket
-
-# Path to MPD's playlist directory
-# Default: ~/.config/mpd/playlists
-# This is where xmpd will write M3U playlist files
-mpd_playlist_directory: ~/.config/mpd/playlists
-
-# Sync interval in minutes
-# How often to automatically sync YouTube Music playlists to MPD
-# Default: 30
-sync_interval_minutes: 30
-
-# Enable automatic periodic sync
-# If false, sync only happens when manually triggered via xmpctl
-# Default: true
-enable_auto_sync: true
-
-# Playlist prefix for YouTube playlists in MPD
-# All YouTube Music playlists will appear in MPD with this prefix
-# Example: "YT: " makes a playlist "Favorites" appear as "YT: Favorites"
-# Can be empty string to disable prefix
-# Default: "YT: "
-playlist_prefix: "YT: "
-
-# Stream URL cache duration in hours
-# YouTube stream URLs expire after ~6 hours
-# Caching for 5 hours gives 1-hour buffer for re-sync
-# Default: 5
+# Fallback stream cache duration if a provider does not set its own
 stream_cache_hours: 5
 
-# ===== Playlist Format Settings =====
+# ===== Core Paths =====
+socket_path: ~/.config/xmpd/socket
+state_file: ~/.config/xmpd/state.json
+log_level: INFO
+log_file: ~/.config/xmpd/xmpd.log
 
-# Playlist format: "m3u" or "xspf"
-# - M3U: Traditional format with EXTINF tags (single "Name" field in MPD)
-# - XSPF: XML format with separate artist/title fields (separate %artist%/%title% in MPD)
-# XSPF provides proper metadata display in ncmpcpp with color-coded artist/title fields
-# and duration information, but requires mpd_music_directory to be configured.
-# Default: "m3u"
-playlist_format: xspf
-
-# Path to MPD's music directory
-# Required for XSPF format - XSPF playlists are created in music_dir/_youtube/
-# This should match the music_directory setting in your mpd.conf
-# Default: ~/Music
-# Leave commented out to disable XSPF support
+# ===== MPD Integration =====
+mpd_socket_path: ~/.config/mpd/socket
+mpd_playlist_directory: ~/.config/mpd/playlists
 mpd_music_directory: ~/Music
+sync_interval_minutes: 30
+enable_auto_sync: true
+playlist_format: m3u          # "m3u" or "xspf"
 
-# ===== ICY Proxy Settings =====
-
-# Enable ICY metadata proxy server
-# When enabled, xmpd runs a proxy that adds ICY metadata to streams
-# This allows MPD to display track information for YouTube Music streams
-# Default: true
+# ===== Stream Proxy =====
 proxy_enabled: true
-
-# Proxy server host/IP address
-# Default: localhost
-# Use "0.0.0.0" to listen on all interfaces (useful for remote access)
 proxy_host: localhost
-
-# Proxy server port
-# Default: 8080
-# Must be between 1 and 65535
 proxy_port: 8080
-
-# Path to the track mapping database for ICY metadata
-# Default: ~/.config/xmpd/track_mapping.db
-# This SQLite database maps stream URLs to track metadata
 proxy_track_mapping_db: ~/.config/xmpd/track_mapping.db
 
-# ===== Radio Feature Settings =====
+# ===== Radio =====
+radio_playlist_limit: 25      # 10-50
 
-# Number of tracks to fetch for radio playlists
-# Radio playlists are generated from a currently playing track or search result
-# Default: 25
-# Valid range: 10-50
-radio_playlist_limit: 25
-
-# ===== Auto-Authentication Settings =====
-
-# Automatically refresh YouTube Music authentication by extracting cookies
-# from your Firefox browser. Eliminates the need to manually paste headers.
-auto_auth:
-  # Enable automatic cookie extraction and browser.json refresh
-  # Default: false
-  enabled: false
-
-  # Browser to extract cookies from: "firefox" or "firefox-dev"
-  # Default: firefox-dev
-  browser: firefox-dev
-
-  # Firefox Multi-Account Container name to extract cookies from
-  # Set to null (or omit) for the default/no-container context
-  # Set to a container name string (e.g., "Personal") to use that container
-  # Default: null (no container)
-  container: null
-
-  # Firefox profile directory name (e.g., "4wkrywqj.dev-edition-default")
-  # Set to null (or omit) to auto-detect from profiles.ini
-  # Default: null (auto-detect)
-  profile: null
-
-  # How often to proactively refresh cookies (in hours)
-  # The daemon will periodically re-extract cookies and rebuild browser.json
-  # Default: 12
-  refresh_interval_hours: 12
-
-# ===== History Reporting Settings =====
-
-# Report played tracks back to YouTube Music so your recommendations stay fresh.
-# When enabled, xmpd detects track changes via MPD and calls YouTube Music's
-# history API for each track that plays longer than the minimum threshold.
+# ===== History Reporting =====
 history_reporting:
-  # Enable history reporting (opt-in)
-  # Default: false
   enabled: false
+  min_play_seconds: 30        # Tracks shorter than this are counted as skips
 
-  # Minimum seconds a track must play before it counts as a "listen"
-  # Tracks played for less than this are treated as skips and not reported.
-  # Default: 30
-  # Valid range: 5+
-  min_play_seconds: 30
-
-# ===== Like Indicator Settings =====
-
-# Show a visual indicator in playlist track titles for liked songs.
-# The indicator is applied during sync to all playlists EXCEPT "Liked Songs"
-# (since all tracks there are liked by definition).
-# No extra API calls -- uses the already-fetched liked songs data.
+# ===== Like Indicator =====
 like_indicator:
-  # Enable like indicator in playlist titles
-  # Default: false
   enabled: false
-
-  # Tag string shown inside brackets, e.g., "+1" produces "[+1]", "*" produces "[*]"
-  # Default: "+1"
   tag: "+1"
-
-  # Where to place the indicator: "left" or "right" of the track title
-  # Left example:  "[+1] Artist - Track Name" (M3U) or "[+1] Track Name" (XSPF title)
-  # Right example: "Artist - Track Name [+1]" (M3U) or "Track Name [+1]" (XSPF title)
-  # Default: "right"
-  alignment: right
+  alignment: right            # "left" or "right"

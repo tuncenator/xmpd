@@ -2,14 +2,16 @@
 #
 # xmpd Installation Script
 #
-# This script automates the installation of xmpd (YouTube Music MPD daemon).
-# It handles:
+# Handles:
+# - Optional migration of legacy ~/.config/ytmpd/ to ~/.config/xmpd/
 # - Installing uv (if needed)
 # - Creating a virtual environment
-# - Installing xmpd and dependencies
+# - Installing xmpd and dev dependencies (including ruamel.yaml for migration)
+# - Config-shape migration from legacy single-provider to multi-source layout
 # - Setting up YouTube Music authentication
-# - Optionally installing systemd service
-# - Adding binaries to PATH
+# - Optionally installing systemd user service (replacing legacy ytmpd.service)
+# - Adding binaries to PATH and removing stale legacy symlinks
+# - Optional airplay-bridge extras
 
 set -e  # Exit on error
 
@@ -24,9 +26,8 @@ for arg in "$@"; do
             cat <<EOF
 Usage: $0 [--with-airplay-bridge] [--check]
 
-  --with-airplay-bridge   Also install extras/airplay-bridge (OwnTone+MPD metadata bridge, speaker router, rofi picker).
-                          Personal stack; see extras/airplay-bridge/install.sh.
-  --check                 No changes; report readiness for xmpd and (if present) the airplay-bridge.
+  --with-airplay-bridge   Also install extras/airplay-bridge (OwnTone+MPD metadata bridge).
+  --check                 No changes; report readiness state.
 EOF
             exit 0 ;;
     esac
@@ -38,7 +39,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Helper functions
 info() {
     echo -e "${GREEN}[INFO]${NC} $1"
 }
@@ -52,22 +52,60 @@ error() {
     exit 1
 }
 
-# Check if running on Linux
+# Linux only.
 if [[ "$OSTYPE" != "linux-gnu"* ]]; then
     error "This script is designed for Linux. For other systems, please install manually."
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRIDGE_DIR="$SCRIPT_DIR/extras/airplay-bridge"
+LEGACY_CONFIG_DIR="$HOME/.config/ytmpd"
+NEW_CONFIG_DIR="$HOME/.config/xmpd"
+CONFIG_FILE="$NEW_CONFIG_DIR/config.yaml"
+SYSTEMD_INSTALLED=false
 
 # --- check mode: no changes, just report ---
 if [[ "$CHECK_ONLY" == "1" ]]; then
     info "xmpd readiness check"
-    if command -v uv &> /dev/null; then ok_marker="OK"; else ok_marker="MISSING"; fi
-    info "  uv: $ok_marker"
+    if command -v uv &> /dev/null; then info "  uv: OK"; else info "  uv: MISSING"; fi
     if [ -d "$SCRIPT_DIR/.venv" ]; then info "  venv: OK"; else info "  venv: MISSING"; fi
-    if [ -f "$HOME/.config/xmpd/browser.json" ]; then info "  ytmusic auth: OK"; else info "  ytmusic auth: MISSING"; fi
-    if [ -f "$HOME/.config/systemd/user/xmpd.service" ]; then info "  systemd user unit: OK"; else info "  systemd user unit: MISSING"; fi
+    if [ -f "$HOME/.config/xmpd/browser.json" ]; then
+        info "  ytmusic auth: OK"
+    else
+        info "  ytmusic auth: MISSING"
+    fi
+    if [ -f "$HOME/.config/xmpd/tidal_session.json" ]; then
+        info "  tidal auth: OK"
+    else
+        info "  tidal auth: MISSING (run: xmpctl auth tidal)"
+    fi
+    if [ -f "$HOME/.config/systemd/user/xmpd.service" ]; then
+        info "  systemd user unit: OK"
+    else
+        info "  systemd user unit: MISSING"
+    fi
+
+    # Legacy config dir status.
+    if [ -d "$LEGACY_CONFIG_DIR" ] && [ ! -d "$NEW_CONFIG_DIR" ]; then
+        info "  legacy ytmpd config: PRESENT (will be migrated)"
+    elif [ -d "$LEGACY_CONFIG_DIR" ] && [ -d "$NEW_CONFIG_DIR" ]; then
+        info "  legacy ytmpd config: PRESENT (xmpd config also present; legacy will be ignored)"
+    else
+        info "  legacy ytmpd config: ABSENT"
+    fi
+
+    # Config shape status.
+    if [ -f "$CONFIG_FILE" ]; then
+        if python3 "$SCRIPT_DIR/scripts/migrate-config.py" \
+                --config "$CONFIG_FILE" --check >/dev/null 2>&1; then
+            info "  config shape: multi-source (OK)"
+        else
+            info "  config shape: legacy single-provider (will be migrated)"
+        fi
+    else
+        info "  config: ABSENT (defaults will be created on first daemon run)"
+    fi
+
     if [ -x "$BRIDGE_DIR/install.sh" ]; then
         echo
         info "extras/airplay-bridge readiness:"
@@ -77,30 +115,63 @@ if [[ "$CHECK_ONLY" == "1" ]]; then
 fi
 
 info "Starting xmpd installation..."
-
 cd "$SCRIPT_DIR"
 
+# ---------------------------------------------------------------------------
+# Step 0: Legacy ytmpd config migration
+# ---------------------------------------------------------------------------
+if [ -d "$LEGACY_CONFIG_DIR" ] && [ ! -d "$NEW_CONFIG_DIR" ]; then
+    info ""
+    info "=========================================="
+    info "Legacy ytmpd config detected"
+    info "=========================================="
+    info ""
+    info "Found: $LEGACY_CONFIG_DIR"
+    info "Will copy to: $NEW_CONFIG_DIR (ytmpd.log -> xmpd.log)"
+    info ""
+    read -p "Migrate config directory? [Y/n] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+        cp -r "$LEGACY_CONFIG_DIR" "$NEW_CONFIG_DIR"
+        if [ -f "$NEW_CONFIG_DIR/ytmpd.log" ]; then
+            mv "$NEW_CONFIG_DIR/ytmpd.log" "$NEW_CONFIG_DIR/xmpd.log"
+            info "  Renamed ytmpd.log -> xmpd.log"
+        fi
+        info "  Copied $LEGACY_CONFIG_DIR -> $NEW_CONFIG_DIR"
+        info "  (Original left in place for safety; remove manually after verifying)"
+    else
+        warn "Skipping directory copy. Do it manually later:"
+        warn "  cp -r ~/.config/ytmpd ~/.config/xmpd"
+        warn "  mv ~/.config/xmpd/ytmpd.log ~/.config/xmpd/xmpd.log"
+    fi
+elif [ -d "$LEGACY_CONFIG_DIR" ] && [ -d "$NEW_CONFIG_DIR" ]; then
+    warn "Both $LEGACY_CONFIG_DIR and $NEW_CONFIG_DIR exist."
+    warn "Assuming $NEW_CONFIG_DIR is current; ignoring $LEGACY_CONFIG_DIR."
+    warn "Remove the legacy directory manually once you have verified the migration."
+fi
+
+# ---------------------------------------------------------------------------
 # Step 1: Install uv if needed
+# ---------------------------------------------------------------------------
 if command -v uv &> /dev/null; then
     info "uv is already installed ($(uv --version))"
 else
     info "Installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
 
-    # Source the shell profile to get uv in PATH
     if [ -f "$HOME/.cargo/env" ]; then
         source "$HOME/.cargo/env"
     fi
 
-    # Verify installation
     if ! command -v uv &> /dev/null; then
-        error "uv installation failed. Please install manually: https://astral.sh/uv/"
+        error "uv installation failed. Install manually: https://astral.sh/uv/"
     fi
-
     info "uv installed successfully"
 fi
 
+# ---------------------------------------------------------------------------
 # Step 2: Create virtual environment
+# ---------------------------------------------------------------------------
 if [ -d ".venv" ]; then
     warn "Virtual environment already exists, skipping creation"
 else
@@ -109,118 +180,164 @@ else
     info "Virtual environment created"
 fi
 
+# ---------------------------------------------------------------------------
 # Step 3: Activate virtual environment
+# ---------------------------------------------------------------------------
 info "Activating virtual environment..."
 source .venv/bin/activate
 
-# Step 4: Install xmpd with dependencies
+# ---------------------------------------------------------------------------
+# Step 4: Install xmpd with dependencies (includes ruamel.yaml via [dev])
+# ---------------------------------------------------------------------------
 info "Installing xmpd and dependencies..."
 uv pip install -e ".[dev]"
 info "xmpd installed successfully"
 
-# Step 5: Setup YouTube Music authentication
+# ---------------------------------------------------------------------------
+# Step 4.5: Config-shape migration
+# ---------------------------------------------------------------------------
+if [ -f "$CONFIG_FILE" ]; then
+    info ""
+    info "=========================================="
+    info "Config shape migration"
+    info "=========================================="
+    info ""
+    if python3 "$SCRIPT_DIR/scripts/migrate-config.py" \
+            --config "$CONFIG_FILE" --check >/dev/null 2>&1; then
+        info "Config already in multi-source shape; no changes needed."
+    else
+        info "Migrating $CONFIG_FILE to the multi-source shape..."
+        info "  (creating backup at $CONFIG_FILE.bak)"
+        cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
+        if python3 "$SCRIPT_DIR/scripts/migrate-config.py" --config "$CONFIG_FILE"; then
+            info "  Config migrated. Original backed up at $CONFIG_FILE.bak"
+        else
+            error "Config migration failed. Restore from $CONFIG_FILE.bak if needed."
+        fi
+    fi
+else
+    info "No existing config at $CONFIG_FILE; defaults will be created on first daemon run."
+fi
+
+# ---------------------------------------------------------------------------
+# Step 5: YouTube Music authentication
+# ---------------------------------------------------------------------------
 info ""
 info "=========================================="
 info "YouTube Music Authentication Setup"
 info "=========================================="
 info ""
-info "xmpd requires YouTube Music authentication via browser headers."
-info "The next step will guide you through extracting these headers."
+info "xmpd needs YouTube Music auth. Two options:"
+info "  1. Auto-extract cookies from Firefox (recommended)"
+info "  2. Manual headers paste (works without Firefox)"
 info ""
-read -p "Do you want to set up authentication now? [Y/n] " -n 1 -r
+read -p "Set up YouTube Music auth now? [Y/n] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
-    python -m xmpd.ytmusic setup-browser
-
-    # Check if authentication was successful
-    if [ -f "$HOME/.config/xmpd/browser.json" ]; then
-        info "Authentication setup complete!"
+    read -p "Auto (Firefox cookies) or Manual (paste headers)? [A/m] " -n 1 -r METHOD
+    echo
+    if [[ $METHOD =~ ^[Mm]$ ]]; then
+        "$SCRIPT_DIR/bin/xmpctl" auth yt --manual \
+            || warn "Manual auth did not complete; retry later with: xmpctl auth yt --manual"
     else
-        warn "Authentication setup was skipped or failed. You can run it later with:"
-        warn "  source .venv/bin/activate && python -m xmpd.ytmusic setup-browser"
+        "$SCRIPT_DIR/bin/xmpctl" auth yt \
+            || warn "Cookie auth did not complete; retry later with: xmpctl auth yt"
     fi
 else
-    warn "Skipping authentication setup. Run this command later:"
-    warn "  source .venv/bin/activate && python -m xmpd.ytmusic setup-browser"
+    warn "Skipping YouTube Music auth. Set up later with: xmpctl auth yt"
 fi
 
-# Step 6: Optionally install systemd service
-SYSTEMD_INSTALLED=false
+# ---------------------------------------------------------------------------
+# Step 6: systemd user unit (replaces legacy ytmpd.service if present)
+# ---------------------------------------------------------------------------
+LEGACY_UNIT="$HOME/.config/systemd/user/ytmpd.service"
+NEW_UNIT="$HOME/.config/systemd/user/xmpd.service"
+
+if [ -f "$LEGACY_UNIT" ]; then
+    info "Found legacy ytmpd.service; replacing with xmpd.service..."
+    if systemctl --user is-active --quiet ytmpd.service 2>/dev/null; then
+        systemctl --user stop ytmpd.service
+    fi
+    if systemctl --user is-enabled --quiet ytmpd.service 2>/dev/null; then
+        systemctl --user disable ytmpd.service 2>/dev/null || true
+    fi
+    rm "$LEGACY_UNIT"
+    systemctl --user daemon-reload
+fi
+
 info ""
 info "=========================================="
 info "systemd Service Installation (Optional)"
 info "=========================================="
 info ""
-info "You can install a systemd user service to start xmpd automatically."
-info ""
-read -p "Do you want to install the systemd service? [y/N] " -n 1 -r
+read -p "Install xmpd systemd user service? [y/N] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    if [ ! -f "xmpd.service" ]; then
-        error "xmpd.service file not found. Please create it first."
+    if [ ! -f "$SCRIPT_DIR/xmpd.service" ]; then
+        error "xmpd.service not found at repo root."
     fi
-
-    # Create systemd user directory if needed
     mkdir -p "$HOME/.config/systemd/user"
 
-    # Detect music directory from config
-    MUSIC_DIR="$HOME/Music"  # Default
-    if [ -f "$HOME/.config/xmpd/config.yaml" ]; then
-        # Try to read mpd_music_directory from config
-        CONFIG_MUSIC_DIR=$(grep "^mpd_music_directory:" "$HOME/.config/xmpd/config.yaml" | sed 's/^mpd_music_directory:[[:space:]]*//' | sed 's/#.*//' | tr -d '"' | tr -d "'")
+    MUSIC_DIR="$HOME/Music"
+    if [ -f "$CONFIG_FILE" ]; then
+        CONFIG_MUSIC_DIR=$(grep "^mpd_music_directory:" "$CONFIG_FILE" \
+            | sed 's/^mpd_music_directory:[[:space:]]*//' \
+            | sed 's/#.*//' \
+            | tr -d '"' | tr -d "'")
         if [ -n "$CONFIG_MUSIC_DIR" ]; then
-            # Expand ~ to $HOME
             MUSIC_DIR="${CONFIG_MUSIC_DIR/#\~/$HOME}"
         fi
     fi
-
     info "Detected music directory: $MUSIC_DIR"
 
-    # Copy and customize service file
-    SERVICE_FILE="$HOME/.config/systemd/user/xmpd.service"
     sed -e "s|/path/to/xmpd|$SCRIPT_DIR|g" \
         -e "s|%h/Music|$MUSIC_DIR|g" \
-        xmpd.service > "$SERVICE_FILE"
-
-    info "systemd service installed to $SERVICE_FILE"
+        "$SCRIPT_DIR/xmpd.service" > "$NEW_UNIT"
+    info "Installed unit at $NEW_UNIT"
+    systemctl --user daemon-reload
     SYSTEMD_INSTALLED=true
 else
-    info "Skipping systemd service installation"
+    info "Skipping systemd unit install."
 fi
 
-# Step 7: Install binaries
-BINARIES_INSTALLED=false
+# ---------------------------------------------------------------------------
+# Step 7: Binary symlinks (install current, remove stale legacy)
+# ---------------------------------------------------------------------------
 info ""
 info "=========================================="
 info "Binary Installation"
 info "=========================================="
 info ""
-info "xmpd provides two executables:"
-info "  - xmpctl: Command-line client"
-info "  - xmpd-status: i3blocks status script"
-info ""
-read -p "Do you want to install binaries to ~/.local/bin? [Y/n] " -n 1 -r
+read -p "Install binaries to ~/.local/bin? [Y/n] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
-    # Create ~/.local/bin if it doesn't exist
     mkdir -p "$HOME/.local/bin"
 
-    # Create symlinks
+    # Remove stale legacy symlinks.
+    for legacy in ytmpctl ytmpd-status ytmpd-status-preview; do
+        if [ -L "$HOME/.local/bin/$legacy" ]; then
+            rm "$HOME/.local/bin/$legacy"
+            info "  Removed stale legacy symlink: $HOME/.local/bin/$legacy"
+        fi
+    done
+
+    # Install current binaries.
     ln -sf "$SCRIPT_DIR/bin/xmpctl" "$HOME/.local/bin/xmpctl"
     ln -sf "$SCRIPT_DIR/bin/xmpd-status" "$HOME/.local/bin/xmpd-status"
-
-    info "Binaries installed to ~/.local/bin"
-    info "Note: ~/.local/bin should be in your PATH (usually added by default)"
-    info "If not, add this to your shell RC file:"
-    info "  export PATH=\"\$HOME/.local/bin:\$PATH\""
-    BINARIES_INSTALLED=true
+    if [ -x "$SCRIPT_DIR/bin/xmpd-status-preview" ]; then
+        ln -sf "$SCRIPT_DIR/bin/xmpd-status-preview" "$HOME/.local/bin/xmpd-status-preview"
+    fi
+    info "  Binaries installed to ~/.local/bin"
+    info "  Ensure ~/.local/bin is in your PATH."
 else
-    info "Skipping binary installation. You can use absolute paths:"
+    info "Skipping binary installation. Use absolute paths:"
     info "  $SCRIPT_DIR/bin/xmpctl"
     info "  $SCRIPT_DIR/bin/xmpd-status"
 fi
 
+# ---------------------------------------------------------------------------
 # Step 7.5: Optional airplay-bridge
+# ---------------------------------------------------------------------------
 if [[ "$WITH_AIRPLAY_BRIDGE" == "1" ]]; then
     info ""
     info "=========================================="
@@ -233,64 +350,28 @@ if [[ "$WITH_AIRPLAY_BRIDGE" == "1" ]]; then
     fi
 fi
 
-# Step 8: Installation summary
+# ---------------------------------------------------------------------------
+# Step 8: Install summary
+# ---------------------------------------------------------------------------
 info ""
 info "=========================================="
-info "Installation Complete!"
+info "xmpd installed."
 info "=========================================="
 info ""
-info "xmpd has been successfully installed to: $SCRIPT_DIR"
+info "For YouTube Music: run 'xmpctl auth yt' (or set yt.auto_auth.enabled in config.yaml)."
+info "For Tidal:        run 'xmpctl auth tidal', then set tidal.enabled: true in config.yaml."
 info ""
-
-# Dynamic instructions based on what was installed
+info "Restart the daemon:"
 if [ "$SYSTEMD_INSTALLED" = true ]; then
-    info "Quick Start (with systemd):"
-    info "  1. Enable and start daemon:"
-    info "     systemctl --user enable --now xmpd.service"
-    info ""
-    if [ "$BINARIES_INSTALLED" = true ]; then
-        info "  2. Control playback:"
-        info "     xmpctl play \"hey jude beatles\""
-        info ""
-        info "  3. Check status:"
-        info "     xmpctl status"
-    else
-        info "  2. Control playback:"
-        info "     $SCRIPT_DIR/bin/xmpctl play \"hey jude beatles\""
-        info ""
-        info "  3. Check status:"
-        info "     $SCRIPT_DIR/bin/xmpctl status"
-    fi
+    info "  systemctl --user restart xmpd"
 else
-    info "Quick Start (manual):"
-    info "  1. Start daemon:"
-    info "     source .venv/bin/activate && python -m xmpd &"
-    info ""
-    if [ "$BINARIES_INSTALLED" = true ]; then
-        info "  2. Control playback:"
-        info "     xmpctl play \"hey jude beatles\""
-        info ""
-        info "  3. Check status:"
-        info "     xmpctl status"
-    else
-        info "  2. Control playback:"
-        info "     $SCRIPT_DIR/bin/xmpctl play \"hey jude beatles\""
-        info ""
-        info "  3. Check status:"
-        info "     $SCRIPT_DIR/bin/xmpctl status"
-    fi
+    info "  source .venv/bin/activate && python -m xmpd"
 fi
-
 info ""
-if [ "$BINARIES_INSTALLED" = true ]; then
-    info "For i3blocks integration:"
-    info "  - See examples/i3blocks.conf for configuration examples"
-    info "  - Use 'xmpd-status' in your i3blocks config"
-else
-    info "For i3blocks integration:"
-    info "  - See examples/i3blocks.conf for configuration examples"
-fi
+info "Update your i3 config (if applicable):"
+info "  sed -i 's/\\bytmpctl\\b/xmpctl/g; s/ytmpd-status/xmpd-status/g' ~/.i3/config && i3-msg reload"
 info ""
 info "Documentation: README.md"
-info "Troubleshooting: See 'Troubleshooting' section in README.md"
+info "Migration guide: docs/MIGRATION.md"
+info "Troubleshooting: see README.md > Troubleshooting"
 info ""

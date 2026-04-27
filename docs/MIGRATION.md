@@ -1,448 +1,294 @@
-# Migration Guide: ytmpd v1 → v2 (MPD Integration)
+# xmpd Migration Guide
 
-This guide helps you migrate from the old ytmpd architecture (socket-based command server) to the new MPD integration architecture.
+Two changes overlap in this release: the `ytmpd` -> `xmpd` rebrand (already
+shipped in 1.4.4) and the multi-source provider abstraction with Tidal added
+(this release). This guide covers both.
 
-## What Changed
+---
 
-### Architecture
+## What changed
 
-**Old (v1):**
-```
-xmpctl → Unix socket → ytmpd daemon → ytmusicapi → YouTube Music
-                              ↓
-                        Player State
-                              ↓
-                        (No actual audio)
-```
+### Names and paths
 
-**New (v2):**
-```
-YouTube Music Playlists
-         ↓
-   ytmpd sync daemon (periodic + manual trigger)
-         ↓ (python-mpd2)
-   MPD server (local Unix socket)
-         ↓
-   mpc commands (existing i3 keybindings)
-         ↓
-   Audio output
-```
+| Old | New |
+|-----|-----|
+| `ytmpd` | `xmpd` |
+| `ytmpctl` | `xmpctl` |
+| `ytmpd-status` | `xmpd-status` |
+| `ytmpd.service` | `xmpd.service` |
+| `~/.config/ytmpd/` | `~/.config/xmpd/` |
+| `ytmpd.log` | `xmpd.log` |
 
-### Key Changes
+### Provider abstraction
 
-1. **ytmpd is now a sync daemon**, not a command server
-   - Periodically syncs YouTube Music playlists to MPD (default: every 30 minutes)
-   - No longer manages playback state directly
+- New `xmpd/providers/` package with a `Provider` Protocol.
+- `YTMusicProvider` implements all 14 Protocol methods.
+- `TidalProvider` implements all 14 Protocol methods (new this release).
+- The daemon builds a `provider_registry: dict[str, Provider]` at startup and
+  injects it into the sync engine, stream proxy, and history reporter.
 
-2. **Playback handled by MPD**, not ytmpd
-   - Use `mpc` commands for all playback control
-   - YouTube playlists appear in MPD with "YT: " prefix
-   - Leverage MPD's robust audio backend
+### Stream proxy
 
-3. **xmpctl now focuses on sync operations**, not playback
-   - `xmpctl sync` - trigger immediate sync
-   - `xmpctl status` - check sync status and statistics
-   - `xmpctl list-playlists` - list YouTube playlists
-   - **Removed**: play, pause, resume, stop, next, prev, queue, search
+- Module: `xmpd/icy_proxy.py` -> `xmpd/stream_proxy.py`.
+- Class: `ICYProxyServer` -> `StreamRedirectProxy`.
+- Route: `/proxy/<video_id>` -> `/proxy/<provider>/<track_id>`.
+- The proxy now issues HTTP 307 redirects instead of ICY-streaming. MPD
+  follows the redirect and streams directly from the upstream server.
 
-4. **Socket protocol changed**
-   - Old socket: `~/.config/xmpd/socket` (removed)
-   - New socket: `~/.config/xmpd/sync_socket` (sync commands only)
-   - Simple JSON-based sync protocol
+### Track-store schema
 
-5. **State file format changed**
-   - Old: `~/.config/xmpd/state.json` (player state)
-   - New: `~/.config/xmpd/sync_state.json` (sync statistics)
+- Old: single-key `video_id`, no `album`, `duration_seconds`, or `art_url`
+  columns.
+- New: compound key `(provider, track_id)` with nullable `album`,
+  `duration_seconds`, `art_url` columns.
+- Migration applied automatically and idempotently at daemon startup via
+  `PRAGMA user_version`. No manual action required.
 
-## Migration Steps
+### Config shape
 
-### 1. Prerequisites
-
-**Install MPD and mpc:**
-
-```bash
-# Arch/Manjaro
-sudo pacman -S mpd mpc
-
-# Ubuntu/Debian
-sudo apt install mpd mpc
-
-# Enable and start MPD
-systemctl --user enable mpd
-systemctl --user start mpd
-
-# Verify MPD is running
-mpc status
-```
-
-### 2. Stop Old ytmpd
-
-```bash
-# Find and kill old ytmpd process
-pkill -f "python -m ytmpd"
-
-# Or if you used a different method to start it
-ps aux | grep ytmpd
-kill <PID>
-
-# Clean up old socket
-rm ~/.config/xmpd/socket
-```
-
-### 3. Update Dependencies
-
-```bash
-cd /path/to/ytmpd
-source .venv/bin/activate
-uv pip install -e ".[dev]"
-```
-
-This installs new dependencies:
-- `python-mpd2` - MPD client library
-- `yt-dlp` - Stream URL resolver
-
-### 4. Update Configuration
-
-Edit `~/.config/xmpd/config.yaml` to add MPD settings:
+Old (legacy, rejected at startup):
 
 ```yaml
-# Existing settings (keep these)
-log_level: INFO
-log_file: ~/.config/xmpd/xmpd.log
-
-# New MPD integration settings (add these)
-mpd_socket_path: ~/.config/mpd/socket
-sync_interval_minutes: 30
-enable_auto_sync: true
-playlist_prefix: "YT: "
+playlist_prefix: "YT: "         # scalar
 stream_cache_hours: 5
+auto_auth:                       # top-level
+  enabled: true
+  browser: firefox-dev
 ```
 
-**Note**: If you don't have a config file, it will be created automatically with defaults on first run.
+New (multi-source):
 
-### 5. Start New ytmpd
+```yaml
+yt:
+  enabled: true
+  stream_cache_hours: 5
+  auto_auth:                     # nested under yt:
+    enabled: true
+    browser: firefox-dev
+    container: null
+    profile: null
+    refresh_interval_hours: 12
+
+tidal:
+  enabled: false
+  stream_cache_hours: 1
+  quality_ceiling: HI_RES_LOSSLESS
+  sync_favorited_playlists: true
+
+playlist_prefix:                 # per-provider dict
+  yt: "YT: "
+  tidal: "TD: "
+
+stream_cache_hours: 5            # top-level fallback
+```
+
+The daemon raises `ConfigError` with an actionable message if it detects the
+legacy shape at startup. Run `install.sh` or the migration script (see below)
+to convert.
+
+### AirPlay bridge
+
+- Regex updated from `/proxy/<id>` to `/proxy/(yt|tidal)/<id>`.
+- Tidal album art: the bridge does a read-only SQLite lookup against
+  `~/.config/xmpd/track_mapping.db` for the `art_url` column. Falls through
+  to iTunes/MusicBrainz on miss. YT path unchanged.
+
+---
+
+## What `install.sh` does for you
+
+Running `./install.sh` handles the full migration automatically:
+
+1. Detects `~/.config/ytmpd/`; prompts to copy to `~/.config/xmpd/`.
+2. Renames `ytmpd.log` -> `xmpd.log` inside the copied directory.
+3. Installs the `xmpd` Python package and dev dependencies (including
+   `ruamel.yaml` for config migration).
+4. Runs `scripts/migrate-config.py` to rewrite `config.yaml` to the
+   multi-source shape. Creates a `config.yaml.bak` backup first.
+5. Prompts to replace the legacy `ytmpd.service` systemd unit with
+   `xmpd.service`.
+6. Installs `xmpctl`, `xmpd-status`, `xmpd-status-preview` to `~/.local/bin`.
+7. Removes stale `ytmpctl`, `ytmpd-status`, `ytmpd-status-preview` symlinks.
+8. Prints a suggested sed command for updating your i3 config (does NOT
+   auto-modify it).
+
+`install.sh` is idempotent; re-running on an already-migrated system is safe.
+
+---
+
+## Manual fallback recipe
+
+For unattended installs or when `install.sh` cannot run interactively:
 
 ```bash
-source .venv/bin/activate
-python -m ytmpd &
-```
+# 1. Move config directory.
+cp -r ~/.config/ytmpd ~/.config/xmpd
+mv ~/.config/xmpd/ytmpd.log ~/.config/xmpd/xmpd.log
 
-Watch the logs to verify successful startup:
-```bash
-tail -f ~/.config/xmpd/xmpd.log
-```
+# 2. Migrate config shape.
+cd /path/to/xmpd
+uv venv && source .venv/bin/activate
+uv pip install -e '.[dev]'
+python3 scripts/migrate-config.py --config ~/.config/xmpd/config.yaml
 
-Expected output:
-```
-[INFO] Starting ytmpd daemon...
-[INFO] Configuration loaded
-[INFO] Successfully authenticated with YouTube Music
-[INFO] Connected to MPD
-[INFO] Starting sync...
-[INFO] Sync complete: X playlists, Y tracks
-```
+# 3. Replace systemd unit.
+systemctl --user disable --now ytmpd.service 2>/dev/null || true
+rm -f ~/.config/systemd/user/ytmpd.service
+sed -e "s|/path/to/xmpd|$PWD|g" -e "s|%h/Music|$HOME/Music|g" \
+    xmpd.service > ~/.config/systemd/user/xmpd.service
+systemctl --user daemon-reload
+systemctl --user enable --now xmpd.service
 
-### 6. Update i3 Keybindings
+# 4. Update binaries.
+rm -f ~/.local/bin/ytmpctl ~/.local/bin/ytmpd-status
+ln -sf $PWD/bin/xmpctl ~/.local/bin/xmpctl
+ln -sf $PWD/bin/xmpd-status ~/.local/bin/xmpd-status
 
-Edit `~/.config/i3/config` and replace xmpctl commands with mpc:
-
-**Old keybindings (remove):**
-```
-bindsym $mod+Shift+p exec --no-startup-id /path/to/ytmpd/bin/xmpctl pause
-bindsym $mod+Shift+r exec --no-startup-id /path/to/ytmpd/bin/xmpctl resume
-bindsym $mod+Shift+s exec --no-startup-id /path/to/ytmpd/bin/xmpctl stop
-bindsym $mod+Shift+n exec --no-startup-id /path/to/ytmpd/bin/xmpctl next
-bindsym $mod+Shift+b exec --no-startup-id /path/to/ytmpd/bin/xmpctl prev
-```
-
-**New keybindings (add):**
-```
-# MPD playback controls (ytmpd playlists)
-bindsym $mod+Shift+p exec --no-startup-id mpc toggle
-bindsym $mod+Shift+s exec --no-startup-id mpc stop
-bindsym $mod+Shift+n exec --no-startup-id mpc next
-bindsym $mod+Shift+b exec --no-startup-id mpc prev
-
-# Refresh i3blocks after control
-bindsym $mod+Shift+p exec --no-startup-id killall -SIGUSR1 i3blocks
-bindsym $mod+Shift+n exec --no-startup-id killall -SIGUSR1 i3blocks
-```
-
-Reload i3:
-```bash
+# 5. Update i3 config (optional).
+sed -i 's/\bytmpctl\b/xmpctl/g; s/ytmpd-status/xmpd-status/g' ~/.i3/config
 i3-msg reload
 ```
 
-### 7. Update i3blocks Configuration (if applicable)
+Check the migration script without writing:
 
-The `xmpd-status` script should still work, but now displays MPD status instead of ytmpd player state.
-
-If you need to update your i3blocks config:
-
-```ini
-[ytmpd]
-command=/path/to/ytmpd/bin/xmpd-status
-interval=5
-separator_block_width=15
-```
-
-Reload i3blocks:
 ```bash
-killall -SIGUSR1 i3blocks
+python3 scripts/migrate-config.py --config ~/.config/xmpd/config.yaml --check
 ```
 
-### 8. Verify Everything Works
+Preview the output without writing:
 
-**Check sync status:**
 ```bash
-xmpctl status
+python3 scripts/migrate-config.py --config ~/.config/xmpd/config.yaml --dry-run
 ```
 
-Expected output:
-```
-=== ytmpd Sync Status ===
+---
 
-Last sync: 2025-10-17 10:00:05
-Daemon started: 2025-10-17 10:00:00
+## Authenticate Tidal (after migration)
 
-Status: Last sync successful
-
-=== Last Sync Statistics ===
-Playlists synced: 5
-Tracks added: 150
-Tracks failed: 3
-```
-
-**List YouTube playlists:**
 ```bash
-xmpctl list-playlists
+xmpctl auth tidal
+# Follow the OAuth device flow link printed to stdout (also copied to
+# clipboard if wl-copy or xclip is installed).
+# On success, ~/.config/xmpd/tidal_session.json is written (mode 0600).
+
+# Then in config.yaml:
+#   tidal:
+#     enabled: true
+
+systemctl --user restart xmpd
+xmpctl sync
+mpc lsplaylists | grep '^TD:'
 ```
 
-**List MPD playlists:**
+---
+
+## HiRes streaming status (deferred)
+
+Tidal's `HI_RES_LOSSLESS` quality (24-bit/96 kHz FLAC or MQA) is currently
+NOT supported end-to-end. The config key `tidal.quality_ceiling` accepts
+`HI_RES_LOSSLESS` for forward compatibility, but `TidalProvider.resolve_stream()`
+clamps to `LOSSLESS` internally and logs a one-time INFO line per session.
+
+Reason: HI_RES_LOSSLESS streams arrive as DASH-segmented MPEG manifests that
+MPD cannot consume directly without an external muxer pipeline (typically
+ffmpeg or a custom DASH-to-FLAC bridge). Additionally, HI_RES_LOSSLESS requires
+the PKCE OAuth flow; the current device-flow session supports up to LOSSLESS.
+
+The LOSSLESS path delivers full 16-bit/44.1 kHz FLAC and is the practical
+ceiling for this release.
+
+To revisit in a future spec:
+1. Switch `xmpd/auth/tidal_oauth.py` to the PKCE flow.
+2. Add a DASH muxer sidecar (likely as aiohttp middleware in `stream_proxy.py`
+   or a separate ffmpeg process).
+3. Remove the clamp in `TidalProvider.resolve_stream()`.
+
+---
+
+## Rollback
+
+To roll back from xmpd to a pre-migration state:
+
 ```bash
-mpc lsplaylists | grep "^YT:"
+# Stop xmpd.
+systemctl --user disable --now xmpd.service
+
+# Restore the config.yaml backup that the migration created.
+cp ~/.config/xmpd/config.yaml.bak ~/.config/xmpd/config.yaml
+
+# Restore the old directory if you kept it (install.sh only copies, never moves).
+# The original ~/.config/ytmpd/ was left in place.
 ```
 
-You should see your YouTube playlists with "YT: " prefix.
+Caveats:
 
-**Load and play a playlist:**
-```bash
-mpc load "YT: Favorites"
-mpc play
-mpc status
-```
+- The track-store schema migration (v0 -> v1) is forward-only. Rolling back
+  requires either (a) restoring `~/.config/xmpd/track_mapping.db` from a
+  manual pre-upgrade backup, or (b) deleting `track_mapping.db` and letting
+  the older daemon recreate it. Deleting loses cached stream URLs but is
+  otherwise harmless -- a single sync rebuilds the DB.
 
-You should see playback start!
+---
 
-## Breaking Changes
+## Breaking changes summary
 
-### Removed xmpctl Commands
+- `ytmpctl` removed (no compatibility shim). Use `xmpctl`.
+- `~/.config/ytmpd/` no longer read by the daemon. The config dir is now
+  `~/.config/xmpd/`.
+- Config-shape change: top-level `auto_auth:` is rejected at startup with a
+  pointer to this file.
+- Stream proxy URL changed: `/proxy/<id>` -> `/proxy/<provider>/<id>`.
+- Track-store schema migrated (one-way, idempotent on first daemon start).
+- `xmpctl auth` restructured: `xmpctl auth yt` (cookie auto-extract from
+  Firefox), `xmpctl auth yt --manual` (paste headers), `xmpctl auth tidal`
+  (OAuth device flow). Legacy `xmpctl auth --auto` is treated as
+  `xmpctl auth yt` for backward compatibility.
 
-The following commands are no longer available in xmpctl:
-
-- `xmpctl play <query>` → Use `mpc load "YT: <playlist>"; mpc play`
-- `xmpctl pause` → Use `mpc pause`
-- `xmpctl resume` → Use `mpc play` or `mpc toggle`
-- `xmpctl stop` → Use `mpc stop`
-- `xmpctl next` → Use `mpc next`
-- `xmpctl prev` → Use `mpc prev`
-- `xmpctl queue` → Use `mpc playlist`
-- `xmpctl search <query>` → Use YouTube Music directly or `mpc search`
-
-### Socket Protocol Changes
-
-**Old protocol (v1):**
-```
-Client sends:  play <video_id_or_query>
-Server responds: OK
-```
-
-**New protocol (v2):**
-```
-Client sends:  sync
-Server responds: {"success": true, "message": "Sync triggered", ...}
-```
-
-If you have scripts that communicate with the old socket, they will need to be updated.
-
-### State File Changes
-
-**Old state file (`~/.config/xmpd/state.json`):**
-```json
-{
-  "state": "playing",
-  "current_song": {...},
-  "queue": [...],
-  "position": 45.2
-}
-```
-
-**New state file (`~/.config/xmpd/sync_state.json`):**
-```json
-{
-  "last_sync": "2025-10-17T10:00:05Z",
-  "last_sync_result": {
-    "success": true,
-    "playlists_synced": 5,
-    "tracks_added": 150
-  }
-}
-```
-
-The old state file is no longer used. Playback state is managed by MPD.
-
-## Backward Compatibility
-
-### Config File
-
-Old config files (without MPD settings) will still load. Missing fields use default values:
-
-```yaml
-# Old config (still works)
-socket_path: ~/.config/xmpd/socket
-state_file: ~/.config/xmpd/state.json
-log_level: INFO
-log_file: ~/.config/xmpd/xmpd.log
-
-# New fields added automatically with defaults
-mpd_socket_path: ~/.config/mpd/socket
-sync_interval_minutes: 30
-enable_auto_sync: true
-playlist_prefix: "YT: "
-stream_cache_hours: 5
-```
-
-### Authentication
-
-Browser authentication (`~/.config/xmpd/browser.json`) remains the same. No need to re-authenticate.
+---
 
 ## Troubleshooting
 
-### "MPD connection refused"
-
-**Cause**: MPD is not running or socket path is incorrect.
-
-**Solution**:
+**Daemon won't start: "Legacy config shape detected"**
+Re-run the migration script:
 ```bash
-# Check MPD status
-systemctl --user status mpd
-
-# Start MPD if not running
-systemctl --user start mpd
-
-# Verify socket exists
-ls ~/.config/mpd/socket
-
-# Check MPD config
-cat ~/.config/mpd/mpd.conf | grep bind_to_address
+python3 scripts/migrate-config.py
 ```
+Or restore from the backup: `cp ~/.config/xmpd/config.yaml.bak ~/.config/xmpd/config.yaml`.
 
-### "No playlists synced"
+**xmpctl auth tidal: clipboard tool not found**
+Install `wl-copy` (Wayland) or `xclip` (X11). Or copy the URL manually from
+the printed output.
 
-**Cause**: Sync may have failed or YouTube authentication expired.
+**Tidal sync fails with auth error**
+Session expired. Re-run `xmpctl auth tidal`.
 
-**Solution**:
+**AirPlay receiver shows wrong art for Tidal track**
+Ensure the airplay-bridge has been reinstalled after the xmpd upgrade:
 ```bash
-# Check logs
-tail -f ~/.config/xmpd/xmpd.log
-
-# Trigger manual sync
-xmpctl sync
-
-# If authentication errors, refresh browser auth
-python -m ytmpd.ytmusic setup-browser
+extras/airplay-bridge/install.sh
 ```
+Confirm the bridge can read `~/.config/xmpd/track_mapping.db`. The `art_url`
+column is populated on the first Tidal sync after `tidal.enabled: true`.
 
-### "Old xmpctl commands don't work"
+**`mpc lsplaylists` shows no `TD:` playlists**
+Check `tidal.enabled: true` in config, that `xmpctl auth tidal` succeeded, and
+`~/.config/xmpd/xmpd.log` for errors. Re-run `xmpctl sync`.
 
-**Cause**: Commands removed in v2.
-
-**Solution**: Use `mpc` commands instead (see "Removed xmpctl Commands" section above).
-
-### "i3blocks status not updating"
-
-**Cause**: Script may need update or MPD connection issue.
-
-**Solution**:
-```bash
-# Test script directly
-bin/xmpd-status
-
-# Check MPD is accessible
-mpc status
-
-# Reload i3blocks
-killall -SIGUSR1 i3blocks
-```
+---
 
 ## FAQ
 
-### Can I run v1 and v2 side-by-side?
+**Can I keep both YouTube Music and Tidal enabled at the same time?**
+Yes. Both run in parallel; per-provider failure isolation means a Tidal outage
+won't break YT sync.
 
-No, not recommended. They use different architectures and would conflict. Choose one version.
+**What happens to my existing YT playlists after migration?**
+Unchanged. The `YT:` prefix is preserved. The track-store migration retags
+existing rows as `provider='yt'` but keeps all cached data.
 
-### Do I need to keep my old state.json?
+**Do I need a Tidal HiFi subscription?**
+Yes, for Tidal streams. The Tidal source requires an active HiFi (or higher)
+subscription.
 
-No, the old state file is no longer used. You can delete it:
-```bash
-rm ~/.config/xmpd/state.json
-```
-
-### Will my YouTube playlists sync automatically?
-
-Yes! By default, ytmpd syncs every 30 minutes. You can also trigger manual sync with `xmpctl sync`.
-
-### What happens if YouTube URLs expire?
-
-YouTube stream URLs expire after ~6 hours. ytmpd:
-- Caches URLs for 5 hours (1-hour buffer)
-- Auto-syncs every 30 minutes to refresh URLs
-- You can manually sync anytime with `xmpctl sync`
-
-### Can I change the "YT: " prefix?
-
-Yes, edit `~/.config/xmpd/config.yaml`:
-```yaml
-playlist_prefix: "YouTube: "  # or any prefix you want
-```
-
-Then restart ytmpd.
-
-### Can I disable auto-sync?
-
-Yes, edit config:
-```yaml
-enable_auto_sync: false
-```
-
-Then use `xmpctl sync` for manual syncing.
-
-## Getting Help
-
-If you encounter issues during migration:
-
-1. Check logs: `tail -f ~/.config/xmpd/xmpd.log`
-2. Check README troubleshooting section
-3. File an issue on GitHub with:
-   - Migration step you're on
-   - Error message
-   - Relevant log excerpts
-
-## Benefits of v2
-
-### Why migrate?
-
-1. **Actual audio playback** - MPD plays audio, v1 didn't
-2. **Standard tools** - Use mpc, ncmpcpp, or any MPD client
-3. **Robust backend** - Leverage MPD's proven audio architecture
-4. **Wider compatibility** - MPD works with many clients and apps
-5. **Better error handling** - Failed tracks don't stop sync
-6. **URL caching** - Reduces yt-dlp overhead
-7. **State persistence** - Track sync history and statistics
-
-## Timeline
-
-- **v1** (old): Socket-based command server (pre-2025-10-17)
-- **v2** (current): MPD sync daemon (2025-10-17 onwards)
-
-Support for v1 has ended. Please migrate to v2 for continued updates and bug fixes.
+**Can I change the `TD:` prefix?**
+Yes: set `playlist_prefix.tidal` in `config.yaml`.

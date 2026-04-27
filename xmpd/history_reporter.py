@@ -1,7 +1,7 @@
 """History reporting module for xmpd.
 
-Monitors MPD playback and reports completed plays to YouTube Music
-via ytmusicapi's add_history_item(), keeping the recommendation engine
+Monitors MPD playback and reports completed plays to the originating provider
+via the provider registry, keeping each service's recommendation engine
 fed with listening data.
 """
 
@@ -14,26 +14,26 @@ from typing import Any
 from mpd import MPDClient as MPDClientBase
 
 from xmpd.exceptions import MPDConnectionError
+from xmpd.providers.base import Provider
 from xmpd.track_store import TrackStore
-from xmpd.ytmusic import YTMusicClient
 
 logger = logging.getLogger(__name__)
 
-VIDEO_ID_RE = re.compile(r"/proxy/([A-Za-z0-9_-]{11})$")
+PROXY_URL_RE = re.compile(r"/proxy/([a-z]+)/([^/?\s]+)")
 
 
 class HistoryReporter:
-    """Reports completed MPD plays back to YouTube Music.
+    """Reports completed MPD plays back to the originating provider.
 
     Maintains its own MPD connection (separate from the daemon's) because
     ``idle()`` monopolises the connection. Listens for player state changes,
     tracks playback duration (excluding pauses), and reports plays that
-    exceed *min_play_seconds* to YouTube Music.
+    exceed *min_play_seconds* to the provider via the registry.
 
     Args:
         mpd_socket_path: Path to the MPD Unix socket (or host:port).
-        ytmusic: Authenticated YTMusicClient instance.
-        track_store: TrackStore for video-ID lookups.
+        provider_registry: Dict mapping provider name to Provider instance.
+        track_store: TrackStore for track lookups.
         proxy_config: Dict with ``host``, ``port``, ``enabled`` keys.
         min_play_seconds: Minimum seconds of actual play time before a
             track is reported.  Defaults to 30.
@@ -42,13 +42,13 @@ class HistoryReporter:
     def __init__(
         self,
         mpd_socket_path: str,
-        ytmusic: YTMusicClient,
+        provider_registry: dict[str, Provider],
         track_store: TrackStore,
         proxy_config: dict[str, Any],
         min_play_seconds: int = 30,
     ) -> None:
         self._mpd_socket_path = mpd_socket_path
-        self._ytmusic = ytmusic
+        self._provider_registry = provider_registry
         self._track_store = track_store
         self._proxy_config = proxy_config
         self._min_play_seconds = min_play_seconds
@@ -180,7 +180,7 @@ class HistoryReporter:
         if prev_url is not None and prev_state in ("play", "pause"):
             elapsed = self._compute_elapsed()
             if elapsed >= self._min_play_seconds:
-                self._report_track(prev_url)
+                self._report_track(prev_url, int(elapsed))
 
         # ---- start tracking new track if playing ----
         if new_state == "play" and new_url:
@@ -217,30 +217,45 @@ class HistoryReporter:
         self._pause_start = None
 
     # ------------------------------------------------------------------
-    # Video-ID extraction & reporting
+    # Reporting
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _extract_video_id(url: str) -> str | None:
-        """Extract video_id from a proxy URL like ``/proxy/dQw4w9WgXcQ``."""
+    def _report_track(self, url: str, duration_seconds: int) -> None:
+        """Look up *url*, dispatch via the provider registry."""
         if not url:
-            return None
-        match = VIDEO_ID_RE.search(url)
-        return match.group(1) if match else None
-
-    def _report_track(self, url: str) -> None:
-        """Look up *url*, fetch song metadata, and report to YouTube Music."""
-        video_id = self._extract_video_id(url)
-        if video_id is None:
-            logger.debug("Skipping non-proxy URL: %s", url)
             return
-
+        match = PROXY_URL_RE.search(url)
+        if match is None:
+            logger.debug("Track URL not from xmpd proxy; skipping report: %s", url)
+            return
+        provider_name, track_id = match.groups()
+        provider = self._provider_registry.get(provider_name)
+        if provider is None:
+            logger.warning(
+                "Provider %s not in registry; skipping report for %s",
+                provider_name,
+                track_id,
+            )
+            return
         try:
-            song = self._ytmusic.get_song(video_id)
-            ok = self._ytmusic.report_history(song)
+            ok = provider.report_play(track_id, duration_seconds)
             if ok:
-                logger.info("Reported history for %s", video_id)
+                logger.info(
+                    "Reported play for %s/%s (%ds)",
+                    provider_name,
+                    track_id,
+                    duration_seconds,
+                )
             else:
-                logger.warning("History report returned False for %s", video_id)
+                logger.warning(
+                    "Provider %s.report_play returned False for %s",
+                    provider_name,
+                    track_id,
+                )
         except Exception as e:
-            logger.warning("Failed to report history for %s: %s", video_id, e)
+            logger.warning(
+                "report_play failed for %s/%s: %s",
+                provider_name,
+                track_id,
+                e,
+            )

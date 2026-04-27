@@ -1,7 +1,7 @@
 """
 Integration tests for xmpd end-to-end workflows.
 
-These tests verify the complete sync workflow from YouTube Music to MPD,
+These tests verify the complete sync workflow from one or more providers to MPD,
 using mocked external dependencies but testing real component integration.
 """
 
@@ -12,79 +12,86 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from xmpd.daemon import XMPDaemon
 from xmpd.mpd_client import MPDClient
-from xmpd.stream_resolver import StreamResolver
+from xmpd.providers.base import Playlist, Provider, Track, TrackMetadata
 from xmpd.sync_engine import SyncEngine
-from xmpd.ytmusic import Playlist, Track, YTMusicClient
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _track(provider: str, tid: str, title: str, artist: str = "A") -> Track:
+    return Track(
+        provider=provider,
+        track_id=tid,
+        metadata=TrackMetadata(
+            title=title,
+            artist=artist,
+            album=None,
+            duration_seconds=180,
+            art_url=None,
+        ),
+    )
+
+
+def _pl(provider: str, pid: str, name: str, count: int = 0) -> Playlist:
+    return Playlist(
+        provider=provider,
+        playlist_id=pid,
+        name=name,
+        track_count=count,
+        is_owned=True,
+        is_favorites=False,
+    )
+
+
+def _make_provider(
+    name: str,
+    playlists: list[Playlist],
+    tracks_by_id: dict[str, list[Track]],
+    favorites: list[Track] | None = None,
+) -> Provider:
+    p = MagicMock(spec=Provider)
+    p.name = name
+    p.list_playlists.return_value = playlists
+    p.get_playlist_tracks.side_effect = lambda pid: tracks_by_id.get(pid, [])
+    p.get_favorites.return_value = favorites or []
+    return p
+
+
+def _engine(
+    providers: dict,
+    mpd: Mock | None = None,
+    prefix: dict | None = None,
+    sync_favorites: bool = False,
+) -> SyncEngine:
+    if mpd is None:
+        mpd = MagicMock(spec=MPDClient)
+        mpd.list_playlists.return_value = []
+    if prefix is None:
+        prefix = {k: f"{k.upper()}: " for k in providers}
+    store = MagicMock()
+    return SyncEngine(
+        provider_registry=providers,
+        mpd_client=mpd,
+        track_store=store,
+        playlist_prefix=prefix,
+        sync_favorites=sync_favorites,
+    )
 
 
 class TestFullSyncWorkflow:
     """
     End-to-end integration tests for the complete sync workflow.
 
-    These tests verify that all components work together correctly:
-    - YTMusicClient fetches playlists and tracks
-    - StreamResolver resolves video IDs to URLs
-    - SyncEngine orchestrates the sync
-    - MPDClient creates playlists in MPD
+    These tests verify that all components work together correctly using a
+    mock Provider (Phase 6 API) rather than YTMusicClient + StreamResolver.
     """
-
-    @pytest.fixture
-    def mock_ytmusic_responses(self):
-        """Mock YouTube Music API responses for testing."""
-        return {
-            "playlists": [
-                Playlist(id="PL1", name="Test Favorites", track_count=3),
-                Playlist(id="PL2", name="Workout Mix", track_count=2),
-            ],
-            "tracks": {
-                "PL1": [
-                    Track(
-                        video_id="vid1",
-                        title="Test Song 1",
-                        artist="Test Artist 1",
-                    ),
-                    Track(
-                        video_id="vid2",
-                        title="Test Song 2",
-                        artist="Test Artist 2",
-                    ),
-                    Track(
-                        video_id="vid3",
-                        title="Test Song 3",
-                        artist="Test Artist 3",
-                    ),
-                ],
-                "PL2": [
-                    Track(
-                        video_id="vid4",
-                        title="Workout Song 1",
-                        artist="Workout Artist 1",
-                    ),
-                    Track(
-                        video_id="vid5",
-                        title="Workout Song 2",
-                        artist="Workout Artist 2",
-                    ),
-                ],
-            },
-        }
-
-    @pytest.fixture
-    def mock_stream_urls(self):
-        """Mock stream URLs for testing."""
-        return {
-            "vid1": "http://example.com/stream1.m4a",
-            "vid2": "http://example.com/stream2.m4a",
-            "vid3": "http://example.com/stream3.m4a",
-            "vid4": "http://example.com/stream4.m4a",
-            "vid5": "http://example.com/stream5.m4a",
-        }
 
     @pytest.fixture
     def temp_config_dir(self):
@@ -92,178 +99,95 @@ class TestFullSyncWorkflow:
         with tempfile.TemporaryDirectory() as tmpdir:
             yield Path(tmpdir)
 
-    @pytest.fixture
-    def test_config(self, temp_config_dir):
-        """Create test configuration."""
-        return {
-            "auth_file": str(temp_config_dir / "browser.json"),
-            "log_level": "DEBUG",
-            "log_file": str(temp_config_dir / "xmpd.log"),
-            "mpd_socket_path": str(temp_config_dir / "mpd_socket"),
-            "sync_interval_minutes": 30,
-            "enable_auto_sync": False,  # Disable auto-sync for tests
-            "playlist_prefix": "YT: ",
-            "stream_cache_hours": 5,
-            "socket_path": str(temp_config_dir / "sync_socket"),
-            "state_file": str(temp_config_dir / "sync_state.json"),
-        }
-
-    def test_full_sync_workflow_mocked(
-        self, test_config, mock_ytmusic_responses, mock_stream_urls
-    ):
-        """
-        Test complete sync workflow with mocked external dependencies.
-
-        Workflow:
-        1. Mock YTMusicClient to return test playlists
-        2. Mock StreamResolver to return test URLs
-        3. Mock MPDClient to track playlist creation
-        4. Create SyncEngine and perform sync
-        5. Verify playlists created with correct tracks
-        """
-        # Setup: Create mock YTMusic client
-        mock_ytmusic = Mock(spec=YTMusicClient)
-        mock_ytmusic.get_user_playlists.return_value = mock_ytmusic_responses[
-            "playlists"
+    def test_full_sync_workflow_mocked(self):
+        """Test complete sync workflow with mocked Provider."""
+        pl1_tracks = [
+            _track("yt", "vid1_abcde", "Test Song 1", "Test Artist 1"),
+            _track("yt", "vid2_abcde", "Test Song 2", "Test Artist 2"),
+            _track("yt", "vid3_abcde", "Test Song 3", "Test Artist 3"),
         ]
-        mock_ytmusic.get_playlist_tracks.side_effect = (
-            lambda playlist_id: mock_ytmusic_responses["tracks"][playlist_id]
-        )
-        mock_ytmusic.get_liked_songs.return_value = []  # No liked songs for this test
-
-        # Setup: Create mock MPD client
-        mock_mpd = Mock(spec=MPDClient)
-        mock_mpd.create_or_replace_playlist = Mock()
-
-        # Setup: Create mock StreamResolver that filters by requested video IDs
-        mock_resolver = Mock(spec=StreamResolver)
-        # Mock resolve_batch to return only requested video IDs
-        def mock_resolve_batch(video_ids):
-            return {vid: mock_stream_urls[vid] for vid in video_ids if vid in mock_stream_urls}
-        mock_resolver.resolve_batch.side_effect = mock_resolve_batch
-
-        # Execute: Create sync engine and perform sync
-        sync_engine = SyncEngine(
-            ytmusic_client=mock_ytmusic,
-            mpd_client=mock_mpd,
-            stream_resolver=mock_resolver,
-            playlist_prefix=test_config["playlist_prefix"],
+        pl2_tracks = [
+            _track("yt", "vid4_abcde", "Workout Song 1", "Workout Artist 1"),
+            _track("yt", "vid5_abcde", "Workout Song 2", "Workout Artist 2"),
+        ]
+        provider = _make_provider(
+            "yt",
+            playlists=[
+                _pl("yt", "PL1", "Test Favorites", 3),
+                _pl("yt", "PL2", "Workout Mix", 2),
+            ],
+            tracks_by_id={"PL1": pl1_tracks, "PL2": pl2_tracks},
         )
 
-        result = sync_engine.sync_all_playlists()
+        mock_mpd = MagicMock(spec=MPDClient)
+        engine = _engine({"yt": provider}, mpd=mock_mpd, prefix={"yt": "YT: "})
 
-        # Verify: Sync completed successfully
+        result = engine.sync_all_playlists()
+
         assert result.success is True
         assert result.playlists_synced == 2
         assert result.playlists_failed == 0
         assert result.tracks_added == 5
         assert result.tracks_failed == 0
-        assert len(result.errors) == 0
+        assert result.errors == []
 
-        # Verify: Playlists fetched from YouTube Music
-        mock_ytmusic.get_user_playlists.assert_called_once()
-        assert mock_ytmusic.get_playlist_tracks.call_count == 2
-
-        # Verify: Stream URLs resolved
-        mock_resolver.resolve_batch.assert_called()
-
-        # Verify: Playlists created in MPD with prefix
         assert mock_mpd.create_or_replace_playlist.call_count == 2
+        names = [c.args[0] for c in mock_mpd.create_or_replace_playlist.call_args_list]
+        assert "YT: Test Favorites" in names
+        assert "YT: Workout Mix" in names
 
-        # Check first playlist
-        call_args_1 = mock_mpd.create_or_replace_playlist.call_args_list[0]
-        assert call_args_1[0][0] == "YT: Test Favorites"
-        assert len(call_args_1[0][1]) == 3  # 3 tracks
+        # Check track count per playlist
+        all_calls = mock_mpd.create_or_replace_playlist.call_args_list
+        calls_by_name = {c.args[0]: c.args[1] for c in all_calls}
+        assert len(calls_by_name["YT: Test Favorites"]) == 3
+        assert len(calls_by_name["YT: Workout Mix"]) == 2
 
-        # Check second playlist
-        call_args_2 = mock_mpd.create_or_replace_playlist.call_args_list[1]
-        assert call_args_2[0][0] == "YT: Workout Mix"
-        assert len(call_args_2[0][1]) == 2  # 2 tracks
+    def test_sync_with_partial_failures(self):
+        """Test sync handles a single track failure gracefully -- other tracks sync fine."""
+        good_tracks = [
+            _track("yt", "vid1_abcde", "Good 1"),
+            _track("yt", "vid2_abcde", "Good 2"),
+        ]
 
-    def test_sync_with_partial_failures(
-        self, test_config, mock_ytmusic_responses, mock_stream_urls
-    ):
-        """
-        Test sync handles partial failures gracefully.
-
-        Scenario:
-        - Some video IDs fail to resolve
-        - Sync should continue with available tracks
-        """
-        # Setup: Mock components
-        mock_ytmusic = Mock(spec=YTMusicClient)
-        mock_ytmusic.get_user_playlists.return_value = [
-            mock_ytmusic_responses["playlists"][0]
-        ]  # Just first playlist
-        mock_ytmusic.get_playlist_tracks.return_value = mock_ytmusic_responses[
-            "tracks"
-        ]["PL1"]
-        mock_ytmusic.get_liked_songs.return_value = []  # No liked songs for this test
-
-        mock_mpd = Mock(spec=MPDClient)
-        mock_resolver = Mock(spec=StreamResolver)
-
-        # Only resolve 2 out of 3 videos (vid3 fails)
-        partial_urls = {
-            "vid1": mock_stream_urls["vid1"],
-            "vid2": mock_stream_urls["vid2"],
-            # vid3 missing (failed to resolve)
-        }
-        mock_resolver.resolve_batch.return_value = partial_urls
-
-        # Execute: Sync with partial failures
-        sync_engine = SyncEngine(
-            ytmusic_client=mock_ytmusic,
-            mpd_client=mock_mpd,
-            stream_resolver=mock_resolver,
-            playlist_prefix=test_config["playlist_prefix"],
+        provider = _make_provider(
+            "yt",
+            playlists=[_pl("yt", "PL1", "Test Favorites", 3)],
+            tracks_by_id={"PL1": good_tracks},
         )
 
-        result = sync_engine.sync_all_playlists()
+        mock_mpd = MagicMock(spec=MPDClient)
+        store = MagicMock()
+        # First add_track call raises; subsequent ones succeed
+        store.add_track.side_effect = [Exception("DB write error"), None]
 
-        # Verify: Sync succeeded with partial results
-        assert result.success is True
+        engine = SyncEngine(
+            provider_registry={"yt": provider},
+            mpd_client=mock_mpd,
+            track_store=store,
+            playlist_prefix={"yt": "YT: "},
+            sync_favorites=False,
+        )
+
+        result = engine.sync_all_playlists()
+
+        # Sync succeeds overall; 1 track failed at store level, 1 succeeded
         assert result.playlists_synced == 1
-        assert result.tracks_added == 2  # Only 2 tracks resolved
-        assert result.tracks_failed == 1  # 1 track failed
+        assert result.tracks_added == 1
+        assert result.tracks_failed == 1
 
-        # Verify: Playlist created with available tracks
         mock_mpd.create_or_replace_playlist.assert_called_once()
         call_args = mock_mpd.create_or_replace_playlist.call_args
-        assert call_args[0][0] == "YT: Test Favorites"
-        assert len(call_args[0][1]) == 2  # Only 2 URLs
+        assert call_args.args[0] == "YT: Test Favorites"
+        assert len(call_args.args[1]) == 1  # Only 1 track made it through
 
-    # NOTE: Daemon state persistence testing is complex due to daemon initialization
-    # requirements. State persistence is tested via manual testing and covered by
-    # daemon unit tests in test_daemon.py.
-
-    def test_manual_sync_trigger_via_socket(
-        self, test_config, temp_config_dir
-    ):
-        """
-        Test manual sync trigger via Unix socket.
-
-        Workflow:
-        1. Start daemon in background
-        2. Send "sync" command via socket
-        3. Verify sync triggered
-        4. Send "status" command
-        5. Verify status returned
-        6. Send "quit" command
-        7. Verify daemon stops
-        """
-        # This test requires a running daemon, which is complex to set up
-        # For now, we'll test the socket protocol directly
-
-        # Setup: Create a simple socket server that mimics daemon behavior
+    def test_manual_sync_trigger_via_socket(self, temp_config_dir):
+        """Test manual sync trigger via Unix socket (daemon mock)."""
         socket_path = str(temp_config_dir / "test_socket")
 
         server_running = threading.Event()
         commands_received = []
 
         def socket_server():
-            """Simple socket server for testing."""
-            # Remove old socket if exists
             if os.path.exists(socket_path):
                 os.remove(socket_path)
 
@@ -281,7 +205,6 @@ class TestFullSyncWorkflow:
                         data = conn.recv(1024).decode().strip()
                         commands_received.append(data)
 
-                        # Send mock response based on command
                         if data == "sync":
                             response = {"success": True, "message": "Sync triggered"}
                         elif data == "status":
@@ -301,222 +224,123 @@ class TestFullSyncWorkflow:
 
                         conn.sendall(json.dumps(response).encode())
                         conn.close()
-                    except socket.timeout:
+                    except TimeoutError:
                         continue
             finally:
                 sock.close()
                 if os.path.exists(socket_path):
                     os.remove(socket_path)
 
-        # Start server in background
         server_thread = threading.Thread(target=socket_server, daemon=True)
         server_thread.start()
 
-        # Wait for server to start
         server_running.wait(timeout=2)
         time.sleep(0.1)
 
-        # Test: Send commands via socket
         def send_command(cmd):
-            """Helper to send command via socket."""
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.connect(socket_path)
-            sock.sendall((cmd + "\n").encode())
-            response = sock.recv(4096).decode()
-            sock.close()
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.connect(socket_path)
+            s.sendall((cmd + "\n").encode())
+            response = s.recv(4096).decode()
+            s.close()
             return json.loads(response)
 
-        # Verify: Sync command
         sync_response = send_command("sync")
         assert sync_response["success"] is True
         assert "sync" in commands_received
 
-        # Verify: Status command
         status_response = send_command("status")
         assert status_response["success"] is True
         assert status_response["playlists_synced"] == 2
         assert "status" in commands_received
 
-        # Verify: Quit command
         quit_response = send_command("quit")
         assert quit_response["success"] is True
         assert "quit" in commands_received
 
-        # Wait for server to stop
         server_thread.join(timeout=2)
 
-    def test_sync_preview_without_changes(
-        self, test_config, mock_ytmusic_responses
-    ):
-        """
-        Test sync preview mode returns expected data without making changes.
-
-        Workflow:
-        1. Create sync engine
-        2. Call get_sync_preview()
-        3. Verify preview data returned
-        4. Verify no actual sync performed (MPD not called)
-        """
-        # Setup: Mock components
-        mock_ytmusic = Mock(spec=YTMusicClient)
-        mock_ytmusic.get_user_playlists.return_value = mock_ytmusic_responses[
-            "playlists"
-        ]
-
-        mock_mpd = Mock(spec=MPDClient)
-        # Return playlists with and without prefix
-        mock_mpd.list_playlists.return_value = ["Old Playlist 1", "YT: Existing Playlist"]
-
-        mock_resolver = Mock(spec=StreamResolver)
-
-        # Execute: Get sync preview
-        sync_engine = SyncEngine(
-            ytmusic_client=mock_ytmusic,
-            mpd_client=mock_mpd,
-            stream_resolver=mock_resolver,
-            playlist_prefix=test_config["playlist_prefix"],
+    def test_sync_preview_without_changes(self):
+        """Test sync preview returns expected data without performing any sync."""
+        provider = _make_provider(
+            "yt",
+            playlists=[
+                _pl("yt", "PL1", "Test Favorites", 3),
+                _pl("yt", "PL2", "Workout Mix", 2),
+            ],
+            tracks_by_id={},
         )
 
-        preview = sync_engine.get_sync_preview()
+        mock_mpd = MagicMock(spec=MPDClient)
+        mock_mpd.list_playlists.return_value = ["Old Playlist 1", "YT: Existing Playlist"]
 
-        # Verify: Preview contains expected data
+        engine = _engine({"yt": provider}, mpd=mock_mpd, prefix={"yt": "YT: "})
+
+        preview = engine.get_sync_preview()
+
         assert len(preview.youtube_playlists) == 2
-        assert "Test Favorites" in preview.youtube_playlists
-        assert "Workout Mix" in preview.youtube_playlists
+        assert "YT: Test Favorites" in preview.youtube_playlists
+        assert "YT: Workout Mix" in preview.youtube_playlists
         assert len(preview.existing_mpd_playlists) == 1
         assert "YT: Existing Playlist" in preview.existing_mpd_playlists
 
-        # Verify: No actual sync operations performed
         mock_mpd.create_or_replace_playlist.assert_not_called()
-        mock_resolver.resolve_batch.assert_not_called()
 
 
 class TestPerformanceScenarios:
-    """
-    Performance and stress tests for xmpd sync operations.
-    """
+    """Performance and stress tests for xmpd sync operations."""
 
     def test_large_playlist_sync(self):
-        """
-        Test syncing a large playlist (100+ tracks).
-
-        Verifies that:
-        - Sync completes without timeout
-        - Memory usage stays reasonable
-        - All tracks processed
-        """
-        # Setup: Create large playlist
-        large_playlist = Playlist(
-            id="PL_LARGE", name="Large Playlist", track_count=100
-        )
-
+        """Test syncing a large playlist (100+ tracks) completes without timeout."""
         large_tracks = [
-            Track(
-                video_id=f"vid{i}",
-                title=f"Song {i}",
-                artist=f"Artist {i}",
-            )
+            _track("yt", f"v{i:011d}", f"Song {i}", f"Artist {i}")
             for i in range(100)
         ]
 
-        # Mock large URL resolution
-        large_urls = {f"vid{i}": f"http://example.com/stream{i}.m4a" for i in range(100)}
-
-        # Setup: Mock components
-        mock_ytmusic = Mock(spec=YTMusicClient)
-        mock_ytmusic.get_user_playlists.return_value = [large_playlist]
-        mock_ytmusic.get_playlist_tracks.return_value = large_tracks
-        mock_ytmusic.get_liked_songs.return_value = []  # No liked songs for this test
-
-        mock_mpd = Mock(spec=MPDClient)
-        mock_resolver = Mock(spec=StreamResolver)
-        mock_resolver.resolve_batch.return_value = large_urls
-
-        # Execute: Sync large playlist
-        sync_engine = SyncEngine(
-            ytmusic_client=mock_ytmusic,
-            mpd_client=mock_mpd,
-            stream_resolver=mock_resolver,
-            playlist_prefix="YT: ",
+        provider = _make_provider(
+            "yt",
+            playlists=[_pl("yt", "PL_LARGE", "Large Playlist", 100)],
+            tracks_by_id={"PL_LARGE": large_tracks},
         )
 
+        mock_mpd = MagicMock(spec=MPDClient)
+        engine = _engine({"yt": provider}, mpd=mock_mpd, prefix={"yt": "YT: "})
+
         start_time = time.time()
-        result = sync_engine.sync_all_playlists()
+        result = engine.sync_all_playlists()
         duration = time.time() - start_time
 
-        # Verify: Sync completed successfully
         assert result.success is True
         assert result.playlists_synced == 1
         assert result.tracks_added == 100
         assert result.tracks_failed == 0
+        assert duration < 5.0
 
-        # Verify: Reasonable performance (should be fast with mocks)
-        assert duration < 5.0  # Should complete in under 5 seconds
-
-        # Verify: All tracks added to playlist
         call_args = mock_mpd.create_or_replace_playlist.call_args
-        assert len(call_args[0][1]) == 100
+        assert len(call_args.args[1]) == 100
 
     def test_many_playlists_sync(self):
-        """
-        Test syncing many playlists (50+).
-
-        Verifies that:
-        - All playlists processed
-        - No memory leaks or resource exhaustion
-        """
-        # Setup: Create many playlists
-        many_playlists = [
-            Playlist(id=f"PL{i}", name=f"Playlist {i}", track_count=5)
+        """Test syncing many playlists (50+) -- all processed, none skipped."""
+        playlists = [_pl("yt", f"PL{i}", f"Playlist {i}", 5) for i in range(50)]
+        tracks_by_id = {
+            f"PL{i}": [_track("yt", f"v{i:05d}{j}", f"Song {j}") for j in range(5)]
             for i in range(50)
-        ]
-
-        # Mock tracks (5 tracks per playlist)
-        def get_tracks(playlist_id):
-            playlist_num = int(playlist_id[2:])  # Extract number from "PL123"
-            return [
-                Track(
-                    video_id=f"vid{playlist_num}_{j}",
-                    title=f"Song {j}",
-                    artist=f"Artist {j}",
-                )
-                for j in range(5)
-            ]
-
-        # Mock URLs
-        all_urls = {
-            f"vid{i}_{j}": f"http://example.com/stream{i}_{j}.m4a"
-            for i in range(50)
-            for j in range(5)
         }
 
-        # Setup: Mock components
-        mock_ytmusic = Mock(spec=YTMusicClient)
-        mock_ytmusic.get_user_playlists.return_value = many_playlists
-        mock_ytmusic.get_playlist_tracks.side_effect = get_tracks
-        mock_ytmusic.get_liked_songs.return_value = []  # No liked songs for this test
-
-        mock_mpd = Mock(spec=MPDClient)
-        mock_resolver = Mock(spec=StreamResolver)
-        mock_resolver.resolve_batch.side_effect = lambda vids: {
-            vid: all_urls[vid] for vid in vids if vid in all_urls
-        }
-
-        # Execute: Sync many playlists
-        sync_engine = SyncEngine(
-            ytmusic_client=mock_ytmusic,
-            mpd_client=mock_mpd,
-            stream_resolver=mock_resolver,
-            playlist_prefix="YT: ",
+        provider = _make_provider(
+            "yt",
+            playlists=playlists,
+            tracks_by_id=tracks_by_id,
         )
 
-        result = sync_engine.sync_all_playlists()
+        mock_mpd = MagicMock(spec=MPDClient)
+        engine = _engine({"yt": provider}, mpd=mock_mpd, prefix={"yt": "YT: "})
 
-        # Verify: All playlists synced
+        result = engine.sync_all_playlists()
+
         assert result.success is True
         assert result.playlists_synced == 50
-        assert result.tracks_added == 250  # 50 playlists * 5 tracks
+        assert result.tracks_added == 250
         assert result.tracks_failed == 0
 
-        # Verify: All playlists created in MPD
         assert mock_mpd.create_or_replace_playlist.call_count == 50

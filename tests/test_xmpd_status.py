@@ -70,6 +70,18 @@ class TestGetTrackType:
 
     def test_youtube_proxy_url(self):
         """Test YouTube track detection from proxy URL."""
+        file_path = "http://localhost:6602/proxy/yt/dQw4w9WgXcQ"
+        track_type = ytmpd_status.get_track_type(file_path)
+        assert track_type == "youtube"
+
+    def test_tidal_proxy_url(self):
+        """Test Tidal track detection from proxy URL."""
+        file_path = "http://localhost:6602/proxy/tidal/123456789"
+        track_type = ytmpd_status.get_track_type(file_path)
+        assert track_type == "tidal"
+
+    def test_legacy_proxy_url_without_provider(self):
+        """Test legacy proxy URL without provider prefix defaults to youtube."""
         file_path = "http://localhost:6602/proxy/dQw4w9WgXcQ"
         track_type = ytmpd_status.get_track_type(file_path)
         assert track_type == "youtube"
@@ -85,57 +97,83 @@ class TestGetTrackType:
 
     def test_youtube_from_database(self, tmp_path):
         """Test YouTube track detection from database."""
-        # Create temporary database
         db_path = tmp_path / ".config" / "xmpd"
         db_path.mkdir(parents=True)
         db_file = db_path / "track_mapping.db"
 
-        # Create database with test data
         conn = sqlite3.connect(db_file)
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE tracks (
-                file TEXT PRIMARY KEY,
-                video_id TEXT,
-                title TEXT,
-                artist TEXT
+                track_id TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'yt',
+                stream_url TEXT,
+                artist TEXT,
+                title TEXT NOT NULL,
+                updated_at REAL NOT NULL
             )
         """)
         cursor.execute(
-            "INSERT INTO tracks (file, video_id, title, artist) VALUES (?, ?, ?, ?)",
-            ("_youtube/test.xspf", "dQw4w9WgXcQ", "Test Song", "Test Artist"),
+            "INSERT INTO tracks (track_id, provider, title, updated_at) VALUES (?, ?, ?, ?)",
+            ("dQw4w9WgXcQ", "yt", "Test Song", 0),
         )
         conn.commit()
         conn.close()
 
-        # Test detection
         with patch("ytmpd_status.Path.home") as mock_home:
             mock_home.return_value = tmp_path
-            track_type = ytmpd_status.get_track_type("_youtube/test.xspf")
+            track_type = ytmpd_status.get_track_type("dQw4w9WgXcQ")
             assert track_type == "youtube"
 
-    def test_local_file_not_in_database(self, tmp_path):
-        """Test local file detection when not in database."""
-        # Create temporary database
+    def test_tidal_from_database(self, tmp_path):
+        """Test Tidal track detection from database."""
         db_path = tmp_path / ".config" / "xmpd"
         db_path.mkdir(parents=True)
         db_file = db_path / "track_mapping.db"
 
-        # Create empty database
         conn = sqlite3.connect(db_file)
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE tracks (
-                file TEXT PRIMARY KEY,
-                video_id TEXT,
-                title TEXT,
-                artist TEXT
+                track_id TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'yt',
+                stream_url TEXT,
+                artist TEXT,
+                title TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        cursor.execute(
+            "INSERT INTO tracks (track_id, provider, title, updated_at) VALUES (?, ?, ?, ?)",
+            ("123456789", "tidal", "Tidal Song", 0),
+        )
+        conn.commit()
+        conn.close()
+
+        with patch("ytmpd_status.Path.home") as mock_home:
+            mock_home.return_value = tmp_path
+            track_type = ytmpd_status.get_track_type("123456789")
+            assert track_type == "tidal"
+
+    def test_local_file_not_in_database(self, tmp_path):
+        """Test local file detection when not in database."""
+        db_path = tmp_path / ".config" / "xmpd"
+        db_path.mkdir(parents=True)
+        db_file = db_path / "track_mapping.db"
+
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tracks (
+                track_id TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'yt',
+                title TEXT NOT NULL,
+                updated_at REAL NOT NULL
             )
         """)
         conn.commit()
         conn.close()
 
-        # Test detection
         with patch("ytmpd_status.Path.home") as mock_home:
             mock_home.return_value = tmp_path
             track_type = ytmpd_status.get_track_type("/music/local.mp3")
@@ -151,8 +189,10 @@ class TestGetTrackType:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE tracks (
-                file TEXT PRIMARY KEY,
-                video_id TEXT
+                track_id TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'yt',
+                title TEXT NOT NULL,
+                updated_at REAL NOT NULL
             )
         """)
         conn.commit()
@@ -205,6 +245,61 @@ class TestFormatTime:
         assert ytmpd_status.format_time("invalid") == "0:00"
         assert ytmpd_status.format_time(None) == "0:00"
         assert ytmpd_status.format_time("") == "0:00"
+
+
+class TestClassifyAudioQuality:
+    """Test audio quality classification."""
+
+    def test_youtube_lossy(self):
+        assert ytmpd_status.classify_audio_quality("44100:f:2", "128", "youtube") == "Lossy"
+
+    def test_youtube_lossy_no_bitrate(self):
+        assert ytmpd_status.classify_audio_quality("44100:f:2", "0", "youtube") == "Lossy"
+
+    def test_tidal_hifi(self):
+        assert ytmpd_status.classify_audio_quality("44100:16:2", "0", "tidal") == "HiFi"
+
+    def test_tidal_hires(self):
+        assert ytmpd_status.classify_audio_quality("96000:24:2", "0", "tidal") == "HiRes"
+
+    def test_tidal_hires_48_24(self):
+        assert ytmpd_status.classify_audio_quality("48000:24:2", "0", "tidal") == "HiRes"
+
+    def test_compact_youtube(self):
+        result = ytmpd_status.classify_audio_quality(
+            "44100:f:2", "128", "youtube", compact=True
+        )
+        assert result == "Lo"
+
+    def test_compact_tidal_hifi(self):
+        result = ytmpd_status.classify_audio_quality(
+            "44100:16:2", "0", "tidal", compact=True
+        )
+        assert result == "CD"
+
+    def test_compact_tidal_hires(self):
+        result = ytmpd_status.classify_audio_quality(
+            "96000:24:2", "0", "tidal", compact=True
+        )
+        assert result == "HR"
+
+    def test_local_returns_none(self):
+        assert ytmpd_status.classify_audio_quality("44100:16:2", "320", "local") is None
+
+    def test_local_hires_still_none(self):
+        assert ytmpd_status.classify_audio_quality("96000:24:2", "0", "local") is None
+
+    def test_empty_audio(self):
+        assert ytmpd_status.classify_audio_quality("", "0", "youtube") is None
+
+    def test_none_audio(self):
+        assert ytmpd_status.classify_audio_quality(None, "0", "youtube") is None
+
+    def test_malformed_audio(self):
+        assert ytmpd_status.classify_audio_quality("garbage", "0", "tidal") is None
+
+    def test_partial_audio(self):
+        assert ytmpd_status.classify_audio_quality("44100", "0", "tidal") is None
 
 
 class TestTruncate:
@@ -294,6 +389,58 @@ class TestColorSelection:
         captured = capsys.readouterr()
         lines = captured.out.strip().split("\n")
         assert lines[2] == "#d9677b"  # Deeper pink for YouTube paused
+
+    @patch("ytmpd_status.get_mpd_client")
+    @patch("sys.argv", ["xmpd-status"])
+    @patch("ytmpd_status.get_track_type")
+    def test_tidal_playing_color(self, mock_track_type, mock_client, capsys):
+        """Test color for playing Tidal track."""
+        mock_mpd = MagicMock()
+        mock_client.return_value = mock_mpd
+        mock_mpd.status.return_value = {
+            "state": "play",
+            "elapsed": "60",
+        }
+        mock_mpd.currentsong.return_value = {
+            "title": "Test Song",
+            "artist": "Test Artist",
+            "file": "http://localhost:6602/proxy/tidal/123456789",
+            "time": "180",
+        }
+
+        mock_track_type.return_value = "tidal"
+
+        ytmpd_status.main()
+
+        captured = capsys.readouterr()
+        lines = captured.out.strip().split("\n")
+        assert lines[2] == "#73daca"  # Teal for Tidal playing
+
+    @patch("ytmpd_status.get_mpd_client")
+    @patch("sys.argv", ["xmpd-status"])
+    @patch("ytmpd_status.get_track_type")
+    def test_tidal_paused_color(self, mock_track_type, mock_client, capsys):
+        """Test color for paused Tidal track."""
+        mock_mpd = MagicMock()
+        mock_client.return_value = mock_mpd
+        mock_mpd.status.return_value = {
+            "state": "pause",
+            "elapsed": "60",
+        }
+        mock_mpd.currentsong.return_value = {
+            "title": "Test Song",
+            "artist": "Test Artist",
+            "file": "http://localhost:6602/proxy/tidal/123456789",
+            "time": "180",
+        }
+
+        mock_track_type.return_value = "tidal"
+
+        ytmpd_status.main()
+
+        captured = capsys.readouterr()
+        lines = captured.out.strip().split("\n")
+        assert lines[2] == "#5cb8a9"  # Deeper teal for Tidal paused
 
     @patch("ytmpd_status.get_mpd_client")
     @patch("sys.argv", ["xmpd-status"])
