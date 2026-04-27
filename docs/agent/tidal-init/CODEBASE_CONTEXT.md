@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 4 (Phase 6), 2026-04-27
+> Last updated by: Checkpoint 5 (Phase 8), 2026-04-27
 
 ---
 
@@ -31,7 +31,7 @@ External AirPlay surface lives in `extras/airplay-bridge/`, a separate sub-proje
 |-----------|---------|-------|
 | `xmpd/__init__.py` | Package metadata | `__version__ = "1.4.4"`. |
 | `xmpd/__main__.py` | CLI entry | `python -m xmpd` runs the daemon. |
-| `xmpd/daemon.py` | XMPDaemon orchestrator | Builds every component in `__init__`, runs main control-socket loop, hosts background sync/history/proxy threads. Imports `StreamRedirectProxy` (Phase 4); `proxy_server` typed as `StreamRedirectProxy | None`; constructed with `provider_registry={}` placeholder. `_extract_video_id_from_url` handles both legacy `/proxy/<id>` and new `/proxy/yt/<id>` URLs. Still passes `ytmusic=` to HistoryReporter (BROKEN, Phase 8 fixes). **Phase 8 rewires this to use a provider registry.** |
+| `xmpd/daemon.py` | XMPDaemon orchestrator | LIVE (Phase 8): `__init__` builds `provider_registry: dict[str, Provider]` via `build_registry()` and injects into `SyncEngine`, `HistoryReporter`, `StreamRedirectProxy`. No longer imports `YTMusicClient`, `FirefoxCookieExtractor`, `CookieExtractionError`, `send_notification`. Imports `build_registry`, `Provider`, `RatingAction`, `RatingManager`, `apply_to_provider`. Auto-auth loop and reactive refresh fully removed. New socket commands: `provider-status`, `like`, `dislike`. Extended: `search` (--provider), `radio` (provider-aware), `play`/`queue` (provider + track_id). Helper: `_extract_provider_and_track` replaces `_extract_video_id_from_url`. `_build_yt_config()` bridges legacy config to registry-compatible shape. `_build_playlist_prefix()` normalizes string prefix to `dict[str, str]`. Status backward compat: `auto_auth_enabled`, `last_auto_refresh`, `auto_refresh_failures` fields hardcoded/zeroed. |
 | `xmpd/config.py` | Config loader | `load_config()` deep-merges YAML at `~/.config/xmpd/config.yaml` with hardcoded defaults; `get_config_dir()` returns `~/.config/xmpd/`. **Phase 11 must accept the new nested `yt:` / `tidal:` shape and reject the legacy top-level `auto_auth:` shape with a clear error.** |
 | `xmpd/providers/__init__.py` | Provider registry | `get_enabled_provider_names(config)` + `build_registry(config)`. Instantiates `YTMusicProvider` when `yt` enabled (Phase 2); Phase 9 fills `tidal`. `get_enabled_provider_names` returns insertion order (yt before tidal). Re-exports all shared types via `__all__`. |
 | `xmpd/providers/base.py` | Shared provider types | `TrackMetadata`, `Track`, `Playlist` frozen dataclasses + 14-method `@runtime_checkable Provider` Protocol. Cross-provider exchange shape. |
@@ -56,10 +56,15 @@ External AirPlay surface lives in `extras/airplay-bridge/`, a separate sub-proje
 | `tests/test_sync_engine.py` | SyncEngine tests | 19 tests (Phase 6 rewrite). Multi-provider sync, failure isolation, favorites naming, proxy URL, preview, single-playlist. Uses `MagicMock(spec=Provider)`. |
 | `tests/test_like_indicator.py` | Like indicator tests | `TestSyncEngineLikeIndicator` ported to Phase 6 API; module-level imports. |
 | `tests/integration/test_full_workflow.py` | Full sync workflow integration | `TestFullSyncWorkflow` and `TestPerformanceScenarios` ported to mock Provider registry (Phase 6). No longer imports `StreamResolver` or `YTMusicClient`. |
+| `tests/test_daemon.py` | Daemon tests | LIVE (Phase 8): complete rewrite, 41 tests using `build_registry` mock pattern. Classes: `TestDaemonInit`, `TestCmdSync`, `TestCmdStatus`, `TestCmdProviderStatus`, `TestCmdSearch`, `TestCmdRadio`, `TestCmdPlayQueue`, `TestCmdLikeDislike`, `TestCmdList`, `TestCmdQuit`. Mock pattern: `@patch("xmpd.daemon.build_registry")`. |
+| `tests/test_xmpctl.py` | xmpctl tests | LIVE (Phase 8): added `TestXmpctlAuth` (3 tests: yt, tidal stub, unknown provider), `TestXmpctlParseProviderFlag` (1 test). |
+| `tests/test_history_integration.py` | History integration tests | LIVE (Phase 8): `_make_daemon` updated to use `build_registry` mock; `test_track_change_triggers_report` fixed for new HistoryReporter constructor. |
+| `tests/integration/test_auto_auth.py` | Auto-auth integration tests | LIVE (Phase 8): `test_status_includes_auto_auth_fields_when_enabled` updated to use `build_registry` mock and asserts `auto_auth_enabled=False`. |
+| `tests/test_auto_auth_daemon.py` | (DELETED) | Removed in Phase 8. All tested code was removed: auto-auth loop, `_attempt_auto_refresh`, reactive refresh. |
 | `tests/fixtures/ytmusic_samples.json` | YTMusic API samples | Real search results + fallback shapes (Phase 3). |
 | `xmpd/notify.py` | Desktop notify wrapper | `send_notification(title, body, urgency)`. |
 | `xmpd/exceptions.py` | Exception hierarchy | Base `XMPDError`; YTMusic, MPD, Proxy, Config, CookieExtraction subtrees. **Phase 9 adds `TidalAuthRequired` here.** |
-| `bin/xmpctl` | CLI controller | Talks to daemon over Unix socket, JSON protocol. Existing subcommands: `sync`, `status`, `stop`. **Phase 8 adds the `auth <provider>` subcommand structure plus provider-aware `like|dislike|search|radio` (these may not all exist yet -- Phase 8 audits and fills gaps).** |
+| `bin/xmpctl` | CLI controller | LIVE (Phase 8): provider-aware CLI. `cmd_auth(provider, manual)` replaces `cmd_auth(auto)`. Like/dislike round-trip through daemon socket. `get_current_track_from_mpd()` returns `(provider, track_id, title, artist)`. `parse_provider_flag()` helper. Search/radio accept `--provider` flag. Backward-compat shims: bare `xmpctl auth` -> `auth yt`, `xmpctl auth --auto` -> `auth yt`. Hand-rolled argv dispatch preserved. Subcommands: `sync`, `status`, `list-playlists`, `auth <provider>`, `search`, `radio`, `like`, `dislike`, `help`. |
 | `bin/xmpd-status` | i3blocks widget | Pretty-prints current track + playback progress. |
 | `bin/xmpd-status-preview` | Standalone preview | For widget styling work. |
 | `examples/config.yaml` | Example user config | Documents all keys. **Phase 11 rewrites to the multi-source shape.** |
@@ -197,7 +202,7 @@ Returns `SyncResult(success, playlists_synced, playlists_failed, tracks_added, t
 
 BREAKING CHANGE from Phase 6: constructor takes `provider_registry: dict[str, Provider]` instead of `ytmusic_client`; `track_store` is required (not Optional); `playlist_prefix` is `dict[str, str]` keyed by provider canonical name (`yt`, `tidal`); `sync_liked_songs` renamed to `sync_favorites`; `liked_songs_playlist_name` replaced by `favorites_playlist_name_per_provider: dict[str, str]`; `stream_resolver` removed. Per-cycle: iterates `registry.values()`, fetches playlists+favorites from each provider, writes per-provider-prefixed MPD playlists, persists `(provider, track_id, ...)` rows to TrackStore. Failures of one provider do not stop others. `build_proxy_url` imported from `xmpd.proxy_url` (not `xmpd.stream_proxy`).
 
-**Phase 8 must update `daemon.py`** to pass the new constructor arguments.
+Phase 8 completed: `daemon.py` now passes all new constructor arguments via the provider registry.
 
 ### StreamResolver (`xmpd/stream_resolver.py`)
 
@@ -231,7 +236,7 @@ class HistoryReporter:
 
 BREAKING CHANGE from Phase 7: constructor takes `provider_registry` instead of `ytmusic: YTMusicClient`. `_report_track(url, duration_seconds)` parses provider+track_id via `PROXY_URL_RE`, looks up provider in registry, calls `provider.report_play(track_id, duration_seconds)`. Swallows all provider exceptions. `VIDEO_ID_RE` and `_extract_video_id` deleted.
 
-**Phase 8 must update `daemon.py`** (line ~175) to pass `provider_registry=` instead of `ytmusic=`.
+Phase 8 completed: `daemon.py` passes `provider_registry=` to `HistoryReporter` constructor.
 
 ### RatingManager / RatingState / apply_to_provider (`xmpd/rating.py`) -- LIVE Phase 7
 
@@ -270,13 +275,31 @@ class MPDClient:
 
 `TrackWithMetadata(url, title, artist, video_id, duration_seconds)` is the existing dataclass; URLs come pre-formed. `mpd_client.py` uses `build_proxy_url("yt", track.video_id, ...)` at both proxy URL call sites (Phase 4, LIVE).
 
+### Daemon Socket Commands (LIVE Phase 8)
+
+Raw text protocol: `command [args...]\n` over Unix socket. Response: JSON object with `success: bool`.
+
+| Command | Args | Description |
+|---------|------|-------------|
+| `sync` | none | Trigger immediate sync |
+| `status` | none | Return sync stats, auth state, daemon uptime |
+| `list` | none | List playlists from all providers |
+| `quit` | none | Shutdown daemon |
+| `provider-status` | none | Return `{providers: {name: {enabled, authenticated}}}` |
+| `search` | `[--provider name] query...` | Search across providers |
+| `radio` | `[--provider name] [track_id]` | Generate radio playlist |
+| `play` | `provider track_id` | Clear MPD queue, add track, play |
+| `queue` | `provider track_id` | Append track to MPD queue |
+| `like` | `[provider] [track_id]` | Toggle like (infers from MPD if no args) |
+| `dislike` | `[provider] [track_id]` | Toggle dislike (infers from MPD if no args) |
+
 ---
 
 ## Patterns & Conventions
 
 **Config loading**: `load_config()` deep-merges user YAML with hardcoded defaults from `xmpd/config.py`. Used in `XMPDaemon.__init__`. Phase 11 adds the per-provider sections (`yt:`, `tidal:`) and refuses the old top-level `auto_auth:` shape.
 
-**Dependency wiring**: Constructor-arg injection. `XMPDaemon.__init__` builds singletons (`YTMusicClient`, `MPDClient`, `StreamResolver`, `TrackStore`) and threads them into consumers (`SyncEngine`, `HistoryReporter`, `StreamRedirectProxy`). No global registry yet. Phase 8 introduces `provider_registry: dict[str, Provider]` as a new injection point that replaces the direct `ytmusic_client` injection.
+**Dependency wiring**: Constructor-arg injection. `XMPDaemon.__init__` builds `provider_registry: dict[str, Provider]` via `build_registry()` (with legacy config bridging via `_build_yt_config()`), then injects it alongside `MPDClient`, `TrackStore`, `StreamResolver` into consumers (`SyncEngine`, `HistoryReporter`, `StreamRedirectProxy`). Direct `YTMusicClient` injection removed in Phase 8.
 
 **Error handling**: Custom hierarchy under `XMPDError` (`xmpd/exceptions.py`). Auth errors are fatal; transient API errors retry with exponential backoff (2s, 4s). Proxy returns explicit HTTP codes (400/404/502/503) per failure mode. The daemon never blocks on input -- failed authentication of a provider logs a warning and the daemon continues with the registry minus that provider.
 
@@ -286,15 +309,15 @@ class MPDClient:
 
 **Async boundaries**: `StreamRedirectProxy` is fully aiohttp-async. Daemon main loop is sync (Unix socket select). `HistoryReporter.run()` is sync (blocks on `mpd.idle()`) in a thread. `SyncEngine` is sync. `StreamResolver.resolve_video_id` is sync; called from the async proxy via `loop.run_in_executor`. New rule from Phase 9 onward: tidalapi is sync; `TidalProvider` mirrors `YTMusicProvider` (sync), and the proxy handles the async-to-sync hop the same way as the YT path.
 
-**End-to-end flow trace** (one full request, today):
+**End-to-end flow trace** (LIVE post-Phase 8):
 
-1. Daemon starts. `SyncEngine.sync_all_playlists()` runs on schedule.
-2. Engine calls `YTMusicClient.get_user_playlists()` -> writes M3U/XSPF to MPD playlist dir; rows are inserted into `TrackStore` with `(video_id, NULL stream_url, title, artist, now())`.
-3. User selects a playlist in MPD (`mpc load "YT: ..."`); MPD dereferences the proxy URL `http://localhost:8080/proxy/yt/<video_id>`.
-4. `StreamRedirectProxy` receives `GET /proxy/yt/<video_id>`. Validates track_id against `TRACK_ID_PATTERNS["yt"]`. Looks up the row in TrackStore; if `stream_url` is NULL or expired (per-provider TTL), calls `_refresh_stream_url(provider, track_id)` to refresh, persists, then 307s to the actual URL.
+1. Daemon starts. `build_registry(config)` constructs `provider_registry: dict[str, Provider]` (currently `{"yt": YTMusicProvider(...)}`). Registry injected into `SyncEngine`, `HistoryReporter`, `StreamRedirectProxy`.
+2. `SyncEngine.sync_all_playlists()` iterates registry. For each provider, fetches playlists + favorites, writes per-provider-prefixed XSPF to MPD music dir, persists `(provider, track_id, ...)` rows to TrackStore.
+3. User selects a playlist in MPD; MPD dereferences the proxy URL `http://localhost:6602/proxy/yt/<track_id>`.
+4. `StreamRedirectProxy` receives `GET /proxy/yt/<track_id>`. Validates against `TRACK_ID_PATTERNS["yt"]`. Looks up in TrackStore; if `stream_url` is NULL or expired (per-provider TTL), calls `_refresh_stream_url(provider, track_id)` to refresh, persists, then 307s to the actual URL.
 5. MPD streams from YouTube directly. `HistoryReporter` watches MPD idle, parses `/proxy/yt/<id>` via `PROXY_URL_RE`, looks up provider in registry, calls `provider.report_play(track_id, duration_seconds)` after `min_play_seconds`.
 
-After Phases 1-13, this flow generalizes: provider canonical name comes from the URL prefix, both YT and Tidal feed playlists, both serve cached `art_url` for AirPlay, both can be authenticated independently.
+After Phases 9-13, this flow generalizes: Tidal provider joins the registry, both YT and Tidal feed playlists, both serve cached `art_url` for AirPlay, both can be authenticated independently.
 
 ---
 
@@ -368,7 +391,7 @@ The pre-existing `Track` / `Playlist` dataclasses inside `xmpd/providers/ytmusic
 
 ```
 daemon.py
-  (Phase 8: injects provider_registry instead of YTMusicClient)
+  (LIVE Phase 8: injects provider_registry via build_registry())
   +-- config.py (load_config)
   +-- providers/                              [Phase 1+]
   |   +-- base.py (Provider, Track, Playlist, TrackMetadata)
@@ -404,14 +427,18 @@ Phase 12 changes:
 
 ### CLI (xmpctl) integration
 
-`bin/xmpctl` is a Python script (NOT a thin shell wrapper) that talks to the daemon over Unix socket using a small JSON protocol. Existing daemon-routed subcommands: `sync`, `status`, `stop`. Phase 8 audits and adds:
+`bin/xmpctl` is a Python script (NOT a thin shell wrapper) that talks to the daemon over Unix socket using a raw text protocol (`command arg1 arg2\n`). LIVE (Phase 8) subcommands:
 
-- `auth <provider>` -- runs OAuth/cookie flow CLI-side (does NOT go through the daemon socket; the daemon never blocks on interactive input).
-- `like` / `dislike` -- daemon-routed; daemon dispatches via provider registry.
-- `search [--provider yt|tidal|all]` -- daemon-routed; merges results, labels by provider.
-- `radio` -- daemon-routed; infers provider from current MPD track URL prefix.
+- `sync` -- daemon-routed; triggers immediate sync.
+- `status` -- daemon-routed; returns sync stats, auth state, daemon uptime.
+- `list-playlists` -- daemon-routed; lists playlists from all providers.
+- `auth <provider>` -- CLI-side only (no daemon round-trip). `auth yt` runs Firefox cookie extraction. `auth tidal` prints Phase 11 stub message. `auth yt --manual` runs interactive ytmusicapi setup.
+- `search [query] [--provider yt|tidal|all]` -- daemon-routed; merges results, labels by provider.
+- `radio [--apply] [--provider <name>]` -- daemon-routed; infers provider from current MPD track URL prefix.
+- `like` / `dislike` -- daemon-routed; infers provider + track_id from MPD current track URL.
+- `help` -- prints usage.
 
-Spec is in `2026-04-26-xmpd-tidal-design.md` (the multi-source design spec); plan tasks B23, B25, C11 cover the CLI surface.
+Backward-compat: bare `xmpctl auth` -> `auth yt`, `xmpctl auth --auto` -> `auth yt`. No `stop`/`quit` CLI subcommand; daemon stopped via `systemctl --user stop xmpd` or SIGTERM (socket `quit` command exists but is not exposed in xmpctl).
 
 ---
 
