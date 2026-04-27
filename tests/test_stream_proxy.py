@@ -1,13 +1,17 @@
 """Unit tests for StreamRedirectProxy and build_proxy_url."""
 
 import time
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from xmpd.proxy_url import build_proxy_url
-from xmpd.stream_proxy import StreamRedirectProxy, resolve_stream_cache_hours
+from xmpd.stream_proxy import (
+    StreamRedirectProxy,
+    _is_dash_manifest,
+    resolve_stream_cache_hours,
+)
 from xmpd.track_store import TrackStore
 
 # ---------------------------------------------------------------------------
@@ -510,6 +514,102 @@ def test_build_proxy_url_format():
     assert build_proxy_url("yt", "dQw4w9WgXcQ", "localhost", 6602) == (
         "http://localhost:6602/proxy/yt/dQw4w9WgXcQ"
     )
+
+
+# ---------------------------------------------------------------------------
+# 21. DASH manifest detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_dash_manifest_recognises_mpd_extension():
+    assert _is_dash_manifest("https://im-fa.manifest.tidal.com/abc.mpd")
+    # Token query string should not throw off detection
+    assert _is_dash_manifest(
+        "https://im-fa.manifest.tidal.com/abc.mpd?token=xyz~sig"
+    )
+    # Case-insensitive
+    assert _is_dash_manifest("https://example.com/foo.MPD")
+
+
+def test_is_dash_manifest_rejects_other_urls():
+    assert not _is_dash_manifest("https://cdn.tidal.com/track.mp4")
+    assert not _is_dash_manifest("https://googlevideo.com/stream.flac")
+    assert not _is_dash_manifest("https://example.com/foo.mpd.fake?ext=mp4")
+
+
+# ---------------------------------------------------------------------------
+# 22. Tidal DASH manifest -- ffmpeg pipe path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_route_tidal_dash_pipes_through_ffmpeg(track_store, tidal_provider_mock):
+    """When resolved URL is a .mpd manifest, proxy must spawn ffmpeg and stream
+    the FLAC bytes back instead of redirecting MPD to the manifest URL.
+    """
+    track_store.add_track(
+        "tidal",
+        "12345678",
+        stream_url="https://im-fa.manifest.tidal.com/abc.mpd?token=xyz",
+        title="Track",
+        artist="Artist",
+    )
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"tidal": tidal_provider_mock},
+        stream_cache_hours={"tidal": 5},
+    )
+
+    fake_flac_bytes = b"fLaC" + b"\x00" * 4096
+
+    fake_proc = Mock()
+    fake_proc.returncode = 0
+    fake_proc.stdout = AsyncMock()
+    fake_proc.stdout.read = AsyncMock(side_effect=[fake_flac_bytes, b""])
+    fake_proc.stderr = AsyncMock()
+    fake_proc.stderr.read = AsyncMock(return_value=b"")
+    fake_proc.wait = AsyncMock(return_value=0)
+    fake_proc.kill = Mock()
+
+    with patch(
+        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=fake_proc),
+    ) as mock_spawn:
+        async with TestClient(TestServer(proxy.app)) as client:
+            resp = await client.get("/proxy/tidal/12345678", allow_redirects=False)
+            assert resp.status == 200
+            assert resp.headers["Content-Type"] == "audio/flac"
+            body = await resp.read()
+            assert body == fake_flac_bytes
+
+    # ffmpeg invocation sanity: receives the manifest URL and emits FLAC
+    args, _ = mock_spawn.call_args
+    assert args[0] == "ffmpeg"
+    assert "https://im-fa.manifest.tidal.com/abc.mpd?token=xyz" in args
+    assert "flac" in args
+    # No redirect should have been attempted
+    tidal_provider_mock.resolve_stream.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_route_tidal_non_dash_still_redirects(track_store, tidal_provider_mock):
+    """A non-.mpd Tidal URL (legacy or future) keeps the 307 redirect path."""
+    track_store.add_track(
+        "tidal",
+        "12345678",
+        stream_url="https://cdn.tidal.com/foo.flac",
+        title="Track",
+        artist="Artist",
+    )
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"tidal": tidal_provider_mock},
+        stream_cache_hours={"tidal": 5},
+    )
+    async with TestClient(TestServer(proxy.app)) as client:
+        resp = await client.get("/proxy/tidal/12345678", allow_redirects=False)
+        assert resp.status == 307
+        assert resp.headers["Location"] == "https://cdn.tidal.com/foo.flac"
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,13 @@
 """HTTP redirect proxy for provider-agnostic lazy stream URL resolution.
 
-Server serves GET /proxy/{provider}/{track_id} and responds with HTTP 307
-to a freshly-resolved direct CDN URL. Per-provider regex validates the
-track_id segment; per-provider TTL governs when a cached URL is refreshed.
+Server serves GET /proxy/{provider}/{track_id}. For most providers it
+responds with HTTP 307 to a freshly-resolved direct CDN URL. For Tidal
+the resolved URL is a DASH manifest (.mpd) which MPD cannot consume
+directly, so we instead spawn ``ffmpeg`` to stitch the segments into a
+single FLAC stream that we proxy back to the client.
+
+Per-provider regex validates the track_id segment; per-provider TTL
+governs when a cached URL is refreshed.
 
 This module is the renamed successor of xmpd.icy_proxy / ICYProxyServer
 (no ICY metadata is or was actually injected -- the old name was misleading).
@@ -24,10 +29,102 @@ logger = logging.getLogger(__name__)
 DEFAULT_TTL_HOURS = 5
 MAX_CONCURRENT_STREAMS = 10
 
+# Chunk size for ffmpeg stdout reads when piping DASH-stitched FLAC to the
+# client. 64 KiB is a balance between latency and syscall overhead.
+FFMPEG_READ_CHUNK = 65536
+
 TRACK_ID_PATTERNS: dict[str, re.Pattern[str]] = {
     "yt": re.compile(r"^[A-Za-z0-9_-]{11}$"),
     "tidal": re.compile(r"^\d{1,20}$"),
 }
+
+
+def _is_dash_manifest(url: str) -> bool:
+    """Return True if ``url`` looks like a DASH MPD manifest.
+
+    Tidal's v2 trackManifests endpoint returns ``.mpd`` URLs that point at
+    multi-segment DASH manifests; MPD cannot consume those directly so we
+    have to stitch via ffmpeg. Strips the query string before matching so
+    a token-bearing URL like ``foo.mpd?token=...`` still classifies.
+    """
+    return url.split("?", 1)[0].lower().endswith(".mpd")
+
+
+async def _stream_dash_via_ffmpeg(
+    request: web.Request, manifest_url: str, provider: str, track_id: str
+) -> web.StreamResponse:
+    """Pipe ffmpeg's FLAC remux of a DASH manifest back to the client.
+
+    Spawns ``ffmpeg -i <manifest_url> -c copy -f flac pipe:1`` and forwards
+    its stdout to the aiohttp response. Stitches all DASH segments into a
+    single continuous FLAC stream without re-encoding (segments already
+    contain FLAC inside MP4; ffmpeg just remuxes).
+
+    Kills the subprocess if the client disconnects mid-stream so we don't
+    leak ffmpeg processes when MPD skips tracks.
+    """
+    response = web.StreamResponse(
+        status=200, headers={"Content-Type": "audio/flac"}
+    )
+    response.enable_chunked_encoding()
+    await response.prepare(request)
+
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        manifest_url,
+        "-c",
+        "copy",
+        "-f",
+        "flac",
+        "pipe:1",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    assert proc.stdout is not None
+    try:
+        while True:
+            chunk = await proc.stdout.read(FFMPEG_READ_CHUNK)
+            if not chunk:
+                break
+            await response.write(chunk)
+        client_disconnected = False
+    except (ConnectionResetError, asyncio.CancelledError):
+        logger.info(
+            f"[PROXY] Client disconnected during DASH stream {provider}/{track_id}"
+        )
+        client_disconnected = True
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            try:
+                await asyncio.shield(proc.wait())
+            except (asyncio.CancelledError, Exception):
+                pass
+        if proc.returncode not in (0, -9, None):
+            stderr_bytes = b""
+            if proc.stderr is not None:
+                try:
+                    stderr_bytes = await asyncio.shield(proc.stderr.read())
+                except (asyncio.CancelledError, Exception):
+                    pass
+            logger.warning(
+                f"[PROXY] ffmpeg exited with rc={proc.returncode} "
+                f"for {provider}/{track_id}: {stderr_bytes.decode(errors='replace')[:300]}"
+            )
+
+    # write_eof can raise if the client already closed the connection -- don't
+    # let cleanup turn a normal client disconnect into a 500.
+    if not client_disconnected:
+        try:
+            await response.write_eof()
+        except (ConnectionResetError, ConnectionError):
+            pass
+    return response
 
 
 def resolve_stream_cache_hours(config: dict[str, Any]) -> dict[str, int]:
@@ -326,6 +423,12 @@ class StreamRedirectProxy:
                     text=f"Invalid stream URL format for {provider}/{track_id}"
                 )
 
+            if _is_dash_manifest(stream_url):
+                logger.debug(
+                    f"[PROXY] Streaming DASH via ffmpeg for {provider}/{track_id}"
+                )
+                return await _stream_dash_via_ffmpeg(request, stream_url, provider, track_id)
+
             logger.debug(f"[PROXY] Redirecting {provider}/{track_id} -> {stream_url[:60]}...")
             raise web.HTTPTemporaryRedirect(stream_url)
 
@@ -337,10 +440,17 @@ class StreamRedirectProxy:
             )
             raise web.HTTPInternalServerError(text="Unexpected error handling proxy request")
         finally:
-            async with self._connection_lock:
+            try:
+                async with self._connection_lock:
+                    self._active_connections -= 1
+                    logger.debug(
+                        f"[PROXY] Connection closed for {provider}/{track_id} "
+                        f"({self._active_connections}/{self.max_concurrent_streams} active)"
+                    )
+            except (asyncio.CancelledError, Exception):
                 self._active_connections -= 1
                 logger.debug(
-                    f"[PROXY] Connection closed for {provider}/{track_id} "
+                    f"[PROXY] Connection closed (unshielded) for {provider}/{track_id} "
                     f"({self._active_connections}/{self.max_concurrent_streams} active)"
                 )
 
