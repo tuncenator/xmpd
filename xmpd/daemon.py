@@ -1035,7 +1035,7 @@ class XMPDaemon:
                     continue
                 favorites = prov.get_favorites()
                 for track in favorites:
-                    liked.add(track.track_id)
+                    liked.add(f"{pname}:{track.track_id}")
             except Exception as e:
                 logger.warning("Failed to fetch favorites for %s: %s", pname, e)
 
@@ -1128,7 +1128,7 @@ class XMPDaemon:
                         "duration": self._format_duration(duration_secs),
                         "duration_seconds": duration_secs,
                         "quality": quality,
-                        "liked": track.track_id in liked_ids
+                        "liked": f"{track.provider}:{track.track_id}" in liked_ids
                         if track.track_id else None,
                     }
                 )

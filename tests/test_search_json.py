@@ -271,7 +271,7 @@ class TestGetLikedIds:
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
         result = daemon._get_liked_ids()
-        assert result == {"abc12345678", "def12345678"}
+        assert result == {"yt:abc12345678", "yt:def12345678"}
 
     def test_cache_avoids_repeated_api_calls(self, tmp_path):
         yt = _make_yt_provider()
