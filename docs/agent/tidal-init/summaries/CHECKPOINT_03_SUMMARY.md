@@ -89,7 +89,44 @@ No helpers were listed for any phase in this batch. No phase summary reported he
 
 ## Code Review Results
 
-> Pending. Code review has not been conducted yet for this checkpoint.
+**Result**: REVIEW FAILED -> spark-fix applied -> REVIEW PASSED WITH NOTES (3 minor + 1 borderline-Important allowed)
+**Reviewer**: spark-code-reviewer (claude-opus-4-6)
+**Original diff range**: `12bf4ec..77e3cbd` (first review)
+**Post-fix diff range**: `12bf4ec..1c25318` (re-review)
+
+### First Review (FAILED) -- 4 Important issues
+
+1. `resolve_stream` returned `str` and raised `ProxyError` on resolver-None; Protocol declares `-> str | None`.
+2. `like`/`dislike`/`unlike` returned `None`; Protocol declares `-> bool`.
+3. `report_play` returned `None`; Protocol declares `-> bool`. Phase 7's `_report_track` checks `if ok:` -- spurious "returned False" warnings on every successful play.
+4. `get_like_state` returned `bool`; Protocol declares `-> str` (`"LIKED"`/`"DISLIKED"`/`"NEUTRAL"`).
+
+### spark-fix commit `1c25318`
+
+`[Checkpoint 3/9] fix: align YTMusicProvider return types with Provider Protocol contract`
+
+- `resolve_stream`: returns `str | None`, returns `None` on resolver-None (with WARNING log), raises `YTMusicAPIError` only on missing resolver.
+- `like`/`dislike`/`unlike`: try/except wrap `set_track_rating`; return `True` on success, `False` (with WARNING) on caught exceptions.
+- `report_play`: returns `True` on success, `False` on exception or report_history-False.
+- `get_like_state`: returns `"LIKED"`/`"DISLIKED"`/`"NEUTRAL"` via dict mapping.
+- Tests updated to assert new return types + new failure-path tests added (37 passed, +4 from original 33).
+- `ProxyError` import excised from both `xmpd/providers/ytmusic.py` and `tests/test_providers_ytmusic.py`.
+
+### Re-review (PASSED WITH NOTES)
+
+| Severity | Count | Notes |
+|----------|-------|-------|
+| Critical | 0 | -- |
+| Important | 1 | `apply_to_provider` annotated `-> None` discards `bool` returns; allowed because no current caller checks; Phase 8's xmpctl wiring should address |
+| Minor | 3 | (1) `_state_to_str` dict allocated per-call; (2) daemon.py inline f-string carryover (Phase 4 plan said out-of-scope); (3) evidence capture partially incomplete (browser.json auth expired for some endpoints, documented transparently) |
+
+### Notes
+
+- All four original Important issues fully resolved in `1c25318`.
+- 0 new regressions: full suite shows 709 passed, 15 expected failures (unchanged shape), 4 skipped.
+- mypy clean on Phase 3/4/7 new code; pre-existing errors in YTMusicClient body (unchanged).
+- ruff clean on fix-touched files.
+- No helper scripts modified.
 
 ---
 
