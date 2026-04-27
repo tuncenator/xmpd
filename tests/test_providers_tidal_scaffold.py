@@ -64,12 +64,22 @@ def test_tidal_provider_ensure_session_raises_when_no_session(
         ("report_play", ("12345", 60)),
     ],
 )
-def test_tidal_provider_phase10_stubs_raise(method_name: str, args: tuple) -> None:  # type: ignore[type-arg]
+def test_tidal_provider_methods_require_session(
+    method_name: str, args: tuple, tmp_path: Path, monkeypatch: pytest.MonkeyPatch  # type: ignore[type-arg]
+) -> None:
+    """Phase 10 replaced stubs with real implementations; they now raise
+    TidalAuthRequired when no session is available (except report_play which
+    swallows all exceptions)."""
+    monkeypatch.setattr(TidalProvider, "SESSION_PATH", tmp_path / "nonexistent.json")
     p = TidalProvider({"enabled": True})
     method = getattr(p, method_name)
-    with pytest.raises(NotImplementedError) as excinfo:
-        method(*args)
-    assert "Phase 10" in str(excinfo.value)
+    if method_name == "report_play":
+        # report_play is best-effort and swallows all exceptions
+        result = method(*args)
+        assert result is False
+    else:
+        with pytest.raises(TidalAuthRequired):
+            method(*args)
 
 
 def test_build_registry_constructs_tidal_when_enabled() -> None:
