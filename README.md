@@ -1,36 +1,39 @@
-# xmpd — YouTube Music → MPD sync daemon
+# xmpd -- multi-source music sync daemon (YouTube Music + Tidal HiFi -> MPD)
 
-A background sync daemon that pulls your YouTube Music library into MPD so you
-can drive playback with standard MPD tooling (`mpc`, `ncmpcpp`, mobile MPD
-clients, i3 keybindings). Optional extras extend it with AirPlay multi-room
-routing via OwnTone.
+A background daemon that pulls your YouTube Music and Tidal HiFi libraries into
+MPD so you can drive playback with standard MPD tooling (`mpc`, `ncmpcpp`,
+mobile MPD clients, i3 keybindings). Optional extras extend it with AirPlay
+multi-room routing via OwnTone.
 
 ```
-YouTube Music  →  xmpd daemon  →  MPD  →  mpc / ncmpcpp / AirPlay (optional)
+YouTube Music  \
+                >--->  xmpd daemon  --->  MPD  --->  mpc / ncmpcpp / AirPlay
+Tidal HiFi    /
 ```
 
 ## Features
 
-- **Playlist sync** — pulls your YouTube Music playlists into MPD on a timer
-  and on demand (`xmpctl sync`). Playlists appear as `YT: <name>`.
-- **XSPF playlists** — optional format that gives MPD separate artist/title
-  fields and duration, for proper ncmpcpp display.
-- **Radio** — generate a personalised radio playlist seeded from the current
+- **Multi-source playlist sync** -- pulls playlists from YouTube Music (`YT: `)
+  and Tidal HiFi (`TD: `) into MPD on a timer and on demand (`xmpctl sync`).
+- **Per-provider failure isolation** -- a flaky provider never blocks others.
+- **XSPF playlists** -- optional format giving MPD separate artist/title fields
+  and duration, for proper ncmpcpp display.
+- **Radio** -- generate a personalised radio playlist seeded from the current
   track (`xmpctl radio`).
-- **Search** — interactive search across YouTube Music with play/enqueue/radio
-  actions (`xmpctl search`).
-- **Likes / dislikes** — toggle ratings from any MPD environment; changes sync
-  back to YouTube Music (`xmpctl like|dislike`).
-- **Like indicator** — visually tag liked tracks inside playlists (e.g.
-  `Artist - Title [+1]`).
-- **History reporting** — feed completed plays back to YouTube Music so its
-  recommendation engine stays warm.
-- **Auto-authentication** — refresh YouTube Music credentials automatically by
-  reading cookies from your Firefox profile; no manual header pasting.
-- **i3 integration** — status script with adaptive truncation for i3blocks.
-- **AirPlay bridge (optional)** — see [`extras/airplay-bridge/`](extras/airplay-bridge/)
-  for atomic speaker routing, metadata forwarding, and smart volume keys on
-  top of OwnTone.
+- **Cross-provider search** -- search across all enabled providers; results
+  prefixed with `[YT]` / `[TD]` (`xmpctl search [--provider yt|tidal|all]`).
+- **Likes / dislikes** -- toggle ratings from any MPD environment; the daemon
+  parses the playing URL to route the action to the correct provider
+  (`xmpctl like|dislike`).
+- **Like indicator** -- visually tag liked tracks inside playlists.
+- **History reporting** -- feed completed plays back to their source provider.
+- **Auto-auth (YT)** -- refresh YouTube Music credentials automatically from
+  Firefox cookies; no manual header pasting required.
+- **OAuth device flow (Tidal)** -- one-time Tidal sign-in via `xmpctl auth tidal`;
+  session persists at `~/.config/xmpd/tidal_session.json`.
+- **AirPlay bridge (optional)** -- see `extras/airplay-bridge/`; includes
+  Tidal album art lookup via xmpd's track-store DB.
+- **i3 integration** -- status script with adaptive truncation for i3blocks.
 
 ## Requirements
 
@@ -38,6 +41,7 @@ YouTube Music  →  xmpd daemon  →  MPD  →  mpc / ncmpcpp / AirPlay (optiona
 - [uv](https://github.com/astral-sh/uv) for environment management
 - MPD + `mpc`
 - YouTube Music account (free or premium)
+- Optional: Tidal HiFi subscription (for Tidal source)
 
 ### MPD setup
 
@@ -57,208 +61,143 @@ mpc status  # sanity check
 ```bash
 git clone <repo> xmpd
 cd xmpd
-uv venv
-source .venv/bin/activate
-uv pip install -e ".[dev]"
+./install.sh
+```
+
+`install.sh` is idempotent. It installs `uv`, creates a venv, installs xmpd
+and dependencies, migrates a legacy `~/.config/ytmpd/` config if present,
+prompts for YouTube Music auth, optionally installs the systemd user unit, and
+installs `xmpctl` / `xmpd-status` symlinks to `~/.local/bin`.
+
+Check current state without making changes:
+
+```bash
+./install.sh --check
 ```
 
 ## Authentication
 
-xmpd needs a YouTube Music session. Two options:
-
-### One-shot browser headers
+### YouTube Music
 
 ```bash
-python -m xmpd.ytmusic setup-browser
+xmpctl auth yt           # auto-extract cookies from Firefox (recommended)
+xmpctl auth yt --manual  # paste request headers manually
 ```
 
-Follow the prompts: log in to YouTube Music in your browser, open devtools →
-Network, copy request headers from any `music.youtube.com` call, paste in. This
-writes `~/.config/xmpd/browser.json` and is good for ~2 years.
+Manual auth writes `~/.config/xmpd/browser.json` and lasts ~2 years.
+Auto-auth reads cookies periodically from your Firefox profile.
 
-### Auto-auth (recommended)
-
-Let xmpd rebuild `browser.json` periodically from your Firefox cookie
-database:
+Enable periodic cookie refresh in config:
 
 ```yaml
-# ~/.config/xmpd/config.yaml
-auto_auth:
+yt:
+  auto_auth:
+    enabled: true
+    browser: firefox-dev   # or "firefox"
+    container: null        # Multi-Account-Containers name, or null
+    profile: null          # null = auto-detect
+    refresh_interval_hours: 12
+```
+
+### Tidal
+
+```bash
+xmpctl auth tidal
+```
+
+Opens an OAuth device-flow link (copied to clipboard / printed). Authorize in
+your browser. On success, `~/.config/xmpd/tidal_session.json` is written
+(mode 0600). Re-run if the session expires.
+
+Note: Tidal enforces single-device playback. Running `xmpctl auth tidal` will
+displace your current listening session on other devices.
+
+## Adding Tidal as a second source
+
+After authenticating, enable Tidal in config:
+
+```yaml
+tidal:
   enabled: true
-  browser: firefox-dev   # or "firefox"
-  container: null        # or Multi-Account-Containers name
-  profile: null          # null = auto-detect
-  refresh_interval_hours: 12
+  stream_cache_hours: 1
+  quality_ceiling: HI_RES_LOSSLESS  # clamped to LOSSLESS internally; see docs/MIGRATION.md
+  sync_favorited_playlists: true
 ```
 
-Trigger a one-off extraction without the daemon:
+Then restart the daemon:
 
 ```bash
-xmpctl auth --auto
+systemctl --user restart xmpd
+xmpctl sync
+mpc lsplaylists | grep -E '^(YT|TD):'
 ```
 
-If cookies go stale (cleared data, logged out, browser long unused) you'll get
-a desktop notification; the i3blocks widget flags it as orange/red. Log back
-into YouTube Music in Firefox and the next refresh cycle will pick it up.
+## Per-provider config keys
 
-## Usage
+| Section | Key | Default | Notes |
+|---------|-----|---------|-------|
+| `yt` | `enabled` | `true` | YouTube Music source. |
+| `yt` | `stream_cache_hours` | `5` | YT stream URLs expire ~6h. |
+| `yt.auto_auth` | `enabled` | `false` | Periodic Firefox cookie refresh. |
+| `yt.auto_auth` | `browser` | `firefox-dev` | `firefox` or `firefox-dev`. |
+| `yt.auto_auth` | `container` | `null` | Multi-Account-Containers name. |
+| `yt.auto_auth` | `profile` | `null` | Auto-detect if null. |
+| `yt.auto_auth` | `refresh_interval_hours` | `12` | |
+| `tidal` | `enabled` | `false` | Opt-in; run `xmpctl auth tidal` first. |
+| `tidal` | `stream_cache_hours` | `1` | Tidal URLs expire faster than YT. |
+| `tidal` | `quality_ceiling` | `HI_RES_LOSSLESS` | Parsed but clamped to LOSSLESS internally. |
+| `tidal` | `sync_favorited_playlists` | `true` | |
+| (top) | `playlist_prefix.yt` | `"YT: "` | |
+| (top) | `playlist_prefix.tidal` | `"TD: "` | |
+| (top) | `mpd_socket_path` | `~/.config/mpd/socket` | Unix socket or `host:port`. |
+| (top) | `mpd_music_directory` | `~/Music` | Required for XSPF format. |
+| (top) | `playlist_format` | `m3u` | `m3u` or `xspf`. |
+| (top) | `sync_interval_minutes` | `30` | |
+| (top) | `enable_auto_sync` | `true` | |
+| (top) | `radio_playlist_limit` | `25` | 10-50. |
+| `history_reporting` | `enabled` | `false` | Both providers when enabled. |
+| `like_indicator` | `enabled` | `false` | Tag liked tracks in playlists. |
 
-### Start the daemon
+Full reference with comments: [`examples/config.yaml`](examples/config.yaml).
 
-```bash
-source .venv/bin/activate
-python -m xmpd &
-```
+## Cross-provider behavior
 
-On startup xmpd runs an initial sync, then auto-syncs every
-`sync_interval_minutes` (default 30). Logs land in
-`~/.config/xmpd/xmpd.log`.
+- **`xmpctl like` / `xmpctl dislike`**: the daemon parses the currently playing
+  MPD URL (`/proxy/<provider>/<track_id>`) and dispatches to the matching
+  provider. No cross-provider mirroring in this release.
+- **`xmpctl search`**: defaults to all enabled and authenticated providers.
+  `--provider yt|tidal|all` restricts the scope. Results are merged with
+  `[YT]` / `[TD]` prefixes.
+- **`xmpctl radio`**: infers provider from the current track URL. Force a
+  specific provider with `--provider tidal`.
+- **History reporting**: per-provider. YT plays go to YouTube Music; Tidal plays
+  go to Tidal.
 
-### `xmpctl`
+## HiRes streaming status
 
-`xmpctl` drives the daemon for everything except playback:
-
-| Command                   | What it does |
-|---------------------------|--------------|
-| `xmpctl sync`            | Force an immediate sync |
-| `xmpctl status`          | Sync state + stats |
-| `xmpctl list-playlists`  | List YouTube Music playlists |
-| `xmpctl search`          | Interactive search (play / enqueue / radio) |
-| `xmpctl radio [--apply]` | Radio from current track; `--apply` also loads & plays |
-| `xmpctl like`            | Toggle like on the currently playing track |
-| `xmpctl dislike`         | Toggle dislike on the currently playing track |
-| `xmpctl auth --auto`     | One-off Firefox cookie extraction |
-
-### Playback via `mpc`
-
-```bash
-mpc load "YT: Favorites"
-mpc play
-mpc next / mpc prev / mpc toggle / mpc stop
-```
-
-Stream URLs expire after ~6 hours; xmpd caches them for 5 hours and refreshes
-on the next sync cycle. If a track fails to play, run `xmpctl sync`.
-
-## Radio & search
-
-**Radio** generates a 25-track recommendation playlist seeded from the current
-YouTube Music track:
-
-```bash
-xmpctl radio            # write to ~/Music/_youtube/YT: Radio.xspf
-xmpctl radio --apply    # write + load + play
-```
-
-Configurable via `radio_playlist_limit` (10–50).
-
-**Search** offers fuzzy search with inline actions:
-
-```bash
-$ xmpctl search
-Search YouTube Music:
-> miles davis kind of blue
-  1. So What - Miles Davis (9:22)
-  2. Freddie Freeloader - Miles Davis (9:33)
-  ...
-> 2
-Actions: 1) Play now  2) Add to queue  3) Start radio  4) Cancel
-```
-
-## Likes & dislikes
-
-```bash
-xmpctl like        # toggle like on current track
-xmpctl dislike     # toggle dislike on current track
-```
-
-Behaviour is idempotent per direction and cross-cancels the opposite rating:
-
-| Current state | `like`   | `dislike` |
-|---------------|----------|-----------|
-| Neutral       | Liked    | Disliked  |
-| Liked         | Neutral  | Disliked  |
-| Disliked      | Liked    | Neutral   |
-
-Liking a track immediately triggers a sync so the liked-songs playlist updates
-without waiting for the next interval.
-
-**Known quirk:** YouTube Music's API reports disliked tracks as neutral, so
-`dislike` twice will dislike twice rather than toggle off. Use `like` to clear
-a dislike explicitly.
-
-### Like indicator
-
-Tag liked tracks inside playlists so you can spot them at a glance:
-
-```yaml
-like_indicator:
-  enabled: true
-  tag: "+1"           # shown as [+1]; "*", "LIKED", etc. work too
-  alignment: right    # "left" or "right"
-```
-
-Applies to every playlist except `YT: Liked Songs` itself (redundant there).
-Radio playlists get the same treatment.
-
-## History reporting
-
-Feed completed plays back to YouTube Music so recommendations reflect what you
-actually listen to:
-
-```yaml
-history_reporting:
-  enabled: false         # opt-in
-  min_play_seconds: 30   # tracks shorter than this count as skips
-```
-
-Runs as a background thread inside the daemon: watches MPD player state, times
-actual play duration (excluding pauses), calls YouTube Music's history API on
-each qualifying track.
-
-## Playlist format
-
-Two formats are supported; set `playlist_format` in config:
-
-- **`m3u`** — traditional, single `Name` field per track.
-- **`xspf`** — XML with separate `<creator>` / `<title>` / `<duration>` fields.
-  Requires `mpd_music_directory` (XSPF files go in `<music_dir>/_youtube/`).
-  Recommended for ncmpcpp users — you get colour-coded artist/title columns.
+Tidal `quality_ceiling: HI_RES_LOSSLESS` is parsed and accepted by the config
+but internally clamped to `LOSSLESS` (16-bit FLAC). HI_RES_LOSSLESS requires
+a DASH manifest muxing pipeline that is out of scope for this release. The
+LOSSLESS path delivers full 16-bit/44.1 kHz FLAC. See
+[`docs/MIGRATION.md`](docs/MIGRATION.md) for the rationale and the path forward.
 
 ## AirPlay bridge (optional)
 
 `extras/airplay-bridge/` ships a complete AirPlay stack built on
-[OwnTone](https://owntone.github.io/owntone-server/). It's independent of the
-xmpd daemon — install it only if you want multi-room AirPlay + proper
-metadata on your receivers.
+[OwnTone](https://owntone.github.io/owntone-server/). It is independent of
+the xmpd daemon; install only if you want multi-room AirPlay with proper
+metadata.
 
-**What you get:**
-
-- `speaker laptop|denon|kitchen|multi|status|list` — atomic routing across MPD
-  outputs, OwnTone speaker selection, and the PipeWire default sink. Handles
-  cold receivers (retries selection while an AVR wakes from standby).
-- `speaker-rofi` — rofi-driven speaker picker that discovers reachable AirPlay
-  receivers dynamically.
-- `vol-wrap up|down|mute` — routes volume keys to OwnTone when AirPlay is
-  active, PipeWire otherwise; does ratio-anchored scaling for multi-room.
-- `mpd_owntone_metadata.py` — systemd user service that bridges MPD metadata
-  (artist / title / album art) into OwnTone's metadata pipe, so receivers show
-  the current song instead of "mpd.pcm / Unknown artist". Album art is
-  resolved from MPD-embedded tags, folder art, then cached iTunes /
-  MusicBrainz lookups for YouTube tracks.
-
-**Install:**
+Tidal album art is served via the bridge's read-only access to xmpd's
+track-store DB (`~/.config/xmpd/track_mapping.db`). The YT path is unchanged
+(iTunes/MusicBrainz fallback). Install the bridge after Tidal tracks have
+been synced at least once so the DB is populated.
 
 ```bash
 cd extras/airplay-bridge
 ./install.sh --check     # report what's missing, no changes
 ./install.sh             # idempotent install (Arch/Manjaro; uses yay)
 ```
-
-The installer sets up `~/.config/mpd-owntone-bridge/config.env`, drops the
-systemd user unit, wires up the PipeWire RAOP discovery dropin, and augments
-your `~/.i3/config` inside sentinel markers. Populate `SPEAKER_DENON` /
-`SPEAKER_KITCHEN` with the output IDs discovered during install.
 
 ## i3 integration
 
@@ -274,9 +213,6 @@ bindsym $mod+Shift+b exec --no-startup-id mpc prev
 # Ratings
 bindsym $mod+plus  exec --no-startup-id xmpctl like
 bindsym $mod+minus exec --no-startup-id xmpctl dislike
-
-# Refresh i3blocks after a control change
-bindsym $mod+Shift+p exec --no-startup-id killall -SIGUSR1 i3blocks
 ```
 
 ### i3blocks status
@@ -288,144 +224,123 @@ interval=5
 separator_block_width=15
 ```
 
-Output examples:
-
-- `▶ Queen - Bohemian Rhapsody [2:34/5:55]` (green, playing)
-- `⏸ The Beatles - Hey Jude [1:23/7:06]` (yellow, paused)
-- `⏹ MPD` (grey, stopped)
-
 Truncates adaptively under width pressure: timestamps stay, progress bar
 shrinks, song name ellipsises last.
 
 See `examples/i3blocks.conf` for a full setup.
 
-## Configuration
-
-Config lives at `~/.config/xmpd/config.yaml` and is created with defaults on
-first run. Full documentation of every option is in
-[`examples/config.yaml`](examples/config.yaml). Key settings:
-
-| Setting                 | Default                  | Notes |
-|-------------------------|--------------------------|-------|
-| `mpd_socket_path`       | `~/.config/mpd/socket`   | Unix socket path or `host:port` |
-| `mpd_music_directory`   | `~/Music`                | Required if `playlist_format: xspf` |
-| `sync_interval_minutes` | `30`                     | Set `enable_auto_sync: false` to disable |
-| `playlist_prefix`       | `"YT: "`                 | Prefix for synced playlists in MPD |
-| `playlist_format`       | `m3u`                    | `m3u` or `xspf` |
-| `stream_cache_hours`    | `5`                      | Buffer before 6-hour URL expiry |
-| `radio_playlist_limit`  | `25`                     | 10–50 |
-| `auto_auth.enabled`     | `false`                  | Firefox cookie auto-refresh |
-| `history_reporting.enabled` | `false`              | Report plays to YT Music |
-| `like_indicator.enabled`    | `false`              | Tag liked tracks in playlists |
-
 ## Troubleshooting
 
-### Daemon won't start
+**Daemon won't start -- config shape error:**
+Run `python3 scripts/migrate-config.py` to migrate the legacy config format.
+Or see `docs/MIGRATION.md`.
 
-- `mpc status` — is MPD up? `systemctl --user start mpd` if not.
-- `ls ~/.config/mpd/socket` — does the socket xmpd targets actually exist?
-- `ls ~/.config/xmpd/browser.json` — auth file present? Run `python -m
-  xmpd.ytmusic setup-browser` or `xmpctl auth --auto`.
-- `tail -f ~/.config/xmpd/xmpd.log`.
+**Daemon won't start -- MPD not reachable:**
+`mpc status` -- is MPD up? `systemctl --user start mpd` if not. Check
+`mpd_socket_path` in config matches your MPD socket.
 
-### No playlists in MPD
+**No playlists in MPD:**
+`xmpctl sync` then `mpc lsplaylists | grep -E '^(YT|TD):'`.
+Check `~/.config/xmpd/xmpd.log` for ERROR lines.
 
-- `xmpctl sync` then `xmpctl status` — did it succeed?
-- `mpc lsplaylists | grep '^YT:'` — are they actually there under the prefix?
-- `grep ERROR ~/.config/xmpd/xmpd.log`.
+**Playback silent:**
+`mpc outputs` -- is any output enabled? `mpc enable <n>` to toggle one on.
+AirPlay path: `extras/airplay-bridge/speaker status`.
 
-### Playback silent
+**Stream URLs expired:**
+YouTube URLs die at ~6 hours, Tidal URLs faster. Force a refresh with
+`xmpctl sync`. Configurable via `stream_cache_hours` per provider.
 
-- `mpc outputs` — is any output enabled? `mpc enable <n>` to toggle one on.
-- AirPlay via the bridge: `extras/airplay-bridge/speaker status` — any
-  receiver still selected? If not, the receiver likely dropped the RTSP
-  session (standby, source switch, network blip). Re-pick it.
+**YT auth failure:**
+`xmpctl auth yt` to re-extract Firefox cookies, or `xmpctl auth yt --manual`
+to paste fresh headers.
 
-### Stream URLs expired
+**Tidal auth -- session expired:**
+Re-run `xmpctl auth tidal`. The OAuth session is stored at
+`~/.config/xmpd/tidal_session.json`.
 
-YouTube URLs die at ~6 hours. The daemon refreshes them on every sync cycle;
-force one with `xmpctl sync`.
+**Tidal auth -- clipboard tool not found:**
+Install `wl-copy` (Wayland) or `xclip` (X11), or copy the printed URL
+manually and paste it in your browser.
 
-### Authentication failures
-
-- With auto-auth on: check you're still logged into YouTube Music in Firefox,
-  then `xmpctl auth --auto` to force a cookie re-extract.
-- Without: re-run `python -m xmpd.ytmusic setup-browser` and paste fresh
-  headers.
-
-### i3blocks stale
-
-- `killall -SIGUSR1 i3blocks` forces a refresh.
-- `bin/xmpd-status` directly to check the script output.
-- `chmod +x bin/xmpd-status` if permissions are off.
+**i3blocks stale:**
+`killall -SIGUSR1 i3blocks` forces a refresh. Run `bin/xmpd-status` directly
+to inspect its output.
 
 ## How it works
 
-MPD doesn't speak YouTube, so xmpd runs a local HTTP helper on
-`localhost:8080` that re-serves each track's yt-dlp-resolved stream with
-injected ICY metadata. Synced playlists point MPD at `http://localhost:8080/
-proxy/<video_id>`; the proxy fetches the upstream audio, prepends ICY headers,
-and streams back. This is an implementation detail — you don't configure it
-day-to-day — but it's how MPD knows what to display in the playlist view and
-how the history reporter identifies YouTube tracks.
+xmpd syncs playlists from all enabled providers into MPD's playlist directory.
+Each synced track URL points to a local proxy: `http://localhost:<port>/proxy/<provider>/<track_id>`.
 
-Expired URLs are re-resolved in the background; the proxy falls back to the
-cached URL if refresh fails.
+When MPD dereferences the URL, the proxy validates the provider and track ID,
+looks up the cached stream URL in the track-store SQLite DB, refreshes it if
+expired (per-provider TTL), and issues an HTTP 307 redirect to the actual
+upstream audio URL. The stream goes directly from the upstream server to MPD.
+
+`HistoryReporter` watches MPD idle events, parses the playing proxy URL to
+identify provider and track, and calls `provider.report_play()` after
+`min_play_seconds` of actual playback.
 
 ## Development
 
 ```bash
-pytest                                      # full suite
+pytest -q                                    # full suite
 pytest --cov=xmpd --cov-report=term-missing
-pytest tests/integration/                   # integration only
-
 mypy xmpd/
-ruff check --fix xmpd/
-ruff format xmpd/
+ruff check xmpd/
 ```
 
 ## Project structure
 
 ```
 xmpd/
-├── xmpd/                       # Main package
-│   ├── __main__.py              # Daemon entry point
-│   ├── config.py                # Config load/validate
-│   ├── cookie_extract.py        # Firefox cookie extraction
-│   ├── daemon.py                # Sync loop + background threads
-│   ├── history_reporter.py      # MPD → YT Music history
-│   ├── icy_proxy.py             # Local stream + metadata proxy
-│   ├── mpd_client.py            # python-mpd2 wrapper
-│   ├── notify.py                # Desktop notifications
-│   ├── rating.py                # Like / dislike logic
-│   ├── stream_resolver.py       # Video ID → stream URL (yt-dlp)
-│   ├── sync_engine.py           # Sync orchestration
-│   ├── track_store.py           # SQLite track metadata store
-│   ├── xspf_generator.py        # XSPF playlist writer
-│   ├── ytmusic.py               # YouTube Music API wrapper
-│   └── exceptions.py            # Custom exceptions
-├── bin/
-│   ├── xmpctl                  # Sync / rating / search CLI
-│   └── xmpd-status             # i3blocks status script
-├── extras/
-│   └── airplay-bridge/          # Optional OwnTone AirPlay stack
-│       ├── install.sh
-│       ├── speaker              # Routing tool
-│       ├── speaker-rofi         # rofi speaker picker
-│       ├── vol-wrap             # Smart volume key router
-│       └── mpd_owntone_metadata.py  # Metadata pipe bridge
-├── examples/
-│   ├── config.yaml              # Documented full config
-│   └── i3blocks.conf            # Example i3blocks block
-├── docs/                        # Design docs + migration notes
-└── tests/                       # Unit + integration tests
++-- xmpd/                         # Main package
+|   +-- __main__.py               # Daemon entry point
+|   +-- config.py                 # Config load/validate (multi-source shape)
+|   +-- daemon.py                 # Orchestrator + socket server
+|   +-- history_reporter.py       # MPD -> provider history
+|   +-- stream_proxy.py           # HTTP 307 proxy: /proxy/<provider>/<id>
+|   +-- mpd_client.py             # python-mpd2 wrapper
+|   +-- notify.py                 # Desktop notifications
+|   +-- rating.py                 # Like / dislike state machine
+|   +-- stream_resolver.py        # yt-dlp stream URL resolver (YT-internal)
+|   +-- sync_engine.py            # Multi-provider sync orchestration
+|   +-- track_store.py            # SQLite: (provider, track_id) compound key
+|   +-- xspf_generator.py         # XSPF playlist writer
+|   +-- exceptions.py             # Exception hierarchy
+|   +-- providers/
+|   |   +-- base.py               # Provider Protocol + shared dataclasses
+|   |   +-- ytmusic.py            # YTMusicProvider (14-method Protocol impl)
+|   |   +-- tidal.py              # TidalProvider (14-method Protocol impl)
+|   +-- auth/
+|       +-- ytmusic_cookie.py     # Firefox cookie extraction
+|       +-- tidal_oauth.py        # Tidal OAuth device flow + token persistence
++-- bin/
+|   +-- xmpctl                    # Sync / rating / search / auth CLI
+|   +-- xmpd-status               # i3blocks status script
+|   +-- xmpd-status-preview       # Widget preview helper
++-- scripts/
+|   +-- migrate-config.py         # Config shape migration (legacy -> multi-source)
++-- extras/
+|   +-- airplay-bridge/           # Optional OwnTone AirPlay stack
+|       +-- install.sh
+|       +-- speaker               # Atomic routing tool
+|       +-- speaker-rofi          # rofi speaker picker
+|       +-- vol-wrap              # Smart volume key router
+|       +-- mpd_owntone_metadata.py  # Metadata pipe bridge (Tidal art aware)
++-- examples/
+|   +-- config.yaml               # Documented full config (multi-source layout)
+|   +-- i3blocks.conf             # Example i3blocks block
++-- docs/
+|   +-- MIGRATION.md              # ytmpd -> xmpd + multi-source guide
++-- tests/                        # Unit + integration tests
 ```
 
-## Migration from v1
+## Migration from ytmpd
 
-If you're coming from the old command-server architecture, see
-[`docs/MIGRATION.md`](docs/MIGRATION.md). Summary: xmpctl is now a sync tool,
-not a playback tool; MPD owns playback.
+See [`docs/MIGRATION.md`](docs/MIGRATION.md) for the full guide covering the
+`ytmpd` -> `xmpd` rename, the multi-source config shape change, and the
+manual fallback recipe.
 
 ## License
 
@@ -434,6 +349,7 @@ MIT
 ## Acknowledgments
 
 - [ytmusicapi](https://github.com/sigma67/ytmusicapi) by sigma67
+- [tidalapi](https://github.com/tamland/python-tidal) by tamland
 - [python-mpd2](https://github.com/Mic92/python-mpd2)
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - [OwnTone](https://owntone.github.io/owntone-server/) for the AirPlay bridge
