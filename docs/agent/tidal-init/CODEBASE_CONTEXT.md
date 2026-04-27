@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 8 (Phases 11 + 12), 2026-04-27
+> Last updated by: Checkpoint 9 (Phase 13, FINAL), 2026-04-27
 
 ---
 
@@ -76,10 +76,13 @@ External AirPlay surface lives in `extras/airplay-bridge/`, a separate sub-proje
 | `bin/xmpd-status-preview` | Standalone preview | For widget styling work. |
 | `examples/config.yaml` | Example user config | LIVE (Phase 11): full rewrite to multi-source layout. Per-provider `yt:` / `tidal:` sections, `playlist_prefix` as `dict[str, str]`, per-provider `stream_cache_hours`, MIGRATION.md pointer. |
 | `xmpd.service` | systemd user unit | Single source of truth for the daemon command. |
-| `install.sh` / `uninstall.sh` | Installer scripts | **Phase 13 rewrites for ytmpd-to-xmpd config migration and the new multi-source layout.** |
+| `scripts/migrate-config.py` | Config migration script | LIVE (Phase 13). Idempotent ruamel.yaml round-trip migration from legacy single-provider shape to multi-source shape. CLI: `--check` / `--dry-run` / `--config`. Exit codes 0/1/2. Atomic write via `os.replace`. |
+| `tests/test_migrate_config.py` | Migration script tests | LIVE (Phase 13): 11 tests covering all transforms, check mode, dry-run, idempotency, comment preservation, missing file, malformed YAML. |
+| `install.sh` / `uninstall.sh` | Installer scripts | LIVE (Phase 13): full rewrites. `install.sh`: legacy dir copy (`~/.config/ytmpd/` -> `~/.config/xmpd/`), config-shape migration via `migrate-config.py`, `ytmpd.service` replacement, legacy symlink cleanup, multi-source install summary, `--check` mode. `uninstall.sh`: `--purge` flag, removes both `xmpd.service` and `ytmpd.service`, cleans all current + legacy symlinks, preserves `~/.config/xmpd/` by default. |
 | `extras/airplay-bridge/mpd_owntone_metadata.py` | OwnTone metadata bridge | LIVE (Phase 12). MPD-idle-driven; emits Shairport-Sync XML+DMAP to OwnTone. `XMPD_PROXY_RE` regex matches `/proxy/(yt|tidal)/<id>` (two capture groups: provider, track_id). `_read_tidal_art_url(track_id)`: read-only SQLite lookup against `~/.config/xmpd/track_mapping.db` (`mode=ro`, 1s timeout). `_resolve_xmpd_proxy`: branches on `yt` vs `tidal` provider; Tidal path reads `art_url` from track_store. `derive_album` returns `f"xmpd-{provider}"`. `TRACK_STORE_DB_PATH` module-level constant (monkeypatching target for tests). Cache key format: `<provider>-<id>.jpg` (old bare-id YT cache files are orphans). `import sqlite3` added. |
 | `extras/airplay-bridge/install.sh` | Bridge installer | |
 | `extras/airplay-bridge/speaker`, `speaker-rofi`, `vol-wrap` | Output-routing helpers | Not touched by this feature. |
+| `pyproject.toml` | Package metadata + deps | Phase 13: `ruamel.yaml>=0.18,<0.19` added to `[project.optional-dependencies] dev`. |
 | `tests/` | pytest suite | Mirrors `xmpd/` layout. **Each phase adds tests for its new modules.** |
 
 ---
@@ -446,7 +449,7 @@ Backward-compat: bare `xmpctl auth` -> `auth yt`, `xmpctl auth --auto` -> `auth 
 ### Runtime layout
 
 - **Config dir**: `~/.config/xmpd/` (created by `config.py` if missing).
-- **Config file**: `~/.config/xmpd/config.yaml`. Phase 11 introduces the new shape; legacy shape is rejected with a clear error pointing at `install.sh` / `docs/MIGRATION.md`.
+- **Config file**: `~/.config/xmpd/config.yaml`. Multi-source shape (post Phase 13 migration). Legacy shape rejected at daemon startup. Backup at `~/.config/xmpd.pre-install-backup/`.
 - **Auth files**:
   - YT Music: `~/.config/xmpd/browser.json` (Firefox cookies via auto-auth) or `oauth.json`.
   - Tidal: `~/.config/xmpd/tidal_session.json` (LIVE Phase 9). 5-key JSON (`token_type`, `access_token`, `refresh_token`, `expiry_time`, `is_pkce`), mode 0600. Written by `save_session`, read by `load_session`. `expiry_time` is ISO-8601 string in the file, parsed to `datetime` on load. NOT in repo.
