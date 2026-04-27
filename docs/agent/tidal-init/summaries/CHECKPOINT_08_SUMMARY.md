@@ -76,7 +76,35 @@ No helpers were required or used by either phase. No helper issues reported.
 
 ## Code Review Results
 
-Pending.
+**Result**: REVIEW PASSED WITH NOTES (3 Minor)
+**Reviewer**: spark-code-reviewer (claude-opus-4-6)
+**Diff range**: `630299f..bdf1005`
+
+### Findings
+
+| Severity | # | File / Line | Description |
+|----------|---|-------------|-------------|
+| Minor | 1 | `xmpd/stream_proxy.py:54` | `resolve_stream_cache_hours` top-level guard `isinstance(top_level, int)` does not exclude `bool` (since `isinstance(True, int)` is True in Python). Validator catches this in `config.py` before this helper runs, so not a runtime bug, but adding `and not isinstance(top_level, bool)` would match the defense-in-depth pattern used elsewhere. |
+| Minor | 2 | `examples/config.yaml:46` | `playlist_format` set to `m3u` (matches code default); PROJECT_PLAN Data Schemas example shows `xspf`. Cosmetic discrepancy with the plan; the example is closer to actual default behavior now. |
+| Minor | 3 | `(procedural)` | Worktree isolation was bypassed in Batch 8 (both phases committed directly to feature/tidal-init instead of using isolated worktree branches). Documented in this checkpoint's Notes section. Not a code issue. |
+
+### Notes (review pass items)
+
+All correctness, security, integration, and cross-cutting properties verified:
+
+- `_DEFAULTS` constant matches PROJECT_PLAN Data Schemas byte-for-byte (yt/tidal sections, playlist_prefix dict, quality_ceiling).
+- `_deep_merge` handles `yt: null` correctly (deletion at config.py:174-177 before merge); preserves byte-identical defaults across calls (fresh `dict()` copies of nested structures).
+- `_detect_legacy_shape` runs BEFORE deep merge; error message includes both "install.sh" and "MIGRATION.md"; install.sh path computed from `Path(__file__).resolve().parent.parent`.
+- Corrupted-YAML fall-through preserved: `try/except yaml.YAMLError` does not swallow `ConfigError`.
+- All validators correct: playlist_prefix dict requirement, enabled-provider entry requirement, empty-string rejection, quality_ceiling enum, browser enum, positive-int + bool exclusion on stream_cache_hours (top-level + per-provider).
+- `cmd_auth_tidal` matches `run_oauth_flow(session_path: Path, fn_print=print)` signature; catches TidalAuthRequired, KeyboardInterrupt, broad Exception; exits 1 on failure.
+- `XMPD_PROXY_RE = r"/proxy/(yt|tidal)/([^/?\s#]+)"` -- two capture groups, correct charclass.
+- `_read_tidal_art_url` uses `mode=ro + uri=True + timeout=1.0`; parameter binding (no SQL injection); swallows all sqlite3.Error.
+- Token leak scan clean (no high-entropy strings, no credential-keyword assignments, no signed URL fragments). Phase 11 success-message uses placeholders.
+- No helper edits (no `scripts/spark-*.sh` changes).
+- Evidence-vs-types: SQLite schema captured in PHASE_12_SUMMARY.md (lines 116-139); query columns `provider`, `track_id`, `art_url` match the captured schema byte-for-byte.
+
+The 3 Minor issues are cosmetic / defense-in-depth and do not block the checkpoint.
 
 ---
 
