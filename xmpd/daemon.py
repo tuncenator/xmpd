@@ -620,11 +620,10 @@ class XMPDaemon:
             elif cmd == "provider-status":
                 response = self._cmd_provider_status()
             elif cmd == "radio":
-                provider, remaining = self._parse_provider_args(args)
-                track_id = remaining[0] if remaining else None
-                # Backward compat: bare `radio <11char>` -> yt
-                if provider is None and track_id and len(track_id) == 11:
-                    provider = "yt"
+                if args:
+                    provider, track_id = self._parse_play_queue_args(args)
+                else:
+                    provider, track_id = None, None
                 response = self._cmd_radio(provider, track_id)
             elif cmd == "search":
                 provider, remaining = self._parse_provider_args(args)
@@ -960,6 +959,7 @@ class XMPDaemon:
                         artist=t.metadata.artist or "Unknown Artist",
                         video_id=t.track_id,
                         duration_seconds=t.metadata.duration_seconds,
+                        provider=t.provider,
                     )
                 )
 
