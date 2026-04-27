@@ -36,19 +36,19 @@ def track_store() -> TrackStore:
 def populated_store(track_store: TrackStore) -> TrackStore:
     """Create a TrackStore with test data."""
     track_store.add_track(
-        video_id="test_video_1",
+        "yt", "test_video_1",
         stream_url="https://youtube.com/stream/test_video_1",
         title="Test Track 1",
         artist="Test Artist 1"
     )
     track_store.add_track(
-        video_id="test_video_2",
+        "yt", "test_video_2",
         stream_url="https://youtube.com/stream/test_video_2",
         title="Test Track 2",
         artist="Test Artist 2"
     )
     track_store.add_track(
-        video_id="no_artist_1",
+        "yt", "no_artist_1",
         stream_url="https://youtube.com/stream/no_artist_1",
         title="Track Without Artist"
     )
@@ -62,7 +62,7 @@ class TestICYProxyServer(AioHTTPTestCase):
         """Create test application."""
         self.track_store = TrackStore(":memory:")
         self.track_store.add_track(
-            video_id="dQw4w9WgXcQ",
+            "yt", "dQw4w9WgXcQ",
             stream_url="https://youtube.com/stream/dQw4w9WgXcQ",
             title="Never Gonna Give You Up",
             artist="Rick Astley"
@@ -261,7 +261,7 @@ async def test_concurrent_connection_limiting() -> None:
     """Test concurrent connection limit enforcement."""
     track_store = TrackStore(":memory:")
     track_store.add_track(
-        video_id="test_video_1",
+        "yt", "test_video_1",
         stream_url="https://youtube.com/stream/test",
         title="Test",
         artist="Artist"
@@ -344,15 +344,15 @@ async def test_handle_proxy_request_with_url_refresh(populated_store: TrackStore
     # Add track with old timestamp (expired)
     old_timestamp = time.time() - (6 * 3600)  # 6 hours ago
     populated_store.add_track(
-        video_id="expired_vid",
+        "yt", "expired_vid",
         stream_url="https://old-url.com/stream",
         title="Expired Track",
         artist="Test Artist"
     )
     # Manually update timestamp in database to simulate old entry
     populated_store.conn.execute(
-        "UPDATE tracks SET updated_at = ? WHERE video_id = ?",
-        (old_timestamp, "expired_vid")
+        "UPDATE tracks SET updated_at = ? WHERE provider = ? AND track_id = ?",
+        (old_timestamp, "yt", "expired_vid")
     )
     populated_store.conn.commit()
 
@@ -375,7 +375,7 @@ async def test_handle_proxy_request_with_url_refresh(populated_store: TrackStore
     mock_resolver.resolve_video_id.assert_called_once_with("expired_vid")
 
     # Verify TrackStore was updated with new URL
-    track = populated_store.get_track("expired_vid")
+    track = populated_store.get_track("yt", "expired_vid")
     assert track["stream_url"] == "https://new-url.com/stream"
 
     # Verify response is HTTP redirect to new URL
@@ -394,14 +394,14 @@ async def test_handle_proxy_request_url_refresh_failure_continues(populated_stor
     # Add track with old timestamp
     old_timestamp = time.time() - (6 * 3600)
     populated_store.add_track(
-        video_id="abcdefgh123",
+        "yt", "abcdefgh123",
         stream_url="https://old-url.com/stream",
         title="Test",
         artist="Artist"
     )
     populated_store.conn.execute(
-        "UPDATE tracks SET updated_at = ? WHERE video_id = ?",
-        (old_timestamp, "abcdefgh123")
+        "UPDATE tracks SET updated_at = ? WHERE provider = ? AND track_id = ?",
+        (old_timestamp, "yt", "abcdefgh123")
     )
     populated_store.conn.commit()
 
@@ -429,7 +429,7 @@ async def test_handle_proxy_request_redirect_success(populated_store: TrackStore
     """Test successful HTTP redirect response."""
     # Add track to store
     populated_store.add_track(
-        video_id="test_video1",
+        "yt", "test_video1",
         stream_url="https://youtube.com/stream/test1",
         title="Test Video 1",
         artist="Test Artist"
