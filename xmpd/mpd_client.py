@@ -29,6 +29,7 @@ class TrackWithMetadata:
     artist: str
     video_id: str
     duration_seconds: float | None = None  # Duration in seconds (for XSPF conversion)
+    provider: str = "yt"  # Provider canonical name ("yt", "tidal") used for proxy URL routing
 
 
 class MPDClient:
@@ -332,7 +333,7 @@ class MPDClient:
                 # Use proxy URL if proxy is enabled, otherwise use direct URL
                 if proxy_config and proxy_config.get("enabled", False):
                     track_url = build_proxy_url(
-                        "yt", track.video_id, proxy_config["host"], proxy_config["port"]
+                        track.provider, track.video_id, proxy_config["host"], proxy_config["port"]
                     )
                 else:
                     track_url = track.url
@@ -375,12 +376,12 @@ class MPDClient:
             if "/" in name or "\\" in name or ".." in name:
                 raise ValueError(f"Invalid playlist name (contains path separators): {name}")
 
-            # Create _youtube subdirectory in music directory
+            # Create _xmpd subdirectory in music directory (shared by all providers)
             music_dir = Path(mpd_music_directory).expanduser()
-            youtube_dir = music_dir / "_youtube"
-            youtube_dir.mkdir(parents=True, exist_ok=True)
+            xspf_dir = music_dir / "_xmpd"
+            xspf_dir.mkdir(parents=True, exist_ok=True)
 
-            playlist_file = youtube_dir / f"{name}.xspf"
+            playlist_file = xspf_dir / f"{name}.xspf"
 
             logger.debug(f"Creating XSPF playlist '{name}' with {len(tracks)} tracks")
 
@@ -390,7 +391,7 @@ class MPDClient:
                 # Use proxy URL if proxy is enabled, otherwise use direct URL
                 if proxy_config and proxy_config.get("enabled", False):
                     track_url = build_proxy_url(
-                        "yt", track.video_id, proxy_config["host"], proxy_config["port"]
+                        track.provider, track.video_id, proxy_config["host"], proxy_config["port"]
                     )
                 else:
                     track_url = track.url

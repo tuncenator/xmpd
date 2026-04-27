@@ -497,7 +497,7 @@ class TestXSPFLikeIndicator:
                 like_indicator=indicator,
             )
 
-        xspf_file = music_dir / "_youtube" / "Test.xspf"
+        xspf_file = music_dir / "_xmpd" / "Test.xspf"
         assert xspf_file.exists()
         return ET.parse(xspf_file)
 

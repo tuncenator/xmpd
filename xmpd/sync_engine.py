@@ -269,15 +269,20 @@ class SyncEngine:
 
         liked_track_ids: set[str] = {t.track_id for t in favorites_tracks}
 
-        # 3. Sync user playlists.
-        for idx, pl in enumerate(playlists, 1):
+        # 3. Sync user playlists. Skip the synthetic favorites entry; step 4 below
+        #    syncs favorites under the configured name. Without this filter, the
+        #    same liked songs were written twice (YT: Liked Music + YT: Liked Songs).
+        regular_playlists = [pl for pl in playlists if not pl.is_favorites]
+        for idx, pl in enumerate(regular_playlists, 1):
             if self.should_stop():
                 logger.info(
-                    f"Provider '{provider_name}': sync cancelled at playlist {idx}/{len(playlists)}"
+                    f"Provider '{provider_name}': sync cancelled at "
+                    f"playlist {idx}/{len(regular_playlists)}"
                 )
                 break
             logger.info(
-                f"Provider '{provider_name}': syncing '{pl.name}' ({idx}/{len(playlists)})"
+                f"Provider '{provider_name}': syncing '{pl.name}' "
+                f"({idx}/{len(regular_playlists)})"
             )
             try:
                 stats = self._sync_provider_playlist(
@@ -406,6 +411,7 @@ class SyncEngine:
                         artist=t.metadata.artist or "",
                         video_id=t.track_id,
                         duration_seconds=t.metadata.duration_seconds,
+                        provider=provider_name,
                     )
                 )
                 tracks_added += 1

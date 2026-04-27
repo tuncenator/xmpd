@@ -22,6 +22,8 @@ Progress Bar Styles:
 Color Codes (for i3blocks):
     YouTube Playing: #f7768e (pink)
     YouTube Paused: #d9677b (deeper pink)
+    Tidal Playing: #73daca (teal)
+    Tidal Paused: #5cb8a9 (deeper teal)
     Local Playing: #7dcfff (cyan)
     Local Paused: #5ab3dd (deeper cyan)
     Stopped: #565f89 (slate)
@@ -121,42 +123,82 @@ def get_mpd_client(host: str = "localhost", port: int = 6601) -> MPDClient | Non
 
 
 def get_track_type(file_path: str) -> str:
-    """Determine if track is a YouTube stream or local file.
+    """Determine track provider from file path.
 
     Args:
         file_path: File path from MPD currentsong (file field).
 
     Returns:
-        'youtube', 'local', or 'unknown'
+        'youtube', 'tidal', 'local', or 'unknown'
     """
-    # Check if it's a YouTube proxy stream
-    if file_path.startswith("http://localhost:6602/proxy/"):
+    proxy_prefix = "http://localhost:6602/proxy/"
+    if file_path.startswith(proxy_prefix):
+        remainder = file_path[len(proxy_prefix):]
+        if remainder.startswith("tidal/"):
+            return "tidal"
         return "youtube"
 
-    # Check xmpd database for additional YouTube tracks
     db_path = Path.home() / ".config" / "xmpd" / "track_mapping.db"
     if not db_path.exists():
-        # No database, assume local if not a proxy URL
         return "local" if not file_path.startswith("http") else "unknown"
 
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # Query for this file path
-        cursor.execute("SELECT COUNT(*) FROM tracks WHERE file = ?", (file_path,))
-        count = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT provider FROM tracks WHERE track_id = ? LIMIT 1",
+            (file_path,),
+        )
+        row = cursor.fetchone()
         conn.close()
 
-        if count > 0:
+        if row:
+            provider = row[0]
+            if provider == "tidal":
+                return "tidal"
             return "youtube"
 
-        # Not in database - assume local
         return "local" if not file_path.startswith("http") else "unknown"
 
     except (sqlite3.Error, OSError):
-        # Database error - fall back to heuristic
         return "local" if not file_path.startswith("http") else "unknown"
+
+
+def classify_audio_quality(
+    audio_str: str, bitrate: str, track_type: str, compact: bool = False
+) -> str | None:
+    """Return a short quality badge for streaming tracks, else None.
+
+    Uses MPD's 'audio' field (samplerate:bits:channels) and 'bitrate'.
+    Only shows badges for streaming providers (youtube, tidal), not local files.
+    Compact mode returns shorter labels (Lo/CD/HR).
+    """
+    if track_type == "local" or not audio_str:
+        return None
+
+    try:
+        parts = audio_str.split(":")
+        if len(parts) < 2:
+            return None
+        sample_rate = int(parts[0])
+        bit_fmt = parts[1]
+    except (ValueError, IndexError):
+        return None
+
+    if bit_fmt == "f":
+        return "Lo" if compact else "Lossy"
+
+    try:
+        bit_depth = int(bit_fmt)
+    except ValueError:
+        return None
+
+    if bit_depth >= 24 or sample_rate > 48000:
+        return "HR" if compact else "HiRes"
+    if bit_depth == 16:
+        return "CD" if compact else "HiFi"
+    return None
 
 
 def format_time(seconds: int | str) -> str:
@@ -791,6 +833,14 @@ Examples:
         ),
     )
 
+    display_group.add_argument(
+        "--show-quality",
+        action="store_true",
+        default=os.environ.get("XMPD_STATUS_SHOW_QUALITY", "true").lower()
+        in ("true", "1", "yes"),
+        help="Show audio quality badge when hi-res (default: true)",
+    )
+
     # Playlist context options
     playlist_group = parser.add_argument_group("Playlist Context Options")
     playlist_group.add_argument(
@@ -826,6 +876,18 @@ Examples:
         type=validate_color,
         default=os.environ.get("XMPD_STATUS_COLOR_YOUTUBE_PAUSED", "#d9677b"),
         help="Color for YouTube paused (default: #d9677b)",
+    )
+    color_group.add_argument(
+        "--color-tidal-playing",
+        type=validate_color,
+        default=os.environ.get("XMPD_STATUS_COLOR_TIDAL_PLAYING", "#73daca"),
+        help="Color for Tidal playing (default: #73daca)",
+    )
+    color_group.add_argument(
+        "--color-tidal-paused",
+        type=validate_color,
+        default=os.environ.get("XMPD_STATUS_COLOR_TIDAL_PAUSED", "#5cb8a9"),
+        help="Color for Tidal paused (default: #5cb8a9)",
     )
     color_group.add_argument(
         "--color-local-playing",
@@ -1039,12 +1101,16 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
             icon = args.icon_playing
             if track_type == "youtube":
                 color = args.color_youtube_playing
+            elif track_type == "tidal":
+                color = args.color_tidal_playing
             else:
                 color = args.color_local_playing
         elif state == "pause":
             icon = args.icon_paused
             if track_type == "youtube":
                 color = args.color_youtube_paused
+            elif track_type == "tidal":
+                color = args.color_tidal_paused
             else:
                 color = args.color_local_paused
         else:
@@ -1111,7 +1177,17 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
         else:
             # Default format logic
             if compact_mode:
-                output = f"{icon} {artist} - {title}"
+                quality_suffix = ""
+                if args.show_quality:
+                    quality = classify_audio_quality(
+                        status.get("audio", ""),
+                        status.get("bitrate", ""),
+                        track_type,
+                        compact=True,
+                    )
+                    if quality:
+                        quality_suffix = f" [{quality}]"
+                output = f"{icon} {artist} - {title}{quality_suffix}"
             else:
                 # Build progress bar if enabled
                 progress_bar_str = ""
@@ -1135,7 +1211,6 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                 # Build context-aware suffix
                 context_suffix = ""
                 if sync_status == "unresolved":
-                    # YouTube track not yet resolved
                     context_suffix = " [Resolving...]"
                 elif (
                     args.show_position
@@ -1144,8 +1219,17 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                 ):
                     pos = playlist_ctx["current_pos"]
                     total = playlist_ctx["total"]
-                    # Show position for all tracks when enabled
                     context_suffix = f" [{pos}/{total}]"
+
+                if args.show_quality:
+                    quality = classify_audio_quality(
+                        status.get("audio", ""),
+                        status.get("bitrate", ""),
+                        track_type,
+                        compact=compact_mode,
+                    )
+                    if quality:
+                        context_suffix += f" [{quality}]"
 
                 # Use adaptive truncation that protects timestamps
                 output = adaptive_truncate_status(
@@ -1433,12 +1517,16 @@ def main() -> None:
             icon = args.icon_playing
             if track_type == "youtube":
                 color = args.color_youtube_playing
+            elif track_type == "tidal":
+                color = args.color_tidal_playing
             else:
                 color = args.color_local_playing
         elif state == "pause":
             icon = args.icon_paused
             if track_type == "youtube":
                 color = args.color_youtube_paused
+            elif track_type == "tidal":
+                color = args.color_tidal_paused
             else:
                 color = args.color_local_paused
         else:
@@ -1503,8 +1591,17 @@ def main() -> None:
 
         # Build output based on mode
         elif compact_mode:
-            # Compact mode: just icon, artist, and title
-            output = f"{icon} {artist} - {title}"
+            quality_suffix = ""
+            if args.show_quality:
+                quality = classify_audio_quality(
+                    status.get("audio", ""),
+                    status.get("bitrate", ""),
+                    track_type,
+                    compact=True,
+                )
+                if quality:
+                    quality_suffix = f" [{quality}]"
+            output = f"{icon} {artist} - {title}{quality_suffix}"
         else:
             # Build progress bar if enabled
             progress_bar_str = ""
@@ -1534,7 +1631,6 @@ def main() -> None:
             # Build context-aware suffix
             context_suffix = ""
             if sync_status == "unresolved":
-                # YouTube track not yet resolved
                 context_suffix = " [Resolving...]"
             elif (
                 args.show_position
@@ -1543,8 +1639,17 @@ def main() -> None:
             ):
                 pos = playlist_ctx["current_pos"]
                 total = playlist_ctx["total"]
-                # Show position for all tracks when enabled
                 context_suffix = f" [{pos}/{total}]"
+
+            if args.show_quality:
+                quality = classify_audio_quality(
+                    status.get("audio", ""),
+                    status.get("bitrate", ""),
+                    track_type,
+                    compact=compact_mode,
+                )
+                if quality:
+                    context_suffix += f" [{quality}]"
 
             # Use adaptive truncation that protects timestamps
             output = adaptive_truncate_status(
