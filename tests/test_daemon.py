@@ -1402,7 +1402,7 @@ class TestDaemonRadioSearchCommands:
 
         # Verify proxy URL was used (since proxy is enabled)
         add_call = daemon.mpd_client._client.add.call_args[0][0]
-        assert "http://localhost:6602/proxy/abc12345678" == add_call
+        assert "http://localhost:6602/proxy/yt/abc12345678" == add_call
 
     def test_cmd_play_invalid_video_id(
         self,
@@ -1500,7 +1500,7 @@ class TestDaemonRadioSearchCommands:
 
         # Verify proxy URL was used (since proxy is enabled)
         add_call = daemon.mpd_client._client.add.call_args[0][0]
-        assert "http://localhost:6602/proxy/def12345678" == add_call
+        assert "http://localhost:6602/proxy/yt/def12345678" == add_call
 
     def test_get_track_info(
         self,
