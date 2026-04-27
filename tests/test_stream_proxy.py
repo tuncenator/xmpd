@@ -443,14 +443,14 @@ async def test_concurrency_503_when_limit_exceeded(track_store):
         max_concurrent_streams=1,
         stream_cache_hours={"yt": 5},
     )
-    # Pin active connections to the cap before the request
-    proxy._active_connections = 1
+    # Exhaust the resolution semaphore so next request gets 503
+    await proxy._resolution_semaphore.acquire()
 
     async with TestClient(TestServer(proxy.app)) as client:
         resp = await client.get("/proxy/yt/dQw4w9WgXcQ")
         assert resp.status == 503
 
-    proxy._active_connections = 0
+    proxy._resolution_semaphore.release()
 
 
 # ---------------------------------------------------------------------------
