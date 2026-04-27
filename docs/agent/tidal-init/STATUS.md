@@ -47,7 +47,7 @@
 
 - **Conductor Mode**: enabled
 - **Total Batches**: 9
-- **Current Batch**: 9
+- **Current Batch**: 9 (all done)
 - **Pacing**: auto-refresh
 - **Batches Per Session**: 5
 - **Execution Plan**: docs/agent/tidal-init/EXECUTION_PLAN.md
@@ -55,16 +55,16 @@
 ---
 
 **Last Updated:** 2026-04-27
-**Current Phase:** 13 of 13
-**Phase Name:** Install / migration / docs / final integration
-**Progress:** 92% (12/13 phases complete)
+**Current Phase:** Complete
+**Phase Name:** All phases complete
+**Progress:** 100% (13/13 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[############-] 92% (12/13)
+[#############] 100% (13/13)
 ```
 
 ---
@@ -85,20 +85,23 @@
 | 10 | TidalProvider methods (full Protocol coverage) | `[Complete]` |
 | 11 | Tidal CLI + per-provider config + stream-proxy wiring | `[Complete]` |
 | 12 | AirPlay bridge: Tidal album art | `[Complete]` |
-| 13 | Install / migration / docs / final integration | `[Current]` |
+| 13 | Install / migration / docs / final integration | `[Complete]` |
 
 ---
 
 ## Instructions for Agents
 
-1. Read `phase_plans/PHASE_13.md` for detailed requirements for Phase 13
-2. Read most recent phase summaries (`summaries/PHASE_12_SUMMARY.md`, `summaries/PHASE_11_SUMMARY.md`)
-3. Complete the phase following the build-verify-commit cycle
-4. Create `summaries/PHASE_13_SUMMARY.md`
-5. Update this file when complete
+Feature complete. To merge to main:
 
-**Phase plans:** See `phase_plans/PHASE_XX.md`
-**Project overview:** See `PROJECT_PLAN.md`
+```bash
+git checkout main && git merge --no-ff feature/tidal-init && git push origin main
+```
+
+Review:
+- Status: docs/agent/tidal-init/STATUS.md (this file)
+- Final phase summary: docs/agent/tidal-init/summaries/PHASE_13_SUMMARY.md
+- Final checkpoint: docs/agent/tidal-init/summaries/CHECKPOINT_09_SUMMARY.md
+- Plan: docs/agent/tidal-init/EXECUTION_PLAN.md
 
 ---
 
