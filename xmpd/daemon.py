@@ -198,6 +198,11 @@ class XMPDaemon:
         self._proxy_loop: asyncio.AbstractEventLoop | None = None
         self._proxy_shutdown_event: asyncio.Event | None = None
 
+        # Liked IDs cache for search-json like-state population
+        self._liked_ids_cache: set[str] = set()
+        self._liked_ids_cache_time: float = 0.0
+        self._liked_ids_cache_ttl: float = 300.0  # 5 minutes
+
         # History reporting
         self._history_reporter: HistoryReporter | None = None
         self._history_thread: threading.Thread | None = None
@@ -629,6 +634,9 @@ class XMPDaemon:
                 provider, remaining = self._parse_provider_args(args)
                 query = " ".join(remaining) if remaining else None
                 response = self._cmd_search(query, provider=provider)
+            elif cmd == "search-json":
+                # search-json [--provider yt|all] [--limit N] QUERY
+                response = self._cmd_search_json(parts[1:])
             elif cmd == "play":
                 provider, track_id = self._parse_play_queue_args(args)
                 response = self._cmd_play(provider, track_id)
@@ -1004,6 +1012,103 @@ class XMPDaemon:
         except Exception as e:
             logger.error("Radio generation failed: %s", e)
             return {"success": False, "error": f"Radio generation failed: {e}"}
+
+    def _get_liked_ids(self) -> set[str]:
+        """Return the cached set of liked video IDs, refreshing if stale.
+
+        Returns:
+            Set of liked video IDs. Empty set if fetch fails.
+        """
+        now = time.time()
+        if now - self._liked_ids_cache_time < self._liked_ids_cache_ttl:
+            return self._liked_ids_cache
+
+        try:
+            liked_tracks = self.ytmusic_client.get_liked_songs()
+            self._liked_ids_cache = {t.video_id for t in liked_tracks} if liked_tracks else set()
+            self._liked_ids_cache_time = now
+            logger.debug(f"Refreshed liked IDs cache: {len(self._liked_ids_cache)} tracks")
+        except Exception as e:
+            logger.warning(f"Failed to refresh liked IDs cache: {e}")
+            # Keep stale cache rather than returning empty on transient errors,
+            # but only if we have something cached already.
+            if not self._liked_ids_cache_time:
+                self._liked_ids_cache = set()
+
+        return self._liked_ids_cache
+
+    def _cmd_search_json(self, args: list[str]) -> dict[str, Any]:
+        """Handle 'search-json' command - return structured JSON search results.
+
+        Syntax: search-json [--provider yt|all] [--limit N] QUERY
+
+        Args:
+            args: Remaining command tokens after 'search-json'.
+
+        Returns:
+            Response dict with 'success' and 'results' (list of track dicts).
+            Each track dict has: provider, track_id, title, artist, album,
+            duration, duration_seconds, quality, liked.
+        """
+        # Parse args: consume --provider and --limit flags, rest is query
+        provider_filter = "all"
+        limit = 25
+        remaining: list[str] = []
+        i = 0
+        while i < len(args):
+            if args[i] == "--provider" and i + 1 < len(args):
+                provider_filter = args[i + 1]
+                i += 2
+            elif args[i] == "--limit" and i + 1 < len(args):
+                try:
+                    limit = int(args[i + 1])
+                except ValueError:
+                    pass
+                i += 2
+            else:
+                remaining.append(args[i])
+                i += 1
+
+        query = " ".join(remaining).strip()
+        logger.info(
+            f"search-json command: query={query!r}, provider={provider_filter}, limit={limit}"
+        )
+
+        if not query:
+            return {"success": False, "error": "Empty search query"}
+
+        try:
+            raw_results = self.ytmusic_client.search(query, limit=limit)
+        except Exception as e:
+            logger.error(f"search-json: search failed: {e}")
+            return {"success": False, "error": f"Search failed: {str(e)}"}
+
+        if not raw_results:
+            return {"success": True, "results": []}
+
+        # Get liked IDs for like-state population
+        liked_ids = self._get_liked_ids()
+
+        results = []
+        for track in raw_results:
+            video_id = track.get("video_id", "")
+            duration_secs = track.get("duration", 0) or 0
+            results.append(
+                {
+                    "provider": "yt",
+                    "track_id": video_id,
+                    "title": track.get("title", "Unknown"),
+                    "artist": track.get("artist", "Unknown Artist"),
+                    "album": track.get("album") or None,
+                    "duration": self._format_duration(int(duration_secs)),
+                    "duration_seconds": int(duration_secs),
+                    "quality": "Lo",
+                    "liked": video_id in liked_ids if video_id else None,
+                }
+            )
+
+        logger.info(f"search-json: returning {len(results)} results for {query!r}")
+        return {"success": True, "results": results}
 
     def _cmd_play(self, provider: str, track_id: str | None) -> dict[str, Any]:
         """Handle 'play' command - play track immediately.

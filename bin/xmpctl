@@ -484,6 +484,59 @@ def cmd_search(query: str | None = None, provider: str | None = None) -> None:
         sys.exit(1)
 
 
+def cmd_search_json(args: list[str]) -> None:
+    """Output search results as NDJSON (one JSON object per line) for fzf consumption.
+
+    Usage: search-json [--provider yt|all] [--limit N] QUERY
+
+    Args:
+        args: Arguments after 'search-json' from sys.argv.
+    """
+    # Extract query and flags from args
+    provider = "all"
+    limit = 25
+    query_parts: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--provider" and i + 1 < len(args):
+            provider = args[i + 1]
+            i += 2
+        elif args[i] == "--limit" and i + 1 < len(args):
+            try:
+                limit = int(args[i + 1])
+            except ValueError:
+                pass
+            i += 2
+        else:
+            query_parts.append(args[i])
+            i += 1
+
+    query = " ".join(query_parts).strip()
+    if not query:
+        print("Error: search-json requires a query", file=sys.stderr)
+        print("Usage: xmpctl search-json [--provider yt|all] [--limit N] QUERY", file=sys.stderr)
+        sys.exit(1)
+
+    # Build command string for daemon
+    cmd_parts = ["search-json"]
+    if provider != "all":
+        cmd_parts += ["--provider", provider]
+    cmd_parts += ["--limit", str(limit)]
+    cmd_parts.append(query)
+    command = " ".join(cmd_parts)
+
+    result = send_command(command)
+
+    if not result.get("success"):
+        error = result.get("error", "Unknown error")
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    tracks = result.get("results", [])
+    for track in tracks:
+        print(json.dumps(track))
+
+
 def cmd_radio(apply: bool = False, provider: str | None = None) -> None:
     """Generate radio playlist from currently playing track.
 
@@ -844,6 +897,9 @@ def show_help() -> None:
   xmpctl search [query]          Search across providers (interactive if no query)
                                   --provider <name>  Restrict to one provider
                                   --provider all     Search all providers (default)
+  xmpctl search-json QUERY       Search and output NDJSON (for fzf integration)
+                                  --provider yt|all  Restrict provider (default: all)
+                                  --limit N          Max results (default: 25)
   xmpctl radio [--apply]         Generate radio from current track (provider inferred)
                                   --provider <name>  Force provider
                                   --apply            Load and play immediately
@@ -904,6 +960,8 @@ def main() -> NoReturn:
             sys.exit(1)
         query = " ".join(remaining) if remaining else None
         cmd_search(query=query, provider=provider)
+    elif command == "search-json":
+        cmd_search_json(args)
     elif command == "like":
         cmd_like()
     elif command == "dislike":
