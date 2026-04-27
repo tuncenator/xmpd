@@ -1,0 +1,86 @@
+"""Unit tests for the Phase 9 TidalProvider scaffold.
+
+Verifies the scaffold-only methods (name, is_enabled, is_authenticated,
+_ensure_session). Verifies the 12 Phase-10 stub methods raise
+NotImplementedError. Verifies build_registry constructs TidalProvider when
+the tidal config block is enabled.
+"""
+
+from pathlib import Path
+
+import pytest
+
+from xmpd.exceptions import TidalAuthRequired
+from xmpd.providers import build_registry
+from xmpd.providers.tidal import TidalProvider
+
+
+def test_tidal_provider_name() -> None:
+    assert TidalProvider({}).name == "tidal"
+
+
+def test_tidal_provider_is_enabled_true() -> None:
+    assert TidalProvider({"enabled": True}).is_enabled() is True
+
+
+def test_tidal_provider_is_enabled_false() -> None:
+    assert TidalProvider({}).is_enabled() is False
+    assert TidalProvider({"enabled": False}).is_enabled() is False
+
+
+def test_tidal_provider_is_authenticated_false_when_no_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(TidalProvider, "SESSION_PATH", tmp_path / "nonexistent.json")
+    p = TidalProvider({"enabled": True})
+    ok, msg = p.is_authenticated()
+    assert ok is False
+    assert msg  # non-empty error message
+
+
+def test_tidal_provider_ensure_session_raises_when_no_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(TidalProvider, "SESSION_PATH", tmp_path / "nonexistent.json")
+    p = TidalProvider({"enabled": True})
+    with pytest.raises(TidalAuthRequired):
+        p._ensure_session()
+
+
+@pytest.mark.parametrize(
+    "method_name, args",
+    [
+        ("list_playlists", ()),
+        ("get_playlist_tracks", ("p1",)),
+        ("get_favorites", ()),
+        ("resolve_stream", ("12345",)),
+        ("get_track_metadata", ("12345",)),
+        ("search", ("query",)),
+        ("get_radio", ("12345",)),
+        ("like", ("12345",)),
+        ("dislike", ("12345",)),
+        ("unlike", ("12345",)),
+        ("get_like_state", ("12345",)),
+        ("report_play", ("12345", 60)),
+    ],
+)
+def test_tidal_provider_phase10_stubs_raise(method_name: str, args: tuple) -> None:  # type: ignore[type-arg]
+    p = TidalProvider({"enabled": True})
+    method = getattr(p, method_name)
+    with pytest.raises(NotImplementedError) as excinfo:
+        method(*args)
+    assert "Phase 10" in str(excinfo.value)
+
+
+def test_build_registry_constructs_tidal_when_enabled() -> None:
+    config = {"tidal": {"enabled": True}}
+    registry = build_registry(config)
+    assert "tidal" in registry
+    assert isinstance(registry["tidal"], TidalProvider)
+    assert registry["tidal"].name == "tidal"
+
+
+def test_build_registry_skips_tidal_when_disabled() -> None:
+    config = {"tidal": {"enabled": False}}
+    registry = build_registry(config)
+    assert "tidal" not in registry

@@ -49,9 +49,10 @@ def build_registry(config: dict[str, Any]) -> dict[str, Provider]:
 
         registry["yt"] = YTMusicProvider(config["yt"])  # type: ignore[assignment]  # Phase 3 completes Provider Protocol surface
 
-    # if "tidal" in enabled:    # Phase 9 enables this branch
-    #     from xmpd.providers.tidal import TidalProvider
-    #     registry["tidal"] = TidalProvider(config["tidal"])
+    if "tidal" in enabled:
+        from xmpd.providers.tidal import TidalProvider
+
+        registry["tidal"] = TidalProvider(config["tidal"])  # type: ignore[assignment]
 
     logger.info("Provider registry built: %s", sorted(registry.keys()))
     return registry

@@ -87,3 +87,14 @@ class CookieExtractionError(XMPDError):
     """Raised when browser cookie extraction fails."""
 
     pass
+
+
+class TidalAuthRequired(XMPDError):  # noqa: N818
+    """Raised when the Tidal session cannot be loaded or has expired without a refresh path.
+
+    The daemon catches this at the provider boundary and converts it to a
+    warn-and-skip per the spec; the CLI surfaces it to the user with a hint
+    to run ``xmpctl auth tidal``.
+    """
+
+    pass
