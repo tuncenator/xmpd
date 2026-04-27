@@ -72,7 +72,26 @@ No helpers were listed for Phase 6. No phase summary reported helper issues. No 
 
 ## Code Review Results
 
-> Pending code review.
+**Result**: REVIEW PASSED WITH NOTES (1 Important + 3 Minor)
+**Reviewer**: spark-code-reviewer (claude-opus-4-6)
+**Diff range**: `1ddb3e6..bccb8b2`
+
+### Findings
+
+| Severity | Count | Notes |
+|----------|-------|-------|
+| Critical | 0 | -- |
+| Important | 1 | CODEBASE_CONTEXT.md documented `DEFAULT_FAVORITES_NAMES` for tidal as `"My Collection"` while the actual code value is `"Favorites"`. Fixed in this update commit. |
+| Minor | 3 | (1) `get_sync_preview` semantics changed (returns prefixed names) -- intentional per plan, no non-test callers exist yet, Phase 8 must be aware; (2) Whether "Favorites" or "My Collection" is the right Tidal-native default -- product decision for Phase 9/10 to revisit; (3) `tests/test_like_indicator.py::_make_engine` redundant inline `from unittest.mock import MagicMock` (already module-level) -- harmless. |
+
+### Notes
+
+- All correctness properties verified: per-provider failure isolation present at both layers (provider and playlist), fetch-once invariant for favorites holds, TrackStore compound-key API used everywhere with `provider=` keyword, both required `# TODO(xmpd): rename` comments present.
+- Evidence-vs-types: all four captured samples (Provider methods, TrackStore.add_track, build_proxy_url, MPDClient.create_or_replace_playlist) match the implementation byte-for-byte.
+- Security: no hardcoded secrets, no helper edits, no untagged infrastructure values.
+- Behavioral parity (YT-only): preserved -- `liked_video_ids` unconditionally populated is benign because MPDClient gates on `like_indicator.enabled`, `proxy_config or None` chain preserves None semantics, ruff/mypy clean.
+
+The Important issue (CODEBASE_CONTEXT.md doc bug) was a documentation-only inconsistency; the actual code is correct (`"Favorites"`). Fixed in the same commit as this review-results record.
 
 ---
 
@@ -89,7 +108,7 @@ No fixes were needed. All verification criteria passed on first run.
 - `tests/test_sync_engine.py`: 19 tests rewritten for Phase 6 multi-provider API (was single-source YT)
 - `tests/test_like_indicator.py::TestSyncEngineLikeIndicator`: ported to Phase 6 API
 - `tests/integration/test_full_workflow.py`: `TestFullSyncWorkflow` and `TestPerformanceScenarios` ported to mock Provider registry
-- `xmpd/sync_engine.py::DEFAULT_FAVORITES_NAMES`: module-level constant (`{"yt": "Liked Songs", "tidal": "My Collection"}`)
+- `xmpd/sync_engine.py::DEFAULT_FAVORITES_NAMES`: module-level constant (`{"yt": "Liked Songs", "tidal": "Favorites"}`)
 - `xmpd/sync_engine.py::_sync_one_provider`: per-provider sync with failure isolation
 - `xmpd/sync_engine.py::_sync_provider_playlist`: per-playlist sync helper
 

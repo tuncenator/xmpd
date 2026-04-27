@@ -171,7 +171,7 @@ Lightweight helper, no aiohttp dependency. Used by `mpd_client.py` (2 call sites
 ### SyncEngine (`xmpd/sync_engine.py`) -- LIVE Phase 6
 
 ```python
-DEFAULT_FAVORITES_NAMES: dict[str, str]  # {"yt": "Liked Songs", "tidal": "My Collection"}
+DEFAULT_FAVORITES_NAMES: dict[str, str]  # {"yt": "Liked Songs", "tidal": "Favorites"}
 
 class SyncEngine:
     def __init__(self,
