@@ -5,8 +5,13 @@
 # Results are colored by provider (Tidal teal, YouTube pink) with quality badges
 # and liked indicators.
 #
-# On enter, prints "provider\ttrack_id" of the selected track to stdout.
-# Phase 4 will add action keybindings (play, queue, radio, multi-select).
+# Keybindings:
+#   enter      Play selected track (closes search)
+#   ctrl-q     Queue selected track (stays open)
+#   ctrl-r     Start radio from selected track (closes search)
+#   tab        Toggle multi-select on current line
+#   ctrl-a     Queue all selected tracks (closes search)
+#   ctrl-p     Clear playlist and play all selected (closes search)
 #
 # Requires: fzf, xmpctl (in PATH or sibling in bin/)
 
@@ -45,16 +50,27 @@ RESET=$'\033[0m'
 DIM=$'\033[2m'
 BOLD=$'\033[1m'
 
-HEADER="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  ${DIM}| Type to search${RESET}"
+LEGEND="${DIM}enter${RESET}=play  ${DIM}ctrl-q${RESET}=queue  ${DIM}ctrl-r${RESET}=radio  ${DIM}tab${RESET}=select  ${DIM}ctrl-a${RESET}=queue-all  ${DIM}ctrl-p${RESET}=play-all"
+HEADER="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  ${DIM}| Type to search${RESET}
+${LEGEND}"
 
 # Build the reload command. fzf replaces {q} with the current query.
 # sleep 0.15 provides basic debounce since fzf fires on every keystroke.
 RELOAD_CMD="sleep 0.15; ${XMPCTL} search-json --format fzf {q}"
 
-# Launch fzf
-SELECTED=$(
+# Launch fzf with keybindings and multi-select support.
+#
+# --expect captures which key triggered exit. fzf then prints:
+#   line 1: key name (ctrl-a, ctrl-p, or empty for enter/ctrl-q/ctrl-r)
+#   line 2+: selected lines
+#
+# Single-track actions (enter, ctrl-q, ctrl-r) use execute/execute-silent
+# and abort fzf directly; they never reach the --expect output path.
+# Multi-select actions (ctrl-a, ctrl-p) use accept and are handled below.
+FZF_OUTPUT=$(
     fzf --ansi \
         --disabled \
+        --multi \
         --delimiter=$'\t' \
         --with-nth=3.. \
         --bind "change:reload:${RELOAD_CMD}" \
@@ -67,12 +83,50 @@ SELECTED=$(
         --margin=1,2 \
         --no-scrollbar \
         --color='bg+:#1a1b26,pointer:#f7768e' \
+        --expect='ctrl-a,ctrl-p' \
+        --bind "enter:execute-silent(${XMPCTL} play {1} {2})+abort" \
+        --bind "ctrl-q:execute-silent(${XMPCTL} queue {1} {2})" \
+        --bind "ctrl-r:execute-silent(${XMPCTL} radio --provider {1} --track-id {2} --apply)+abort" \
     < /dev/null 2>/dev/null
 ) || exit 0
 
-# Extract provider and track_id from selection (first two tab-separated fields)
-if [[ -n "${SELECTED}" ]]; then
-    PROVIDER=$(echo "${SELECTED}" | cut -f1)
-    TRACK_ID=$(echo "${SELECTED}" | cut -f2)
-    echo "${PROVIDER}	${TRACK_ID}"
+# Parse fzf --expect output.
+# First line is the triggering key (ctrl-a or ctrl-p); remaining lines are selected tracks.
+TRIGGER_KEY=$(echo "${FZF_OUTPUT}" | head -n1)
+SELECTED_LINES=$(echo "${FZF_OUTPUT}" | tail -n+2)
+
+if [[ -z "${SELECTED_LINES}" ]]; then
+    exit 0
+fi
+
+if [[ "${TRIGGER_KEY}" == "ctrl-a" ]]; then
+    # Queue all selected tracks
+    while IFS= read -r line; do
+        [[ -z "${line}" ]] && continue
+        PROVIDER=$(echo "${line}" | cut -f1)
+        TRACK_ID=$(echo "${line}" | cut -f2)
+        "${XMPCTL}" queue "${PROVIDER}" "${TRACK_ID}"
+    done <<< "${SELECTED_LINES}"
+
+elif [[ "${TRIGGER_KEY}" == "ctrl-p" ]]; then
+    # Clear playlist then add all selected tracks, then play
+    MPC_CMD=("mpc")
+    # Read MPD connection from xmpctl config path if available
+    CONFIG_FILE="${HOME}/.config/xmpd/config.yaml"
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        SOCKET_VAL=$(grep -E '^\s*mpd_socket_path\s*:' "${CONFIG_FILE}" 2>/dev/null \
+                     | head -n1 | sed 's/.*:\s*//' | tr -d '"'"'" | tr -d ' ')
+        if [[ -n "${SOCKET_VAL}" ]]; then
+            MPC_CMD=("mpc" "-h" "${SOCKET_VAL}")
+        fi
+    fi
+
+    "${MPC_CMD[@]}" clear
+    while IFS= read -r line; do
+        [[ -z "${line}" ]] && continue
+        PROVIDER=$(echo "${line}" | cut -f1)
+        TRACK_ID=$(echo "${line}" | cut -f2)
+        "${XMPCTL}" queue "${PROVIDER}" "${TRACK_ID}"
+    done <<< "${SELECTED_LINES}"
+    "${MPC_CMD[@]}" play
 fi

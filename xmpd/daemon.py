@@ -626,7 +626,9 @@ class XMPDaemon:
                 response = self._cmd_provider_status()
             elif cmd == "radio":
                 if args:
-                    provider, track_id = self._parse_play_queue_args(args)
+                    provider, remaining_args = self._parse_provider_args(args)
+                    # Positional track_id is the first remaining arg (if any)
+                    track_id = remaining_args[0] if remaining_args else None
                 else:
                     provider, track_id = None, None
                 response = self._cmd_radio(provider, track_id)

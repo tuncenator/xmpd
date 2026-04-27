@@ -611,17 +611,61 @@ def cmd_search_json(args: list[str]) -> None:
             print(json.dumps(track))
 
 
-def cmd_radio(apply: bool = False, provider: str | None = None) -> None:
-    """Generate radio playlist from currently playing track.
+def cmd_play(provider: str, track_id: str) -> None:
+    """Play a track immediately by clearing queue and starting playback.
+
+    Args:
+        provider: Provider canonical name (e.g. 'yt', 'tidal').
+        track_id: Track identifier.
+    """
+    result = send_command(f"play {provider} {track_id}")
+    if result.get("success"):
+        message = result.get("message", "Playing...")
+        print(colorize(f"OK {message}", "green"))
+    else:
+        error = result.get("error", "Failed to play")
+        print(colorize(f"ERROR {error}", "red"), file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_queue(provider: str, track_id: str) -> None:
+    """Add a track to the MPD queue.
+
+    Args:
+        provider: Provider canonical name (e.g. 'yt', 'tidal').
+        track_id: Track identifier.
+    """
+    result = send_command(f"queue {provider} {track_id}")
+    if result.get("success"):
+        message = result.get("message", "Added to queue.")
+        print(colorize(f"OK {message}", "green"))
+    else:
+        error = result.get("error", "Failed to add to queue")
+        print(colorize(f"ERROR {error}", "red"), file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_radio(
+    apply: bool = False,
+    provider: str | None = None,
+    track_id: str | None = None,
+) -> None:
+    """Generate radio playlist from currently playing track (or a given track).
 
     Args:
         apply: If True, automatically clear playlist, load radio, and play.
         provider: Force provider instead of inferring from current track.
+        track_id: Seed track ID. If None, infers from currently playing track.
     """
-    print("Generating radio playlist from current track...")
+    if track_id:
+        print(f"Generating radio playlist from track {track_id}...")
+    else:
+        print("Generating radio playlist from current track...")
     cmd = "radio"
     if provider:
         cmd += f" --provider {provider}"
+    if track_id:
+        cmd += f" {track_id}"
     result = send_command(cmd)
 
     if result.get("success"):
@@ -968,6 +1012,9 @@ def show_help() -> None:
   xmpctl auth yt --manual        Manual ytmusicapi browser-headers setup
   xmpctl auth tidal              Run Tidal OAuth device flow; persists token
 
+  xmpctl play <provider> <id>    Play track immediately (clear queue, start playback)
+  xmpctl queue <provider> <id>   Add track to MPD queue
+
   xmpctl search [query]          Search across providers (interactive if no query)
                                   --provider <name>  Restrict to one provider
                                   --provider all     Search all providers (default)
@@ -977,6 +1024,7 @@ def show_help() -> None:
                                   --format fzf       ANSI-colored tab-separated fzf lines
   xmpctl radio [--apply]         Generate radio from current track (provider inferred)
                                   --provider <name>  Force provider
+                                  --track-id <id>    Seed track ID (default: current track)
                                   --apply            Load and play immediately
   xmpctl like                    Toggle like for current track (provider inferred)
   xmpctl dislike                 Toggle dislike for current track (provider inferred)
@@ -1020,11 +1068,35 @@ def main() -> NoReturn:
         cmd_status()
     elif command == "list-playlists" or command == "list":
         cmd_list_playlists()
+    elif command == "play":
+        if len(args) < 2:
+            print("Error: play requires <provider> <track_id>", file=sys.stderr)
+            sys.exit(1)
+        cmd_play(args[0], args[1])
+    elif command == "queue":
+        if len(args) < 2:
+            print("Error: queue requires <provider> <track_id>", file=sys.stderr)
+            sys.exit(1)
+        cmd_queue(args[0], args[1])
     elif command == "radio":
         provider, remaining = parse_provider_flag(args)
         apply = "--apply" in remaining
         remaining = [a for a in remaining if a != "--apply"]
-        cmd_radio(apply=apply, provider=provider)
+        # Parse --track-id flag
+        track_id: str | None = None
+        filtered: list[str] = []
+        it = iter(remaining)
+        for tok in it:
+            if tok == "--track-id":
+                track_id = next(it, None)
+            elif tok.startswith("--track-id="):
+                track_id = tok.split("=", 1)[1]
+            else:
+                filtered.append(tok)
+        # Positional track_id if no --track-id flag
+        if track_id is None and filtered:
+            track_id = filtered[0]
+        cmd_radio(apply=apply, provider=provider, track_id=track_id)
     elif command == "search":
         provider, remaining = parse_provider_flag(args)
         if provider is not None and provider not in ("yt", "tidal", "all"):
