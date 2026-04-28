@@ -75,7 +75,16 @@ Note: Full `pytest tests/` hangs at collection (pre-existing issue unrelated to 
 
 ## Code Review Results
 
-> Pending -- code review runs after checkpoint passes.
+**Result**: PASSED WITH NOTES
+
+**Issues found (minor, non-blocking):**
+
+| # | Severity | File | Description |
+|---|----------|------|-------------|
+| 1 | Minor | `xmpd/daemon.py:1171-1172, 1220-1221` | Exception detail omitted from warning log. `_cmd_radio` uses `except Exception as e:` and includes `e` in the message; new code uses bare `except Exception:` and omits error detail. Loses diagnostic value. |
+| 2 | Minor | `xmpd/daemon.py:1163-1164, 1212-1213` | Redundant `.get()` with defaults on keys guaranteed by `_get_track_info`. Not a bug, just unnecessary defensive coding. |
+
+**Summary**: Fix is correct. Both methods now register tracks before MPD add, matching `_cmd_radio` pattern. Guard, stream_url=None, try/except design all appropriate. Tests verify call ordering. Manual verification confirmed end-to-end playback.
 
 ---
 
