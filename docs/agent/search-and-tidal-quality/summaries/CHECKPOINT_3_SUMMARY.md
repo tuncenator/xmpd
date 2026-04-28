@@ -66,7 +66,17 @@ Test count grew from 249 (Checkpoint 2) to 253: Phase 3 added 4 new tests in `Te
 
 ## Code Review Results
 
-> Pending -- to be filled after code review.
+**Result**: PASSED WITH NOTES
+
+**Issues found (minor, non-blocking):**
+
+| # | Severity | File | Description |
+|---|----------|------|-------------|
+| 1 | Minor | `bin/xmpctl:968` | Redundant tuple in `in` check: `a in ("--track-id",)` could be `a == "--track-id"`. Cosmetic. |
+| 2 | Minor | `bin/xmpctl:961-962` | No equivalent strict guard for empty `--provider`. Acceptable since fzf always pairs both flags and wrong-provider doesn't cause the user-visible wrong-seed-track bug. |
+| 3 | Minor | `bin/xmpctl:955-971` | Comment density: 5 comment lines for 15 lines of code. Top-level fzf explanation is valuable; inline comments are borderline given cross-cutting "no unnecessary comments" rule. |
+
+**Summary**: Fix is correct and minimal. Validation is placed at the right layer (CLI dispatch, before daemon call). Existing error patterns preserved. No security concerns. Tests cover empty, whitespace, and valid-passthrough cases.
 
 ---
 
