@@ -7,7 +7,7 @@
 #
 # Keybindings:
 #   enter      Play selected track (closes search)
-#   ctrl-q     Queue selected track (stays open)
+#   ctrl-e     Queue selected track (stays open)
 #   ctrl-r     Start radio from selected track (closes search)
 #   ctrl-l     Toggle like/unlike for selected track (stays open, reloads)
 #   tab        Toggle multi-select on current line
@@ -51,7 +51,7 @@ RESET=$'\033[0m'
 DIM=$'\033[2m'
 BOLD=$'\033[1m'
 
-LEGEND="${DIM}enter${RESET}=play  ${DIM}ctrl-q${RESET}=queue  ${DIM}ctrl-r${RESET}=radio  ${DIM}ctrl-l${RESET}=like  ${DIM}tab${RESET}=select  ${DIM}ctrl-a${RESET}=queue-all  ${DIM}ctrl-p${RESET}=play-all"
+LEGEND="${DIM}enter${RESET}=play  ${DIM}ctrl-e${RESET}=queue  ${DIM}ctrl-r${RESET}=radio  ${DIM}ctrl-l${RESET}=like  ${DIM}tab${RESET}=select  ${DIM}ctrl-a${RESET}=queue-all  ${DIM}ctrl-p${RESET}=play-all"
 HEADER="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  ${DIM}| Type to search${RESET}
 ${LEGEND}"
 
@@ -65,7 +65,7 @@ RELOAD_CMD="sleep 0.15; ${XMPCTL} search-json --format fzf {q}"
 #   line 1: key name (ctrl-a, ctrl-p, or empty for enter/ctrl-q/ctrl-r)
 #   line 2+: selected lines
 #
-# Single-track actions (enter, ctrl-q, ctrl-r) use execute/execute-silent
+# Single-track actions (enter, ctrl-e, ctrl-r) use execute/execute-silent
 # and abort fzf directly; they never reach the --expect output path.
 # Multi-select actions (ctrl-a, ctrl-p) use accept and are handled below.
 FZF_OUTPUT=$(
@@ -86,7 +86,7 @@ FZF_OUTPUT=$(
         --color='bg+:#1a1b26,pointer:#f7768e' \
         --expect='ctrl-a,ctrl-p' \
         --bind "enter:execute-silent(${XMPCTL} play {1} {2})+abort" \
-        --bind "ctrl-q:execute-silent(${XMPCTL} queue {1} {2})" \
+        --bind "ctrl-e:execute-silent(${XMPCTL} queue {1} {2})" \
         --bind "ctrl-r:execute-silent(${XMPCTL} radio --provider {1} --track-id {2} --apply)+abort" \
         --bind "ctrl-l:execute-silent(${XMPCTL} like-toggle {1} {2})+reload(${RELOAD_CMD})" \
     < /dev/null 2>/dev/null

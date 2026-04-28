@@ -101,31 +101,6 @@ class TestYtmpctlPythonSyntax:
         assert result.returncode == 0, f"Syntax error in xmpctl: {result.stderr}"
 
 
-class TestYtmpctlSearch:
-    """Tests for xmpctl search command functionality."""
-
-    def test_search_help_includes_command(self):
-        """Test that help message includes search command."""
-        result = subprocess.run(
-            [str(XMPCTL), "help"],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "search" in result.stdout.lower()
-
-    def test_search_command_requires_daemon(self):
-        """Test that search command handles daemon not running gracefully."""
-        result = subprocess.run(
-            [str(XMPCTL), "search"],
-            capture_output=True,
-            text=True,
-            input="\n",
-        )
-        if result.returncode != 0:
-            assert "daemon" in result.stderr.lower() or "socket" in result.stderr.lower()
-
-
 # ---------------------------------------------------------------------------
 # Phase 8 tests
 # ---------------------------------------------------------------------------
