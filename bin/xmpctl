@@ -452,7 +452,8 @@ def cmd_search(query: str | None = None, provider: str | None = None) -> None:
             resp = send_command(f"radio {sel_provider} {sel_track_id}")
             if resp.get("success"):
                 tracks = resp.get("tracks", 0)
-                playlist = resp.get("playlist", "TD: Radio" if sel_provider == "tidal" else "YT: Radio")
+                default_pl = "TD: Radio" if sel_provider == "tidal" else "YT: Radio"
+                playlist = resp.get("playlist", default_pl)
                 radio_xspf = f"_xmpd/{playlist}.xspf"
                 print(
                     colorize(f"OK Radio playlist created: {tracks} tracks", "green")
@@ -465,7 +466,8 @@ def cmd_search(query: str | None = None, provider: str | None = None) -> None:
                     subprocess.run(mpc_cmd + ["play"], check=True, capture_output=True)
                     print(colorize("OK Radio playlist loaded and playing!", "green"))
                 except subprocess.CalledProcessError as e:
-                    print(colorize(f"ERROR Failed to apply radio playlist: {e}", "red"), file=sys.stderr)
+                    msg = f"ERROR Failed to apply radio playlist: {e}"
+                    print(colorize(msg, "red"), file=sys.stderr)
                     sys.exit(1)
             else:
                 error = resp.get("error", "Failed to generate radio")
@@ -484,17 +486,186 @@ def cmd_search(query: str | None = None, provider: str | None = None) -> None:
         sys.exit(1)
 
 
-def cmd_radio(apply: bool = False, provider: str | None = None) -> None:
-    """Generate radio playlist from currently playing track.
+# ANSI true color escapes for fzf output (consistent with bin/xmpd-status)
+ANSI_TIDAL = "\033[38;2;115;218;202m"  # #73daca teal
+ANSI_YT = "\033[38;2;247;118;142m"     # #f7768e pink
+ANSI_RESET = "\033[0m"
+ANSI_BOLD = "\033[1m"
+ANSI_DIM = "\033[2m"
+
+
+def format_track_fzf(track: dict[str, Any]) -> str:
+    """Format a track dict as an ANSI-colored fzf display line.
+
+    Output format: {provider}\\t{track_id}\\t{visible_colored_line}
+    fzf uses --with-nth=3.. to show only the visible part.
+
+    Args:
+        track: Track dict with provider, track_id, title, artist, duration,
+               quality, liked fields.
+
+    Returns:
+        Tab-separated line: provider, track_id, ANSI-colored display text.
+    """
+    provider = track.get("provider", "yt")
+    track_id = track.get("track_id", "")
+    title = track.get("title", "Unknown")
+    artist = track.get("artist", "Unknown Artist")
+    duration = track.get("duration", "0:00")
+    quality = track.get("quality")
+    liked = track.get("liked", False)
+
+    if provider == "tidal":
+        color = ANSI_TIDAL
+        tag = "[TD]"
+    else:
+        color = ANSI_YT
+        tag = "[YT]"
+
+    # Quality badge
+    badge = ""
+    if quality == "HR":
+        badge = f" {ANSI_BOLD}HR{ANSI_RESET}{color}"
+    elif quality == "CD":
+        badge = " CD"
+    elif quality == "Lo":
+        badge = f" {ANSI_DIM}Lo{ANSI_RESET}{color}"
+
+    # Liked indicator
+    liked_str = " [+1]" if liked is True else ""
+
+    # Build visible line: [TD] CD [+1] Artist - Title (3:59)
+    visible = (
+        f"{color}{tag}{badge}{liked_str}"
+        f" {artist} - {title} ({duration}){ANSI_RESET}"
+    )
+
+    return f"{provider}\t{track_id}\t{visible}"
+
+
+def cmd_search_json(args: list[str]) -> None:
+    """Output search results as NDJSON or fzf-formatted lines.
+
+    Usage: search-json [--provider yt|all] [--limit N] [--format fzf] QUERY
+
+    Args:
+        args: Arguments after 'search-json' from sys.argv.
+    """
+    # Extract query and flags from args
+    provider = "all"
+    limit = 25
+    output_format = "json"
+    query_parts: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--provider" and i + 1 < len(args):
+            provider = args[i + 1]
+            i += 2
+        elif args[i] == "--limit" and i + 1 < len(args):
+            try:
+                limit = int(args[i + 1])
+            except ValueError:
+                pass
+            i += 2
+        elif args[i] == "--format" and i + 1 < len(args):
+            output_format = args[i + 1]
+            i += 2
+        else:
+            query_parts.append(args[i])
+            i += 1
+
+    query = " ".join(query_parts).strip()
+    if not query:
+        # For fzf format, exit silently on empty query (fzf sends empty on start)
+        if output_format == "fzf":
+            sys.exit(0)
+        print("Error: search-json requires a query", file=sys.stderr)
+        print("Usage: xmpctl search-json [--provider yt|all] [--limit N] QUERY", file=sys.stderr)
+        sys.exit(1)
+
+    # Skip single-char queries for fzf (debounce: too short to be useful)
+    if output_format == "fzf" and len(query) < 2:
+        sys.exit(0)
+
+    # Build command string for daemon
+    cmd_parts = ["search-json"]
+    if provider != "all":
+        cmd_parts += ["--provider", provider]
+    cmd_parts += ["--limit", str(limit)]
+    cmd_parts.append(query)
+    command = " ".join(cmd_parts)
+
+    result = send_command(command)
+
+    if not result.get("success"):
+        error = result.get("error", "Unknown error")
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    tracks = result.get("results", [])
+    if output_format == "fzf":
+        for track in tracks:
+            print(format_track_fzf(track))
+    else:
+        for track in tracks:
+            print(json.dumps(track))
+
+
+def cmd_play(provider: str, track_id: str) -> None:
+    """Play a track immediately by clearing queue and starting playback.
+
+    Args:
+        provider: Provider canonical name (e.g. 'yt', 'tidal').
+        track_id: Track identifier.
+    """
+    result = send_command(f"play {provider} {track_id}")
+    if result.get("success"):
+        message = result.get("message", "Playing...")
+        print(colorize(f"OK {message}", "green"))
+    else:
+        error = result.get("error", "Failed to play")
+        print(colorize(f"ERROR {error}", "red"), file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_queue(provider: str, track_id: str) -> None:
+    """Add a track to the MPD queue.
+
+    Args:
+        provider: Provider canonical name (e.g. 'yt', 'tidal').
+        track_id: Track identifier.
+    """
+    result = send_command(f"queue {provider} {track_id}")
+    if result.get("success"):
+        message = result.get("message", "Added to queue.")
+        print(colorize(f"OK {message}", "green"))
+    else:
+        error = result.get("error", "Failed to add to queue")
+        print(colorize(f"ERROR {error}", "red"), file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_radio(
+    apply: bool = False,
+    provider: str | None = None,
+    track_id: str | None = None,
+) -> None:
+    """Generate radio playlist from currently playing track (or a given track).
 
     Args:
         apply: If True, automatically clear playlist, load radio, and play.
         provider: Force provider instead of inferring from current track.
+        track_id: Seed track ID. If None, infers from currently playing track.
     """
-    print("Generating radio playlist from current track...")
+    if track_id:
+        print(f"Generating radio playlist from track {track_id}...")
+    else:
+        print("Generating radio playlist from current track...")
     cmd = "radio"
     if provider:
         cmd += f" --provider {provider}"
+    if track_id:
+        cmd += f" {track_id}"
     result = send_command(cmd)
 
     if result.get("success"):
@@ -718,6 +889,25 @@ def cmd_dislike() -> None:
         sys.exit(1)
 
 
+def cmd_like_toggle(provider: str, track_id: str) -> None:
+    """Toggle like state for a specific track (used by fzf search ctrl-l).
+
+    Args:
+        provider: Provider canonical name (e.g. 'yt', 'tidal').
+        track_id: Track identifier.
+    """
+    result = send_command(f"like-toggle {provider} {track_id}")
+    if result.get("success"):
+        msg = result.get("message", "Toggled")
+        liked = result.get("liked", False)
+        state_str = "[+1]" if liked else "[-1]"
+        print(colorize(f"OK {state_str} {msg}", "green"))
+    else:
+        error = result.get("error", "Unknown error")
+        print(colorize(f"ERROR {error}", "red"), file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_auth_tidal() -> None:
     """Run Tidal OAuth device flow and persist session token."""
     from xmpd.auth.tidal_oauth import run_oauth_flow
@@ -841,14 +1031,23 @@ def show_help() -> None:
   xmpctl auth yt --manual        Manual ytmusicapi browser-headers setup
   xmpctl auth tidal              Run Tidal OAuth device flow; persists token
 
+  xmpctl play <provider> <id>    Play track immediately (clear queue, start playback)
+  xmpctl queue <provider> <id>   Add track to MPD queue
+
   xmpctl search [query]          Search across providers (interactive if no query)
                                   --provider <name>  Restrict to one provider
                                   --provider all     Search all providers (default)
+  xmpctl search-json QUERY       Search and output NDJSON (for fzf integration)
+                                  --provider yt|all  Restrict provider (default: all)
+                                  --limit N          Max results (default: 25)
+                                  --format fzf       ANSI-colored tab-separated fzf lines
   xmpctl radio [--apply]         Generate radio from current track (provider inferred)
                                   --provider <name>  Force provider
+                                  --track-id <id>    Seed track ID (default: current track)
                                   --apply            Load and play immediately
   xmpctl like                    Toggle like for current track (provider inferred)
   xmpctl dislike                 Toggle dislike for current track (provider inferred)
+  xmpctl like-toggle <prov> <id> Toggle like for specific track (used by fzf search)
   xmpctl help                    Show this help message
 
 {colorize("Playback Control:", "bold")}
@@ -889,11 +1088,35 @@ def main() -> NoReturn:
         cmd_status()
     elif command == "list-playlists" or command == "list":
         cmd_list_playlists()
+    elif command == "play":
+        if len(args) < 2:
+            print("Error: play requires <provider> <track_id>", file=sys.stderr)
+            sys.exit(1)
+        cmd_play(args[0], args[1])
+    elif command == "queue":
+        if len(args) < 2:
+            print("Error: queue requires <provider> <track_id>", file=sys.stderr)
+            sys.exit(1)
+        cmd_queue(args[0], args[1])
     elif command == "radio":
         provider, remaining = parse_provider_flag(args)
         apply = "--apply" in remaining
         remaining = [a for a in remaining if a != "--apply"]
-        cmd_radio(apply=apply, provider=provider)
+        # Parse --track-id flag
+        track_id: str | None = None
+        filtered: list[str] = []
+        it = iter(remaining)
+        for tok in it:
+            if tok == "--track-id":
+                track_id = next(it, None)
+            elif tok.startswith("--track-id="):
+                track_id = tok.split("=", 1)[1]
+            else:
+                filtered.append(tok)
+        # Positional track_id if no --track-id flag
+        if track_id is None and filtered:
+            track_id = filtered[0]
+        cmd_radio(apply=apply, provider=provider, track_id=track_id)
     elif command == "search":
         provider, remaining = parse_provider_flag(args)
         if provider is not None and provider not in ("yt", "tidal", "all"):
@@ -904,10 +1127,17 @@ def main() -> NoReturn:
             sys.exit(1)
         query = " ".join(remaining) if remaining else None
         cmd_search(query=query, provider=provider)
+    elif command == "search-json":
+        cmd_search_json(args)
     elif command == "like":
         cmd_like()
     elif command == "dislike":
         cmd_dislike()
+    elif command == "like-toggle":
+        if len(args) < 2:
+            print("Error: like-toggle requires <provider> <track_id>", file=sys.stderr)
+            sys.exit(1)
+        cmd_like_toggle(args[0], args[1])
     elif command == "auth":
         # Legacy compat: bare `auth` or `auth --auto` -> `auth yt`
         legacy_auto = "--auto" in args

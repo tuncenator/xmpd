@@ -198,6 +198,11 @@ class XMPDaemon:
         self._proxy_loop: asyncio.AbstractEventLoop | None = None
         self._proxy_shutdown_event: asyncio.Event | None = None
 
+        # Liked IDs cache for search-json like-state population
+        self._liked_ids_cache: set[str] = set()
+        self._liked_ids_cache_time: float = 0.0
+        self._liked_ids_cache_ttl: float = 300.0  # 5 minutes
+
         # History reporting
         self._history_reporter: HistoryReporter | None = None
         self._history_thread: threading.Thread | None = None
@@ -621,7 +626,9 @@ class XMPDaemon:
                 response = self._cmd_provider_status()
             elif cmd == "radio":
                 if args:
-                    provider, track_id = self._parse_play_queue_args(args)
+                    provider, remaining_args = self._parse_provider_args(args)
+                    # Positional track_id is the first remaining arg (if any)
+                    track_id = remaining_args[0] if remaining_args else None
                 else:
                     provider, track_id = None, None
                 response = self._cmd_radio(provider, track_id)
@@ -629,6 +636,9 @@ class XMPDaemon:
                 provider, remaining = self._parse_provider_args(args)
                 query = " ".join(remaining) if remaining else None
                 response = self._cmd_search(query, provider=provider)
+            elif cmd == "search-json":
+                # search-json [--provider yt|all] [--limit N] QUERY
+                response = self._cmd_search_json(parts[1:])
             elif cmd == "play":
                 provider, track_id = self._parse_play_queue_args(args)
                 response = self._cmd_play(provider, track_id)
@@ -643,6 +653,10 @@ class XMPDaemon:
                 provider = args[0] if len(args) > 0 else None
                 track_id = args[1] if len(args) > 1 else None
                 response = self._cmd_dislike(provider, track_id)
+            elif cmd == "like-toggle":
+                provider = args[0] if len(args) > 0 else None
+                track_id = args[1] if len(args) > 1 else None
+                response = self._cmd_like_toggle(provider, track_id)
             else:
                 response = {"success": False, "error": f"Unknown command: {cmd}"}
 
@@ -1005,6 +1019,129 @@ class XMPDaemon:
             logger.error("Radio generation failed: %s", e)
             return {"success": False, "error": f"Radio generation failed: {e}"}
 
+    def _get_liked_ids(self) -> set[str]:
+        """Return the cached set of liked track IDs across all providers.
+
+        Uses provider_registry.get_favorites() to collect liked IDs.
+        Results are cached for 5 minutes to avoid repeated API calls.
+
+        Returns:
+            Set of liked track IDs (compound: "provider:track_id"). Empty set
+            if fetch fails.
+        """
+        now = time.time()
+        if now - self._liked_ids_cache_time < self._liked_ids_cache_ttl:
+            return self._liked_ids_cache
+
+        liked: set[str] = set()
+        for pname, prov in self.provider_registry.items():
+            try:
+                is_auth, _ = prov.is_authenticated()
+                if not is_auth:
+                    continue
+                favorites = prov.get_favorites()
+                for track in favorites:
+                    liked.add(f"{pname}:{track.track_id}")
+            except Exception as e:
+                logger.warning("Failed to fetch favorites for %s: %s", pname, e)
+
+        self._liked_ids_cache = liked
+        self._liked_ids_cache_time = now
+        logger.debug("Refreshed liked IDs cache: %d tracks", len(liked))
+
+        return self._liked_ids_cache
+
+    @staticmethod
+    def _quality_for_provider(provider_name: str) -> str:
+        """Return default quality label for a provider's search results."""
+        if provider_name == "tidal":
+            return "CD"
+        return "Lo"
+
+    def _cmd_search_json(self, args: list[str]) -> dict[str, Any]:
+        """Handle 'search-json' command - return structured JSON search results.
+
+        Syntax: search-json [--provider yt|all] [--limit N] QUERY
+
+        Args:
+            args: Remaining command tokens after 'search-json'.
+
+        Returns:
+            Response dict with 'success' and 'results' (list of track dicts).
+            Each track dict has: provider, track_id, title, artist, album,
+            duration, duration_seconds, quality, liked.
+        """
+        # Parse args: consume --provider and --limit flags, rest is query
+        provider_filter = "all"
+        limit = 25
+        remaining: list[str] = []
+        i = 0
+        while i < len(args):
+            if args[i] == "--provider" and i + 1 < len(args):
+                provider_filter = args[i + 1]
+                i += 2
+            elif args[i] == "--limit" and i + 1 < len(args):
+                try:
+                    limit = int(args[i + 1])
+                except ValueError:
+                    pass
+                i += 2
+            else:
+                remaining.append(args[i])
+                i += 1
+
+        query = " ".join(remaining).strip()
+        logger.info(
+            "search-json command: query=%r, provider=%s, limit=%d",
+            query, provider_filter, limit,
+        )
+
+        if not query:
+            return {"success": False, "error": "Empty search query"}
+
+        # Determine which providers to search
+        if provider_filter and provider_filter != "all":
+            if provider_filter not in self.provider_registry:
+                return {"success": False, "error": f"Unknown provider: {provider_filter}"}
+            targets = {provider_filter: self.provider_registry[provider_filter]}
+        else:
+            targets = self.provider_registry
+
+        # Get liked IDs for like-state population
+        liked_ids = self._get_liked_ids()
+
+        results: list[dict[str, Any]] = []
+        for pname, prov in targets.items():
+            try:
+                is_auth, _ = prov.is_authenticated()
+                if not is_auth:
+                    continue
+                search_results = prov.search(query, limit=limit)
+            except Exception as e:
+                logger.warning("search-json: search failed for %s: %s", pname, e)
+                continue
+
+            quality = self._quality_for_provider(pname)
+            for track in search_results:
+                duration_secs = track.metadata.duration_seconds or 0
+                results.append(
+                    {
+                        "provider": track.provider,
+                        "track_id": track.track_id,
+                        "title": track.metadata.title,
+                        "artist": track.metadata.artist or "Unknown Artist",
+                        "album": track.metadata.album or None,
+                        "duration": self._format_duration(duration_secs),
+                        "duration_seconds": duration_secs,
+                        "quality": quality,
+                        "liked": f"{track.provider}:{track.track_id}" in liked_ids
+                        if track.track_id else None,
+                    }
+                )
+
+        logger.info("search-json: returning %d results for %r", len(results), query)
+        return {"success": True, "results": results}
+
     def _cmd_play(self, provider: str, track_id: str | None) -> dict[str, Any]:
         """Handle 'play' command - play track immediately.
 
@@ -1100,6 +1237,8 @@ class XMPDaemon:
             current = state_map.get(raw_state, RatingState.NEUTRAL)
             transition = self._rating_manager.apply_action(current, RatingAction.LIKE)
             apply_to_provider(prov, transition, track_id)
+            # Invalidate favorites cache so next search-json reflects new state
+            self._liked_ids_cache_time = 0.0
             return {
                 "success": True,
                 "message": transition.user_message,
@@ -1135,6 +1274,8 @@ class XMPDaemon:
             current = state_map.get(raw_state, RatingState.NEUTRAL)
             transition = self._rating_manager.apply_action(current, RatingAction.DISLIKE)
             apply_to_provider(prov, transition, track_id)
+            # Invalidate favorites cache so next search-json reflects new state
+            self._liked_ids_cache_time = 0.0
             return {
                 "success": True,
                 "message": transition.user_message,
@@ -1142,6 +1283,65 @@ class XMPDaemon:
             }
         except Exception as e:
             logger.error("Dislike failed: %s", e, exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    def _cmd_like_toggle(self, provider: str | None, track_id: str | None) -> dict[str, Any]:
+        """Handle 'like-toggle' command - toggle like state for arbitrary track.
+
+        Unlike 'like', which toggles based on current provider state, this
+        command is explicitly for the search interface: it reads current like
+        state, applies the LIKE toggle action, updates the provider, then
+        invalidates the favorites cache so the next search-json reflects the
+        change.
+
+        Args:
+            provider: Provider canonical name (e.g. 'yt', 'tidal').
+            track_id: Track identifier.
+
+        Returns:
+            Response dict with 'success', 'message', 'new_state', 'liked' (bool).
+        """
+        if not provider or not track_id:
+            return {"success": False, "error": "Usage: like-toggle <provider> <track_id>"}
+        if provider not in self.provider_registry:
+            return {"success": False, "error": f"Unknown provider: {provider}"}
+
+        prov = self.provider_registry[provider]
+        try:
+            is_auth, err = prov.is_authenticated()
+        except Exception as exc:
+            return {"success": False, "error": f"{provider} auth probe failed: {exc}"}
+        if not is_auth:
+            return {"success": False, "error": f"{provider} not authenticated: {err}"}
+
+        try:
+            raw_state = prov.get_like_state(track_id)
+            from xmpd.rating import RatingState
+            state_map = {
+                "LIKED": RatingState.LIKED,
+                "DISLIKED": RatingState.DISLIKED,
+                "NEUTRAL": RatingState.NEUTRAL,
+            }
+            current = state_map.get(raw_state, RatingState.NEUTRAL)
+            transition = self._rating_manager.apply_action(current, RatingAction.LIKE)
+            apply_to_provider(prov, transition, track_id)
+
+            # Invalidate the favorites cache so next search-json reflects new state
+            self._liked_ids_cache_time = 0.0
+            logger.debug(
+                "like-toggle: invalidated favorites cache for %s:%s (new_state=%s)",
+                provider, track_id, transition.new_state.value,
+            )
+
+            now_liked = transition.new_state == RatingState.LIKED
+            return {
+                "success": True,
+                "message": transition.user_message,
+                "new_state": transition.new_state.value,
+                "liked": now_liked,
+            }
+        except Exception as e:
+            logger.error("Like-toggle failed: %s", e, exc_info=True)
             return {"success": False, "error": str(e)}
 
     # ------------------------------------------------------------------

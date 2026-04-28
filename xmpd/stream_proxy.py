@@ -9,6 +9,11 @@ single FLAC stream that we proxy back to the client.
 Per-provider regex validates the track_id segment; per-provider TTL
 governs when a cached URL is refreshed.
 
+Concurrency model: a semaphore gates the expensive URL-resolution phase
+(blocking provider API calls). Once a stream URL is obtained, the slot is
+released immediately. DASH ffmpeg pipes run outside the semaphore so
+long-lived streams do not block new resolution requests.
+
 This module is the renamed successor of xmpd.icy_proxy / ICYProxyServer
 (no ICY metadata is or was actually injected -- the old name was misleading).
 """
@@ -17,6 +22,7 @@ import asyncio
 import logging
 import re
 import time
+import uuid
 from typing import Any
 
 from aiohttp import web
@@ -162,6 +168,12 @@ class StreamRedirectProxy:
     Resolves the stream URL (with caching and auto-refresh) and returns
     an HTTP 307 redirect, allowing MPD to stream directly from the CDN.
 
+    Concurrency model: a semaphore gates the URL-resolution phase (the
+    expensive blocking provider API call). Once resolution completes the
+    semaphore slot is released immediately. DASH ffmpeg pipes run outside
+    the semaphore so long-lived streams (3-5 min per track) do not consume
+    resolution slots and cannot trigger 503 rejections.
+
     Attributes:
         track_store: TrackStore instance for metadata lookup
         provider_registry: dict mapping provider name to Provider instance
@@ -212,7 +224,16 @@ class StreamRedirectProxy:
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
 
-        # Connection tracking (tracks concurrent resolution requests)
+        # Semaphore gates the URL-resolution phase only. DASH ffmpeg pipes
+        # run outside the semaphore so they don't hold resolution slots.
+        self._resolution_semaphore = asyncio.Semaphore(max_concurrent_streams)
+
+        # Informational counters for health/debug. Not used for gating.
+        self._active_resolutions = 0
+        self._active_streams = 0
+        self._counter_lock = asyncio.Lock()
+
+        # Legacy attribute kept for tests that inspect it directly
         self._active_connections = 0
         self._connection_lock = asyncio.Lock()
 
@@ -234,7 +255,7 @@ class StreamRedirectProxy:
 
         logger.info(
             f"[PROXY] Starting redirect proxy on {self.host}:{self.port} "
-            f"(max concurrent requests: {self.max_concurrent_streams}, "
+            f"(max concurrent resolutions: {self.max_concurrent_streams}, "
             f"registry providers: {list(self.provider_registry.keys())})"
         )
 
@@ -307,152 +328,201 @@ class StreamRedirectProxy:
             raise URLRefreshError(f"Failed to resolve URL for {provider}/{track_id}")
         return new_url  # type: ignore[no-any-return]
 
-    async def _handle_health_check(self, request: web.Request) -> web.Response:
-        """Handle health check requests."""
-        return web.json_response({"status": "ok", "service": "stream-proxy"})
+    async def _increment_counter(self, counter: str) -> None:
+        """Increment an informational counter under lock."""
+        async with self._counter_lock:
+            val = getattr(self, counter) + 1
+            setattr(self, counter, val)
 
-    async def _handle_proxy_request(self, request: web.Request) -> web.Response:
+    async def _decrement_counter(self, counter: str) -> None:
+        """Decrement an informational counter under lock, clamping to 0."""
+        try:
+            async with self._counter_lock:
+                val = max(0, getattr(self, counter) - 1)
+                setattr(self, counter, val)
+        except (asyncio.CancelledError, Exception):
+            # Fallback: decrement without lock if cancelled during acquire
+            val = max(0, getattr(self, counter) - 1)
+            setattr(self, counter, val)
+
+    async def _handle_health_check(self, request: web.Request) -> web.Response:
+        """Handle health check requests with connection diagnostics."""
+        return web.json_response({
+            "status": "ok",
+            "service": "stream-proxy",
+            "active_resolutions": self._active_resolutions,
+            "active_streams": self._active_streams,
+            "max_concurrent_resolutions": self.max_concurrent_streams,
+            "resolution_semaphore_free": self._resolution_semaphore._value,
+        })
+
+    async def _handle_proxy_request(
+        self, request: web.Request
+    ) -> web.Response | web.StreamResponse:
         """Handle proxy requests for stream URLs with provider routing.
 
         URL format: /proxy/{provider}/{track_id}
 
-        Process:
-            1. Extract provider and track_id from path
-            2. Validate provider (registry or known pattern key)
-            3. Validate track_id against per-provider regex
-            4. Check concurrency cap
-            5. Lookup track metadata in TrackStore
-            6. Refresh URL if expired or missing
-            7. Return HTTP 307 redirect to direct stream URL
+        Concurrency: a semaphore gates the resolution phase (track lookup +
+        URL refresh). The semaphore is released before DASH streaming starts
+        so long-lived ffmpeg pipes do not block new requests.
 
         Args:
             request: aiohttp request object
 
         Returns:
-            HTTP 307 Temporary Redirect to stream URL
+            HTTP 307 Temporary Redirect or 200 streamed FLAC for DASH
 
         Raises:
             HTTPNotFound: Unknown provider or track not in store
             HTTPBadRequest: Invalid track_id format
-            HTTPServiceUnavailable: Concurrency cap reached
+            HTTPServiceUnavailable: Resolution concurrency cap reached
             HTTPBadGateway: URL resolution failure with no cached fallback
         """
         provider = request.match_info["provider"]
         track_id = request.match_info["track_id"]
+        req_id = uuid.uuid4().hex[:8]
 
         # Provider validation: accept if in registry OR known pattern dict
         if provider not in self.provider_registry and provider not in TRACK_ID_PATTERNS:
-            logger.warning(f"[PROXY] Unknown provider: {provider}")
+            logger.warning(f"[PROXY:{req_id}] Unknown provider: {provider}")
             raise web.HTTPNotFound(text=f"Unknown provider: {provider}")
 
         # Regex validation
         pattern = TRACK_ID_PATTERNS.get(provider)
         if pattern is None:
-            logger.warning(f"[PROXY] No regex configured for provider: {provider}")
+            logger.warning(f"[PROXY:{req_id}] No regex configured for provider: {provider}")
             raise web.HTTPNotFound(text=f"No regex configured for provider: {provider}")
         if not pattern.match(track_id):
-            logger.warning(f"[PROXY] Invalid {provider} track_id: {track_id}")
+            logger.warning(f"[PROXY:{req_id}] Invalid {provider} track_id: {track_id}")
             raise web.HTTPBadRequest(text=f"Invalid {provider} track_id: {track_id}")
 
-        # Concurrency cap
-        async with self._connection_lock:
-            if self._active_connections >= self.max_concurrent_streams:
-                logger.warning(
-                    f"[PROXY] Connection limit reached "
-                    f"({self._active_connections}/{self.max_concurrent_streams}), "
-                    f"rejecting {provider}/{track_id}"
-                )
-                raise web.HTTPServiceUnavailable(
-                    text=f"Too many concurrent streams "
-                    f"({self._active_connections}/{self.max_concurrent_streams})"
-                )
-            self._active_connections += 1
-            logger.debug(
-                f"[PROXY] Connection accepted for {provider}/{track_id} "
-                f"({self._active_connections}/{self.max_concurrent_streams} active)"
+        # Try to acquire a resolution slot (non-blocking check first)
+        if self._resolution_semaphore.locked():
+            logger.warning(
+                f"[PROXY:{req_id}] Resolution limit reached "
+                f"({self.max_concurrent_streams}/{self.max_concurrent_streams}), "
+                f"rejecting {provider}/{track_id}"
+            )
+            raise web.HTTPServiceUnavailable(
+                text=f"Too many concurrent streams "
+                f"({self.max_concurrent_streams}/{self.max_concurrent_streams})"
             )
 
-        try:
-            # Track lookup
-            track = self.track_store.get_track(provider, track_id)
-            if not track:
-                logger.warning(f"[PROXY] Track not found: {provider}/{track_id}")
-                raise web.HTTPNotFound(text=f"Track not found: {provider}/{track_id}")
+        # Resolution phase: acquire semaphore, resolve URL, release semaphore.
+        stream_url = await self._resolve_stream_url(provider, track_id, req_id)
 
-            stream_url: str | None = track["stream_url"]
-            updated_at: float = track["updated_at"]
-            ttl = self._get_ttl_hours(provider)
+        # Streaming phase: runs outside the semaphore.
+        if _is_dash_manifest(stream_url):
+            logger.debug(
+                f"[PROXY:{req_id}] Streaming DASH via ffmpeg for {provider}/{track_id}"
+            )
+            await self._increment_counter("_active_streams")
+            try:
+                return await _stream_dash_via_ffmpeg(
+                    request, stream_url, provider, track_id
+                )
+            finally:
+                await self._decrement_counter("_active_streams")
 
-            # Refresh decision: None URL or expired URL
-            if stream_url is None or self._is_url_expired(updated_at, ttl):
-                if stream_url is None:
-                    logger.info(
-                        f"[PROXY] stream_url is None for {provider}/{track_id}, resolving on-demand"
+        logger.debug(
+            f"[PROXY:{req_id}] Redirecting {provider}/{track_id} "
+            f"-> {stream_url[:60]}..."
+        )
+        raise web.HTTPTemporaryRedirect(stream_url)
+
+    async def _resolve_stream_url(
+        self, provider: str, track_id: str, req_id: str
+    ) -> str:
+        """Look up track and resolve/refresh its stream URL under the semaphore.
+
+        Returns the validated stream URL string. Raises appropriate
+        HTTPException on any failure.
+        """
+        async with self._resolution_semaphore:
+            await self._increment_counter("_active_resolutions")
+            logger.debug(
+                f"[PROXY:{req_id}] Resolution slot acquired for {provider}/{track_id} "
+                f"(free: {self._resolution_semaphore._value}/"
+                f"{self.max_concurrent_streams})"
+            )
+            try:
+                return await self._do_resolve(provider, track_id, req_id)
+            finally:
+                await self._decrement_counter("_active_resolutions")
+                logger.debug(
+                    f"[PROXY:{req_id}] Resolution slot released for {provider}/{track_id} "
+                    f"(free: {self._resolution_semaphore._value + 1}/"
+                    f"{self.max_concurrent_streams})"
+                )
+
+    async def _do_resolve(
+        self, provider: str, track_id: str, req_id: str
+    ) -> str:
+        """Core resolution logic: track lookup, TTL check, URL refresh.
+
+        Separated from _resolve_stream_url for testability and clarity.
+        Runs inside the resolution semaphore.
+        """
+        track = self.track_store.get_track(provider, track_id)
+        if not track:
+            logger.warning(f"[PROXY:{req_id}] Track not found: {provider}/{track_id}")
+            raise web.HTTPNotFound(text=f"Track not found: {provider}/{track_id}")
+
+        stream_url: str | None = track["stream_url"]
+        updated_at: float = track["updated_at"]
+        ttl = self._get_ttl_hours(provider)
+
+        # Refresh decision: None URL or expired URL
+        if stream_url is None or self._is_url_expired(updated_at, ttl):
+            if stream_url is None:
+                logger.info(
+                    f"[PROXY:{req_id}] stream_url is None for "
+                    f"{provider}/{track_id}, resolving on-demand"
+                )
+            else:
+                logger.info(
+                    f"[PROXY:{req_id}] URL expired for "
+                    f"{provider}/{track_id}, attempting refresh"
+                )
+
+            try:
+                new_url = await self._refresh_stream_url(provider, track_id)
+                self.track_store.update_stream_url(provider, track_id, new_url)
+                stream_url = new_url
+                logger.info(
+                    f"[PROXY:{req_id}] URL refresh successful for {provider}/{track_id}"
+                )
+            except URLRefreshError as e:
+                logger.error(
+                    f"[PROXY:{req_id}] URL refresh failed for "
+                    f"{provider}/{track_id}: {e}"
+                )
+                if stream_url is not None:
+                    logger.warning(
+                        f"[PROXY:{req_id}] Falling through to stale URL "
+                        f"for {provider}/{track_id}"
                     )
                 else:
-                    logger.info(
-                        f"[PROXY] URL expired for {provider}/{track_id}, attempting refresh"
+                    raise web.HTTPBadGateway(
+                        text=f"Failed to resolve stream URL for {provider}/{track_id}"
                     )
 
-                try:
-                    new_url = await self._refresh_stream_url(provider, track_id)
-                    self.track_store.update_stream_url(provider, track_id, new_url)
-                    stream_url = new_url
-                    logger.info(f"[PROXY] URL refresh successful for {provider}/{track_id}")
-                except URLRefreshError as e:
-                    logger.error(f"[PROXY] URL refresh failed for {provider}/{track_id}: {e}")
-                    if stream_url is not None:
-                        logger.warning(
-                            f"[PROXY] Falling through to stale URL for {provider}/{track_id}"
-                        )
-                        # stream_url still holds the old value; continue
-                    else:
-                        raise web.HTTPBadGateway(
-                            text=f"Failed to resolve stream URL for {provider}/{track_id}"
-                        )
-
-            # URL sanity check
-            if not stream_url or not isinstance(stream_url, str) or not stream_url.startswith(
-                ("http://", "https://")
-            ):
-                logger.error(
-                    f"[PROXY] Invalid stream_url for {provider}/{track_id}: "
-                    f"{stream_url!r}"
-                )
-                raise web.HTTPBadGateway(
-                    text=f"Invalid stream URL format for {provider}/{track_id}"
-                )
-
-            if _is_dash_manifest(stream_url):
-                logger.debug(
-                    f"[PROXY] Streaming DASH via ffmpeg for {provider}/{track_id}"
-                )
-                return await _stream_dash_via_ffmpeg(request, stream_url, provider, track_id)
-
-            logger.debug(f"[PROXY] Redirecting {provider}/{track_id} -> {stream_url[:60]}...")
-            raise web.HTTPTemporaryRedirect(stream_url)
-
-        except web.HTTPException:
-            raise
-        except Exception as e:
-            logger.exception(
-                f"[PROXY] Unexpected error handling proxy request for {provider}/{track_id}: {e}"
+        # URL sanity check
+        if (
+            not stream_url
+            or not isinstance(stream_url, str)
+            or not stream_url.startswith(("http://", "https://"))
+        ):
+            logger.error(
+                f"[PROXY:{req_id}] Invalid stream_url for "
+                f"{provider}/{track_id}: {stream_url!r}"
             )
-            raise web.HTTPInternalServerError(text="Unexpected error handling proxy request")
-        finally:
-            try:
-                async with self._connection_lock:
-                    self._active_connections -= 1
-                    logger.debug(
-                        f"[PROXY] Connection closed for {provider}/{track_id} "
-                        f"({self._active_connections}/{self.max_concurrent_streams} active)"
-                    )
-            except (asyncio.CancelledError, Exception):
-                self._active_connections -= 1
-                logger.debug(
-                    f"[PROXY] Connection closed (unshielded) for {provider}/{track_id} "
-                    f"({self._active_connections}/{self.max_concurrent_streams} active)"
-                )
+            raise web.HTTPBadGateway(
+                text=f"Invalid stream URL format for {provider}/{track_id}"
+            )
+
+        return stream_url
 
     async def __aenter__(self) -> "StreamRedirectProxy":
         """Async context manager entry."""
