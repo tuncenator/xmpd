@@ -157,3 +157,51 @@ class TestXmpctlParseProviderFlag:
             text=True,
         )
         assert "--provider" in result.stdout
+
+
+class TestXmpctlRadioEmptyArgs:
+    """Radio command must reject empty --track-id (fzf expansion guard).
+
+    When fzf has no highlighted item, {1} and {2} expand to empty strings.
+    The radio command must not silently fall back to MPD's current track in
+    that case -- it must fail with an error so the caller can handle it.
+    """
+
+    def test_empty_track_id_exits_nonzero(self):
+        """radio --track-id '' exits 1."""
+        result = subprocess.run(
+            [str(XMPCTL), "radio", "--provider", "yt", "--track-id", ""],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+
+    def test_empty_track_id_error_message(self):
+        """radio --track-id '' prints an error to stderr."""
+        result = subprocess.run(
+            [str(XMPCTL), "radio", "--provider", "yt", "--track-id", ""],
+            capture_output=True,
+            text=True,
+        )
+        assert "error" in result.stderr.lower()
+        assert "--track-id" in result.stderr
+
+    def test_whitespace_track_id_exits_nonzero(self):
+        """radio --track-id '  ' (whitespace only) exits 1."""
+        result = subprocess.run(
+            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id", "   "],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+
+    def test_valid_track_id_does_not_exit_on_parse(self):
+        """radio --provider yt --track-id valid reaches the daemon call (not parse error)."""
+        result = subprocess.run(
+            [str(XMPCTL), "radio", "--provider", "yt", "--track-id", "validid123"],
+            capture_output=True,
+            text=True,
+        )
+        # Should fail because daemon is not reachable in unit test, not because of arg parsing.
+        # The error must not mention --track-id argument validation.
+        assert "--track-id was given but resolved to an empty value" not in result.stderr

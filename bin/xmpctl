@@ -955,6 +955,21 @@ def main() -> NoReturn:
         # Positional track_id if no --track-id flag
         if track_id is None and filtered:
             track_id = filtered[0]
+        # Normalize: strip whitespace and treat empty strings as None.
+        # fzf expands {1}/{2} to empty strings when no item is highlighted;
+        # falling back silently to MPD's current track is wrong in that case.
+        if provider is not None:
+            provider = provider.strip() or None
+        if track_id is not None:
+            track_id = track_id.strip() or None
+        # If --track-id was explicitly passed but resolved to empty, that is an
+        # error -- do not silently fall back to the currently playing track.
+        track_id_flag_given = any(
+            a in ("--track-id",) or a.startswith("--track-id=") for a in args
+        )
+        if track_id_flag_given and track_id is None:
+            print("Error: --track-id was given but resolved to an empty value", file=sys.stderr)
+            sys.exit(1)
         cmd_radio(apply=apply, provider=provider, track_id=track_id)
     elif command == "search-json":
         cmd_search_json(args)
