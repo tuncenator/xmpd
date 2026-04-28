@@ -62,7 +62,7 @@ RELOAD_CMD="sleep 0.15; ${XMPCTL} search-json --format fzf {q}"
 # Launch fzf with keybindings and multi-select support.
 #
 # --expect captures which key triggered exit. fzf then prints:
-#   line 1: key name (ctrl-a, ctrl-p, or empty for enter/ctrl-q/ctrl-r)
+#   line 1: key name (ctrl-a, ctrl-p, or empty for enter/ctrl-e/ctrl-r)
 #   line 2+: selected lines
 #
 # Single-track actions (enter, ctrl-e, ctrl-r) use execute/execute-silent
