@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Phase 0 - Initial Setup (2026-04-29)
+> Last updated by: Checkpoint 1 (2026-04-29)
 
 ---
 
@@ -30,7 +30,7 @@ User types in fzf (xmpd-search)
   -> MPD requests proxy URL -> stream_proxy looks up TrackStore -> resolves stream -> proxies audio
 ```
 
-**Critical gap (bug):** `_cmd_play` and `_cmd_queue` skip the `track_store.add_track()` call, so the proxy returns 404.
+**Fixed (Phase 1):** `_cmd_play` and `_cmd_queue` now call `self.track_store.add_track()` before adding proxy URLs to MPD. The proxy no longer returns 404 for tracks played/queued via search.
 
 ---
 
@@ -76,10 +76,10 @@ class TrackStore:
 ```python
 class XMPDaemon:
     def _cmd_play(self, provider: str, track_id: str | None) -> dict[str, Any]
-        # Line 1145. Clears MPD, adds proxy URL, plays. BUG: no track_store.add_track()
+        # Line 1145. Registers track in TrackStore, clears MPD, adds proxy URL, plays.
 
     def _cmd_queue(self, provider: str, track_id: str | None) -> dict[str, Any]
-        # Line 1182. Adds proxy URL to MPD queue. BUG: no track_store.add_track()
+        # Line 1182. Registers track in TrackStore, adds proxy URL to MPD queue.
 
     def _cmd_radio(self, provider: str | None, track_id: str | None) -> dict[str, Any]
         # Line 897. Generates radio playlist. CORRECT: calls track_store.add_track() at line 957-967
@@ -201,7 +201,7 @@ Unique constraint: `tracks_pk_idx` on `(provider, track_id)`
 
 ## Dependencies & Integration Points
 
-- **daemon -> track_store**: `_cmd_radio` registers tracks; `_cmd_play`/`_cmd_queue` should but don't
+- **daemon -> track_store**: `_cmd_radio`, `_cmd_play`, and `_cmd_queue` all register tracks before adding proxy URLs to MPD
 - **stream_proxy -> track_store**: Looks up track on proxy request; returns 404 if missing
 - **daemon -> providers**: Calls `search()`, `get_radio()`, `get_stream()`, `get_track_metadata()`
 - **xmpd-search -> xmpctl**: fzf actions call `xmpctl play/queue/radio` commands
