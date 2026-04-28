@@ -1158,6 +1158,19 @@ class XMPDaemon:
             # Get track metadata via provider
             track_info = self._get_track_info(provider, track_id)
 
+            # Register in TrackStore so stream proxy can resolve the track
+            if self.track_store:
+                try:
+                    self.track_store.add_track(
+                        provider=provider,
+                        track_id=track_id,
+                        stream_url=None,
+                        title=track_info.get("title", "Unknown"),
+                        artist=track_info.get("artist", None),
+                    )
+                except Exception:
+                    logger.warning("Failed to register track in store: %s/%s", provider, track_id)
+
             # Build proxy URL
             proxy_port = (self.proxy_config or {}).get("port", 8080)
             proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
@@ -1193,6 +1206,19 @@ class XMPDaemon:
                 return {"success": False, "error": "Missing track ID"}
 
             track_info = self._get_track_info(provider, track_id)
+
+            # Register in TrackStore so stream proxy can resolve the track
+            if self.track_store:
+                try:
+                    self.track_store.add_track(
+                        provider=provider,
+                        track_id=track_id,
+                        stream_url=None,
+                        title=track_info.get("title", "Unknown"),
+                        artist=track_info.get("artist", None),
+                    )
+                except Exception:
+                    logger.warning("Failed to register track in store: %s/%s", provider, track_id)
 
             proxy_port = (self.proxy_config or {}).get("port", 8080)
             proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"

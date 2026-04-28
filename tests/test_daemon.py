@@ -411,6 +411,30 @@ class TestCmdPlayQueue:
         assert response["success"] is True
         add_call = daemon.mpd_client._client.add.call_args[0][0]
         assert add_call == "http://localhost:6602/proxy/yt/abc12345678"
+        # TrackStore must be registered before MPD add
+        daemon.track_store.add_track.assert_called_once_with(
+            provider="yt",
+            track_id="abc12345678",
+            stream_url=None,
+            title="Test Song",
+            artist="Test Artist",
+        )
+
+    def test_cmd_play_registers_track_before_mpd_add(self, tmp_path):
+        """TrackStore registration happens before MPD add call."""
+        yt = _make_yt_provider()
+        yt.get_track_metadata.return_value = TrackMetadata(
+            title="Order Song", artist="Order Artist",
+            album=None, duration_seconds=120, art_url=None,
+        )
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
+        daemon.mpd_client._client = Mock()
+        call_order = []
+        daemon.track_store.add_track.side_effect = lambda **kw: call_order.append("add_track")
+        daemon.mpd_client._client.add.side_effect = lambda url: call_order.append("mpd_add")
+        daemon._cmd_play("yt", "order123")
+        assert call_order.index("add_track") < call_order.index("mpd_add")
 
     def test_cmd_queue_success(self, tmp_path):
         yt = _make_yt_provider()
@@ -425,6 +449,30 @@ class TestCmdPlayQueue:
         assert response["success"] is True
         add_call = daemon.mpd_client._client.add.call_args[0][0]
         assert add_call == "http://localhost:6602/proxy/yt/def12345678"
+        # TrackStore must be registered before MPD add
+        daemon.track_store.add_track.assert_called_once_with(
+            provider="yt",
+            track_id="def12345678",
+            stream_url=None,
+            title="Q Song",
+            artist="Q Artist",
+        )
+
+    def test_cmd_queue_registers_track_before_mpd_add(self, tmp_path):
+        """TrackStore registration happens before MPD add call."""
+        yt = _make_yt_provider()
+        yt.get_track_metadata.return_value = TrackMetadata(
+            title="Q Order Song", artist="Q Order Artist",
+            album=None, duration_seconds=240, art_url=None,
+        )
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
+        daemon.mpd_client._client = Mock()
+        call_order = []
+        daemon.track_store.add_track.side_effect = lambda **kw: call_order.append("add_track")
+        daemon.mpd_client._client.add.side_effect = lambda url: call_order.append("mpd_add")
+        daemon._cmd_queue("yt", "qorder456")
+        assert call_order.index("add_track") < call_order.index("mpd_add")
 
 
 # ---------------------------------------------------------------------------
