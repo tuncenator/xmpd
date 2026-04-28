@@ -1533,12 +1533,13 @@ def main() -> None:
             icon = args.icon_stopped
             color = args.color_stopped
 
-        # Override color on auth failure or refresh failures
-        auth_valid, _auth_error, auto_refresh_failures = get_auth_status()
-        if not auth_valid:
-            color = "#ff5577"  # Red for auth failure
-        elif auto_refresh_failures > 0:
-            color = "#e0af68"  # Orange for refresh failures
+        # Override color on auth failure or refresh failures (YT-specific)
+        if track_type == "youtube":
+            auth_valid, _auth_error, auto_refresh_failures = get_auth_status()
+            if not auth_valid:
+                color = "#ff5577"  # Red for auth failure
+            elif auto_refresh_failures > 0:
+                color = "#e0af68"  # Orange for refresh failures
 
         # Get playlist context
         playlist_ctx = get_playlist_context(client)
