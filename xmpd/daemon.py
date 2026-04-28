@@ -632,10 +632,6 @@ class XMPDaemon:
                 else:
                     provider, track_id = None, None
                 response = self._cmd_radio(provider, track_id)
-            elif cmd == "search":
-                provider, remaining = self._parse_provider_args(args)
-                query = " ".join(remaining) if remaining else None
-                response = self._cmd_search(query, provider=provider)
             elif cmd == "search-json":
                 # search-json [--provider yt|all] [--limit N] QUERY
                 response = self._cmd_search_json(parts[1:])
@@ -840,59 +836,6 @@ class XMPDaemon:
                 is_auth = False
             statuses[name] = {"enabled": bool(enabled), "authenticated": bool(is_auth)}
         return {"success": True, "providers": statuses}
-
-    def _cmd_search(
-        self, query: str | None, *, provider: str | None = None,
-    ) -> dict[str, Any]:
-        """Handle 'search' command - search across providers.
-
-        Args:
-            query: Search query string.
-            provider: Restrict to a single provider, or None for all.
-        """
-        logger.info("Search command: query=%s provider=%s", query, provider)
-
-        try:
-            if query is None or not query.strip():
-                return {"success": False, "error": "Empty search query"}
-
-            # Determine which providers to search
-            if provider and provider != "all":
-                if provider not in self.provider_registry:
-                    return {"success": False, "error": f"Unknown provider: {provider}"}
-                targets = {provider: self.provider_registry[provider]}
-            else:
-                targets = self.provider_registry
-
-            formatted: list[dict[str, Any]] = []
-            global_idx = 1
-            for pname, prov in targets.items():
-                try:
-                    is_auth, _ = prov.is_authenticated()
-                    if not is_auth:
-                        continue
-                    results = prov.search(query, limit=10)
-                    for track in results:
-                        formatted.append({
-                            "number": global_idx,
-                            "provider": pname,
-                            "track_id": track.track_id,
-                            "title": track.metadata.title,
-                            "artist": track.metadata.artist or "Unknown Artist",
-                            "duration": self._format_duration(
-                                track.metadata.duration_seconds or 0
-                            ),
-                        })
-                        global_idx += 1
-                except Exception as e:
-                    logger.warning("Search failed for provider %s: %s", pname, e)
-
-            logger.info("Found %d results for: %s", len(formatted), query)
-            return {"success": True, "results": formatted, "count": len(formatted)}
-
-        except Exception as e:
-            logger.error("Search failed: %s", e)
-            return {"success": False, "error": f"Search failed: {e}"}
 
     def _cmd_radio(
         self, provider: str | None, track_id: str | None,
