@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 1 (2026-04-29)
+> Last updated by: Checkpoint 2 (2026-04-29)
 
 ---
 
@@ -39,8 +39,8 @@ User types in fzf (xmpd-search)
 | File Path | Purpose | Notes |
 |-----------|---------|-------|
 | `xmpd/__main__.py` | Entry point, logging setup | `XMPDaemon().run()` |
-| `xmpd/daemon.py` | Core daemon, command handlers (~1400 lines) | `_cmd_play` (1145), `_cmd_queue` (1182), `_cmd_radio` (897), `_cmd_search` (844, dead), `_cmd_search_json` (1061), `_quality_for_provider` (1054) |
-| `xmpd/stream_proxy.py` | HTTP proxy server for audio streams | `_stream_dash_via_ffmpeg` (79), TrackStore lookup (562) |
+| `xmpd/daemon.py` | Core daemon, command handlers (~1350 lines) | `_cmd_play` (1095), `_cmd_queue` (1132), `_cmd_radio` (847), `_cmd_search_json` (1018), `_quality_for_provider` (1004, instance method) |
+| `xmpd/stream_proxy.py` | HTTP proxy server for audio streams | `_probe_best_audio_stream` (80), `_stream_dash_via_ffmpeg` (126, accepts stream_index), TrackStore lookup (562) |
 | `xmpd/track_store.py` | SQLite track metadata store | `add_track` (230), `get_track` (303) |
 | `xmpd/providers/tidal.py` | Tidal provider | `get_stream` (255), `_fetch_manifest` (274) |
 | `xmpd/providers/ytmusic.py` | YouTube Music provider | |
@@ -51,8 +51,8 @@ User types in fzf (xmpd-search)
 | `xmpd/mpd_client.py` | MPD connection wrapper | |
 | `xmpd/proxy_url.py` | URL construction utilities | |
 | `xmpd/rating.py` | Like/dislike state management | |
-| `bin/xmpctl` | CLI client (Python) | Commands: play, queue, radio, search-json, search (dead) |
-| `bin/xmpd-search` | fzf search wrapper (Bash) | Keybinds: enter, ctrl-q, ctrl-r, ctrl-l, tab, ctrl-a, ctrl-p |
+| `bin/xmpctl` | CLI client (Python) | Commands: play, queue, radio, search-json |
+| `bin/xmpd-search` | fzf search wrapper (Bash) | Keybinds: enter, ctrl-e, ctrl-r, ctrl-l, tab, ctrl-a, ctrl-p |
 
 ---
 
@@ -84,15 +84,13 @@ class XMPDaemon:
     def _cmd_radio(self, provider: str | None, track_id: str | None) -> dict[str, Any]
         # Line 897. Generates radio playlist. CORRECT: calls track_store.add_track() at line 957-967
 
-    def _cmd_search(self, query: str | None, *, provider: str | None = None) -> dict[str, Any]
-        # Line 844. DEAD CODE. Old text-based search.
-
     def _cmd_search_json(self, args: list[str]) -> dict[str, Any]
-        # Line 1061. Returns structured search results for fzf. Stays.
+        # Line 1018. Returns structured search results for fzf.
 
-    @staticmethod
-    def _quality_for_provider(provider_name: str) -> str
-        # Line 1054. Returns "CD" for tidal, "Lo" for yt. BUG: hardcoded, never per-track.
+    def _quality_for_provider(self, provider_name: str) -> str
+        # Line 1004. Instance method. Reads tidal.quality_ceiling from config.
+        # Maps: HI_RES_LOSSLESS -> "HiRes", LOSSLESS -> "CD", HIGH -> "320k", LOW -> "96k".
+        # Falls back to "CD" for unknown values. Returns "Lo" for non-Tidal providers.
 
     def _get_track_info(self, provider: str, track_id: str) -> dict[str, str]
         # Line 1359. Fetches metadata via provider.get_track_metadata(). Returns {title, artist}.
@@ -104,10 +102,14 @@ class XMPDaemon:
 ### Stream Proxy (`xmpd/stream_proxy.py`)
 
 ```python
+async def _probe_best_audio_stream(manifest_url: str) -> int
+    # Line 80. Module-level async function. Runs ffprobe against DASH manifest,
+    # returns index of audio stream with highest bitrate. Falls back to 0 on error.
+
 class StreamRedirectProxy:
-    async def _stream_dash_via_ffmpeg(request, manifest_url, provider, track_id) -> web.StreamResponse
-        # Line 79. Transcodes DASH manifest via ffmpeg. BUG: no -map flag, gets lowest quality stream.
-        # ffmpeg command (line 91): ffmpeg -hide_banner -loglevel error -i {url} -c copy -f flac pipe:1
+    async def _stream_dash_via_ffmpeg(request, manifest_url, provider, track_id, stream_index=0) -> web.StreamResponse
+        # Line 126. Transcodes DASH manifest via ffmpeg with `-map 0:a:{stream_index}`.
+        # stream_index from _probe_best_audio_stream selects highest quality audio.
 
     def _resolve_stream_url_with_ttl(...)
         # Line 555. Looks up TrackStore, returns 404 if not found (line 562-565).
@@ -131,9 +133,6 @@ class TidalProvider:
 def cmd_radio(apply=False, provider=None, track_id=None) -> None
     # Line 648. Builds daemon command: "radio --provider {prov} {track_id}".
     # --apply flag: auto-loads radio playlist to MPD.
-
-def cmd_search(query=None, provider=None) -> None
-    # Line 331. DEAD CODE. Old interactive search.
 
 def cmd_search_json(args: list[str]) -> None
     # Line 546. Sends search-json to daemon. Supports --format fzf.
@@ -225,5 +224,5 @@ Unique constraint: `tracks_pk_idx` on `(provider, track_id)`
 
 ## External Services & APIs
 
-- Tidal API v2 (`openapi.tidal.com/v2`): used in Phase 4 for per-track quality metadata -- see phase plan for details
+- Tidal API v2 (`openapi.tidal.com/v2`): stream resolution and search
 - MPD protocol: all phases interact with MPD for playback verification
