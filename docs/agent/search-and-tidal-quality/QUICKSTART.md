@@ -204,27 +204,24 @@ Your work is complete! The next agent will handle the next phase.
 
 ## Environment Setup
 
-**Python environment with uv:**
+**CRITICAL: xmpd runs as a systemd --user service.** Do NOT spawn `python -m xmpd` for testing. The running service will conflict (port already in use). Instead, send commands to the already-running daemon via `bin/xmpctl`.
 
 ```bash
-# First-time setup (if .venv doesn't exist)
-uv venv
-uv pip install -r requirements.txt
+# Daemon management (systemd user service)
+systemctl --user status xmpd       # Check if running
+systemctl --user restart xmpd      # Restart after code changes
+systemctl --user stop xmpd         # Stop before spawning a test instance (rare)
 
-# Activate before each session
+# Only if you MUST run a standalone instance (stop the service first!):
+# systemctl --user stop xmpd && python -m xmpd
+
+# Python environment with uv
 source .venv/bin/activate
 
-# Running the daemon (for testing)
-python -m xmpd
+# Running tests (full suite hangs at collection -- use targeted list)
+pytest tests/test_daemon.py tests/test_config.py tests/test_track_store.py tests/test_stream_proxy.py tests/test_providers_tidal.py tests/test_xmpctl.py tests/test_search_json.py -v
 
-# Running tests
-pytest tests/ -v
-pytest tests/test_daemon.py -v
-
-# Running a specific test
-pytest tests/test_daemon.py::test_cmd_play -v
-
-# CLI client
+# CLI client (talks to the running systemd service)
 bin/xmpctl status
 bin/xmpctl search-json "query" --format fzf
 
@@ -232,10 +229,14 @@ bin/xmpctl search-json "query" --format fzf
 bin/xmpd-search
 ```
 
+**MPD port**: 6601 (not default 6600). Use `mpc -p 6601`.
+
 **Check daemon logs:**
 ```bash
 tail -f ~/.config/xmpd/xmpd.log
 ```
+
+**Test tracks**: Use Pink Floyd tracks from Dark Side of the Moon (2023 Remaster) for manual playback verification. Track ID 283628184 (Breathe) is a known-good Tidal track.
 
 ---
 

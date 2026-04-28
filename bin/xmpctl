@@ -366,11 +366,13 @@ def format_track_fzf(track: dict[str, Any]) -> str:
 
     # Quality badge
     badge = ""
-    if quality == "HR":
-        badge = f" {ANSI_BOLD}HR{ANSI_RESET}{color}"
-    elif quality == "CD":
+    if quality in ("HR", "HiRes"):
+        badge = f" {ANSI_BOLD}HiRes{ANSI_RESET}{color}"
+    elif quality in ("CD", "LOSSLESS"):
         badge = " CD"
-    elif quality == "Lo":
+    elif quality == "320k":
+        badge = " 320k"
+    elif quality in ("Lo", "96k"):
         badge = f" {ANSI_DIM}Lo{ANSI_RESET}{color}"
 
     # Liked indicator
