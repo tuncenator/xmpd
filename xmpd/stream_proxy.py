@@ -27,13 +27,16 @@ from typing import Any
 
 from aiohttp import web
 
-from xmpd.exceptions import URLRefreshError
+from xmpd.exceptions import DashStreamError, URLRefreshError
 from xmpd.track_store import TrackStore
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TTL_HOURS = 5
 MAX_CONCURRENT_STREAMS = 10
+DASH_MAX_RETRIES = 3
+DASH_RETRY_DELAYS = (2, 4, 8)
+DASH_FIRST_CHUNK_TIMEOUT = 15
 
 # Chunk size for ffmpeg stdout reads when piping DASH-stitched FLAC to the
 # client. 64 KiB is a balance between latency and syscall overhead.
@@ -56,25 +59,35 @@ def _is_dash_manifest(url: str) -> bool:
     return url.split("?", 1)[0].lower().endswith(".mpd")
 
 
+async def _kill_ffmpeg(proc: asyncio.subprocess.Process) -> bytes:
+    """Kill an ffmpeg subprocess and return its stderr output."""
+    if proc.returncode is None:
+        proc.kill()
+        try:
+            await asyncio.shield(proc.wait())
+        except (asyncio.CancelledError, Exception):
+            pass
+    stderr_bytes = b""
+    if proc.stderr is not None:
+        try:
+            stderr_bytes = await asyncio.shield(proc.stderr.read())
+        except (asyncio.CancelledError, Exception):
+            pass
+    return stderr_bytes
+
+
 async def _stream_dash_via_ffmpeg(
     request: web.Request, manifest_url: str, provider: str, track_id: str
 ) -> web.StreamResponse:
     """Pipe ffmpeg's FLAC remux of a DASH manifest back to the client.
 
-    Spawns ``ffmpeg -i <manifest_url> -c copy -f flac pipe:1`` and forwards
-    its stdout to the aiohttp response. Stitches all DASH segments into a
-    single continuous FLAC stream without re-encoding (segments already
-    contain FLAC inside MP4; ffmpeg just remuxes).
+    Reads the first chunk *before* committing HTTP 200 so that a failed
+    ffmpeg (network down, expired manifest) raises DashStreamError instead
+    of sending an empty 200 that stalls MPD.
 
     Kills the subprocess if the client disconnects mid-stream so we don't
     leak ffmpeg processes when MPD skips tracks.
     """
-    response = web.StreamResponse(
-        status=200, headers={"Content-Type": "audio/flac"}
-    )
-    response.enable_chunked_encoding()
-    await response.prepare(request)
-
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg",
         "-hide_banner",
@@ -92,13 +105,36 @@ async def _stream_dash_via_ffmpeg(
     )
 
     assert proc.stdout is not None
+
     try:
+        first_chunk = await asyncio.wait_for(
+            proc.stdout.read(FFMPEG_READ_CHUNK),
+            timeout=DASH_FIRST_CHUNK_TIMEOUT,
+        )
+    except (TimeoutError, asyncio.CancelledError):
+        first_chunk = b""
+
+    if not first_chunk:
+        stderr_bytes = await _kill_ffmpeg(proc)
+        raise DashStreamError(
+            f"ffmpeg produced no data for {provider}/{track_id}: "
+            f"{stderr_bytes.decode(errors='replace')[:300]}"
+        )
+
+    response = web.StreamResponse(
+        status=200, headers={"Content-Type": "audio/flac"}
+    )
+    response.enable_chunked_encoding()
+    await response.prepare(request)
+
+    client_disconnected = False
+    try:
+        await response.write(first_chunk)
         while True:
             chunk = await proc.stdout.read(FFMPEG_READ_CHUNK)
             if not chunk:
                 break
             await response.write(chunk)
-        client_disconnected = False
     except (ConnectionResetError, asyncio.CancelledError):
         logger.info(
             f"[PROXY] Client disconnected during DASH stream {provider}/{track_id}"
@@ -123,8 +159,6 @@ async def _stream_dash_via_ffmpeg(
                 f"for {provider}/{track_id}: {stderr_bytes.decode(errors='replace')[:300]}"
             )
 
-    # write_eof can raise if the client already closed the connection -- don't
-    # let cleanup turn a normal client disconnect into a 500.
     if not client_disconnected:
         try:
             await response.write_eof()
@@ -414,22 +448,83 @@ class StreamRedirectProxy:
 
         # Streaming phase: runs outside the semaphore.
         if _is_dash_manifest(stream_url):
-            logger.debug(
-                f"[PROXY:{req_id}] Streaming DASH via ffmpeg for {provider}/{track_id}"
+            return await self._stream_dash_with_retry(
+                request, stream_url, provider, track_id, req_id
             )
-            await self._increment_counter("_active_streams")
-            try:
-                return await _stream_dash_via_ffmpeg(
-                    request, stream_url, provider, track_id
-                )
-            finally:
-                await self._decrement_counter("_active_streams")
 
         logger.debug(
             f"[PROXY:{req_id}] Redirecting {provider}/{track_id} "
             f"-> {stream_url[:60]}..."
         )
         raise web.HTTPTemporaryRedirect(stream_url)
+
+    async def _stream_dash_with_retry(
+        self,
+        request: web.Request,
+        stream_url: str,
+        provider: str,
+        track_id: str,
+        req_id: str,
+    ) -> web.StreamResponse:
+        """Try DASH streaming with retries on ffmpeg failure.
+
+        If ffmpeg produces no audio data (network outage, expired manifest),
+        re-resolves the stream URL and retries up to DASH_MAX_RETRIES times
+        before returning 502.
+        """
+        last_err: DashStreamError | None = None
+        for attempt in range(DASH_MAX_RETRIES + 1):
+            await self._increment_counter("_active_streams")
+            try:
+                return await _stream_dash_via_ffmpeg(
+                    request, stream_url, provider, track_id
+                )
+            except DashStreamError as e:
+                last_err = e
+            finally:
+                await self._decrement_counter("_active_streams")
+
+            if attempt >= DASH_MAX_RETRIES:
+                break
+
+            delay = DASH_RETRY_DELAYS[attempt]
+            logger.warning(
+                f"[PROXY:{req_id}] DASH stream empty for {provider}/{track_id}, "
+                f"retrying in {delay}s (attempt {attempt + 1}/{DASH_MAX_RETRIES})"
+            )
+            await asyncio.sleep(delay)
+
+            try:
+                stream_url = await self._force_refresh_url(provider, track_id, req_id)
+            except (web.HTTPException, URLRefreshError):
+                break
+
+        logger.error(
+            f"[PROXY:{req_id}] DASH stream failed after {DASH_MAX_RETRIES} retries "
+            f"for {provider}/{track_id}: {last_err}"
+        )
+        raise web.HTTPBadGateway(
+            text=f"DASH stream failed for {provider}/{track_id}"
+        )
+
+    async def _force_refresh_url(
+        self, provider: str, track_id: str, req_id: str
+    ) -> str:
+        """Force-refresh a stream URL, bypassing the TTL cache check."""
+        async with self._resolution_semaphore:
+            try:
+                new_url = await self._refresh_stream_url(provider, track_id)
+            except URLRefreshError as e:
+                logger.error(
+                    f"[PROXY:{req_id}] URL re-resolve failed for "
+                    f"{provider}/{track_id}: {e}"
+                )
+                raise
+            self.track_store.update_stream_url(provider, track_id, new_url)
+            logger.info(
+                f"[PROXY:{req_id}] URL re-resolved for {provider}/{track_id}"
+            )
+            return new_url
 
     async def _resolve_stream_url(
         self, provider: str, track_id: str, req_id: str

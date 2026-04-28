@@ -83,6 +83,12 @@ class URLRefreshError(ProxyError):
     pass
 
 
+class DashStreamError(ProxyError):
+    """Raised when ffmpeg produces no audio data from a DASH manifest."""
+
+    pass
+
+
 class CookieExtractionError(XMPDError):
     """Raised when browser cookie extraction fails."""
 
