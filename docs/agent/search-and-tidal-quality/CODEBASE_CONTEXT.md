@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 2 (2026-04-29)
+> Last updated by: Checkpoint 3 (2026-04-29)
 
 ---
 
@@ -133,6 +133,9 @@ class TidalProvider:
 def cmd_radio(apply=False, provider=None, track_id=None) -> None
     # Line 648. Builds daemon command: "radio --provider {prov} {track_id}".
     # --apply flag: auto-loads radio playlist to MPD.
+    # Radio dispatch (line ~955-971): strips whitespace from provider/track_id,
+    # normalizes empty strings to None, rejects explicit --track-id with empty value
+    # (exit 1) to prevent silent MPD fallback when fzf has no highlighted item.
 
 def cmd_search_json(args: list[str]) -> None
     # Line 546. Sends search-json to daemon. Supports --format fzf.
