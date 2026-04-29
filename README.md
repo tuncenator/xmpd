@@ -18,22 +18,29 @@ Tidal HiFi    /
 - **Per-provider failure isolation** -- a flaky provider never blocks others.
 - **XSPF playlists** -- optional format giving MPD separate artist/title fields
   and duration, for proper ncmpcpp display.
+- **Interactive search** -- `xmpd-search` launches a two-mode fzf interface:
+  type to search (350ms debounce, live API queries), press Enter to browse
+  results locally. Supports play, queue, radio seed, like-toggle, and
+  multi-select actions.
+- **Parallel provider search** -- search queries run concurrently across all
+  enabled providers via `ThreadPoolExecutor`. Results show quality badges
+  (`HiRes`, `HiFi`, `Lo`) and liked-state from local playlists (no API calls).
 - **Radio** -- generate a personalised radio playlist seeded from the current
-  track (`xmpctl radio`).
-- **Cross-provider search** -- search across all enabled providers; results
-  prefixed with `[YT]` / `[TD]` (`xmpctl search [--provider yt|tidal|all]`).
-- **Likes / dislikes** -- toggle ratings from any MPD environment; the daemon
-  parses the playing URL to route the action to the correct provider
-  (`xmpctl like|dislike`).
+  track or from a search result (`xmpctl radio`).
+- **Like-toggle** -- toggle liked state from search results (ctrl-l) or the
+  current track (`xmpctl like`). The daemon patches the local liked-songs
+  playlist immediately without a full resync.
 - **Like indicator** -- visually tag liked tracks inside playlists.
 - **History reporting** -- feed completed plays back to their source provider.
+  Tidal uses the event-batch API for accurate play reporting.
 - **Auto-auth (YT)** -- refresh YouTube Music credentials automatically from
   Firefox cookies; no manual header pasting required.
 - **OAuth device flow (Tidal)** -- one-time Tidal sign-in via `xmpctl auth tidal`;
   session persists at `~/.config/xmpd/tidal_session.json`.
 - **AirPlay bridge (optional)** -- see `extras/airplay-bridge/`; includes
   Tidal album art lookup via xmpd's track-store DB.
-- **i3 integration** -- status script with adaptive truncation for i3blocks.
+- **i3 integration** -- status script with adaptive truncation, playlist
+  position display, and click handling for i3blocks.
 
 ## Requirements
 
@@ -162,24 +169,25 @@ Full reference with comments: [`examples/config.yaml`](examples/config.yaml).
 
 ## Cross-provider behavior
 
-- **`xmpctl like` / `xmpctl dislike`**: the daemon parses the currently playing
-  MPD URL (`/proxy/<provider>/<track_id>`) and dispatches to the matching
-  provider. No cross-provider mirroring in this release.
-- **`xmpctl search`**: defaults to all enabled and authenticated providers.
-  `--provider yt|tidal|all` restricts the scope. Results are merged with
-  `[YT]` / `[TD]` prefixes.
-- **`xmpctl radio`**: infers provider from the current track URL. Force a
-  specific provider with `--provider tidal`.
+- **`xmpctl like` / `xmpctl like-toggle`**: the daemon parses the currently
+  playing MPD URL (`/proxy/<provider>/<track_id>`) and dispatches to the
+  matching provider. `like-toggle` also patches the local liked-songs playlist
+  immediately. No cross-provider mirroring.
+- **`xmpd-search`**: two-mode fzf interface. Queries all enabled and
+  authenticated providers in parallel. `--provider yt|tidal|all` restricts
+  scope. Results show `[YT]` / `[TD]` badges with quality labels.
+- **`xmpctl radio`**: infers provider from the current track URL, or accepts
+  `--provider` and `--track-id` to seed from a search result.
 - **History reporting**: per-provider. YT plays go to YouTube Music; Tidal plays
-  go to Tidal.
+  go to Tidal (via event-batch API).
 
 ## HiRes streaming status
 
-Tidal `quality_ceiling: HI_RES_LOSSLESS` is parsed and accepted by the config
-but internally clamped to `LOSSLESS` (16-bit FLAC). HI_RES_LOSSLESS requires
-a DASH manifest muxing pipeline that is out of scope for this release. The
-LOSSLESS path delivers full 16-bit/44.1 kHz FLAC. See
-[`docs/MIGRATION.md`](docs/MIGRATION.md) for the rationale and the path forward.
+Tidal streams use the DASH manifest API (`/v2/trackManifests`). The
+`quality_ceiling` config defaults to `LOSSLESS` (16-bit/44.1 kHz FLAC).
+`HI_RES_LOSSLESS` is accepted by the config but the stream path currently
+delivers LOSSLESS-tier audio. Search results display per-track quality badges
+(HiRes, HiFi, Lo) from Tidal's metadata regardless of the streaming ceiling.
 
 ## AirPlay bridge (optional)
 
@@ -213,21 +221,25 @@ bindsym $mod+Shift+b exec --no-startup-id mpc prev
 # Ratings
 bindsym $mod+plus  exec --no-startup-id xmpctl like
 bindsym $mod+minus exec --no-startup-id xmpctl dislike
+
+# Search (launches fzf in a terminal)
+bindsym $mod+Shift+f exec --no-startup-id xmpd-search
 ```
 
 ### i3blocks status
 
 ```ini
-[xmpd]
-command=/path/to/xmpd/bin/xmpd-status
-interval=5
-separator_block_width=15
+[xmpd-status]
+command=/path/to/xmpd/bin/xmpd-status --handle-clicks --show-position --bar-length 22 --fixed-bar-length --max-length 75
+interval=1
+signal=10
+markup=none
 ```
 
 Truncates adaptively under width pressure: timestamps stay, progress bar
-shrinks, song name ellipsises last.
-
-See `examples/i3blocks.conf` for a full setup.
+shrinks, song name ellipsises last. `--show-position` displays playlist
+position (e.g. `[3/15]`). `--handle-clicks` enables left/right click
+play/pause and next/prev.
 
 ## Troubleshooting
 
@@ -299,6 +311,8 @@ xmpd/
 |   +-- config.py                 # Config load/validate (multi-source shape)
 |   +-- daemon.py                 # Orchestrator + socket server
 |   +-- history_reporter.py       # MPD -> provider history
+|   +-- playlist_patcher.py       # In-place liked-playlist add/remove
+|   +-- proxy_url.py              # Proxy URL parsing utilities
 |   +-- stream_proxy.py           # HTTP 307 proxy: /proxy/<provider>/<id>
 |   +-- mpd_client.py             # python-mpd2 wrapper
 |   +-- notify.py                 # Desktop notifications
@@ -317,6 +331,7 @@ xmpd/
 |       +-- tidal_oauth.py        # Tidal OAuth device flow + token persistence
 +-- bin/
 |   +-- xmpctl                    # Sync / rating / search / auth CLI
+|   +-- xmpd-search               # Two-mode fzf interactive search
 |   +-- xmpd-status               # i3blocks status script
 |   +-- xmpd-status-preview       # Widget preview helper
 +-- scripts/
