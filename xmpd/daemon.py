@@ -1365,6 +1365,7 @@ class XMPDaemon:
                     )
 
                     if self.mpd_client and self.mpd_client._client:
+                        self._ensure_mpd()
                         track_info = self._get_track_info(provider, track_id)
                         base_title = (
                             f"{track_info.get('artist', 'Unknown')} - "
