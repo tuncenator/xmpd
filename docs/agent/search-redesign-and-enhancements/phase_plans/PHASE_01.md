@@ -65,11 +65,30 @@ Esc in Browse mode (return to Search):
 esc:disable-search+change-prompt(Search: )+unbind(enter,ctrl-e,ctrl-r,ctrl-l,tab)+rebind(change)+transform-query(echo {q})
 ```
 
-The exact fzf bind syntax may vary. Read `man fzf` or `fzf --help` to confirm the action names. The key fzf features:
+**Canonical reference**: fzf's own ripgrep/fzf mode-switching example in `ADVANCED.md` (https://github.com/junegunn/fzf/blob/master/ADVANCED.md) uses this exact pattern. Study this example:
+
+```bash
+# From fzf ADVANCED.md -- ripgrep mode (Search) / fzf mode (Browse) switching
+fzf --ansi --disabled --query "$INITIAL_QUERY" \
+    --bind "start:reload($RG_PREFIX {q})+unbind(ctrl-r)" \
+    --bind "change:reload:sleep 0.1; $RG_PREFIX {q} || true" \
+    --bind "ctrl-f:unbind(change,ctrl-f)+change-prompt(2. fzf> )+enable-search+rebind(ctrl-r)+transform-query(echo {q} > /tmp/rg-fzf-r; cat /tmp/rg-fzf-f)" \
+    --bind "ctrl-r:unbind(ctrl-r)+change-prompt(1. ripgrep> )+disable-search+reload($RG_PREFIX {q} || true)+rebind(change,ctrl-f)+transform-query(echo {q} > /tmp/rg-fzf-f; cat /tmp/rg-fzf-r)" \
+    --prompt '1. ripgrep> '
+```
+
+Key pattern: `unbind(change)` when entering Browse mode prevents `change:reload` from firing during local filtering. `rebind(change)` restores API search when returning to Search mode. `transform-query` with temp files preserves query text across mode switches.
+
+**Version requirements** (from fzf changelog):
+- `rebind` / `unbind`: fzf 0.30.0
+- `transform-query`: fzf 0.36.0
+- `enable-search` / `disable-search` / `change-prompt`: same range
+
+The key fzf actions used:
 - `enable-search` / `disable-search`: toggle local filtering
 - `change-prompt(...)`: change the prompt string
 - `rebind(key1,key2,...)` / `unbind(key1,key2,...)`: toggle keybinds
-- `transform-query(cmd)`: set the query string
+- `transform-query(cmd)`: set the query string from command output
 
 **Important edge cases**:
 
@@ -138,9 +157,33 @@ The exact fzf bind syntax may vary. Read `man fzf` or `fzf --help` to confirm th
 
 ---
 
+## Technical Reference
+
+### fzf mode-switching features (from official docs, context7)
+
+**Source**: https://github.com/junegunn/fzf/blob/master/ADVANCED.md, "Switching between Ripgrep mode and fzf mode"
+
+The canonical two-mode pattern:
+1. Start with `--disabled` (external search mode, no local filtering)
+2. `change:reload` fires the external search command
+3. Mode switch to fzf: `unbind(change)+enable-search+change-prompt(...)+rebind(...)+transform-query(...)`
+4. Mode switch back: `disable-search+rebind(change)+change-prompt(...)+unbind(...)+transform-query(...)`
+
+**Query preservation** uses temp files:
+```bash
+transform-query(echo {q} > /tmp/search-query; cat /tmp/browse-query)
+```
+This saves the current query to one file and restores the other mode's query from another file.
+
+**Key version requirements**:
+- fzf >= 0.30.0 for `rebind`/`unbind`
+- fzf >= 0.36.0 for `transform-query`
+
+---
+
 ## Notes
 
-- fzf's `rebind`/`unbind` is available since fzf 0.30.0. The user's system should have a recent enough version.
 - The `--expect` flag for ctrl-a/ctrl-p may interact with `rebind`/`unbind`. Test this interaction.
-- The `change:reload` binding fires on every query change. In Browse mode (after `enable-search`), local filtering changes the query, which could fire `change:reload`. You must `unbind(change)` when entering Browse mode to prevent this.
-- `transform-query` preserves the query text across mode switches. Essential for the Esc-back flow.
+- The `change:reload` binding fires on every query change. In Browse mode (after `enable-search`), local filtering changes the query, which could fire `change:reload`. You MUST `unbind(change)` when entering Browse mode to prevent this. This is the core of the pattern from fzf's ADVANCED.md.
+- `transform-query` preserves the query text across mode switches via temp files. Essential for the Esc-back flow.
+- Verify fzf version on the system: `fzf --version`. Manjaro typically ships recent fzf.
