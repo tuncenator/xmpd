@@ -1132,10 +1132,12 @@ class XMPDaemon:
             proxy_port = (self.proxy_config or {}).get("port", 8080)
             proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
 
-            # Clear queue, add track, start playback
+            # Clear queue, add track with metadata, start playback
             logger.info("Playing: %s - %s", track_info["title"], track_info["artist"])
             self.mpd_client._client.clear()
-            self.mpd_client._client.add(proxy_url)
+            song_id = self.mpd_client._client.addid(proxy_url)
+            self.mpd_client._client.addtagid(song_id, "Title", track_info["title"])
+            self.mpd_client._client.addtagid(song_id, "Artist", track_info["artist"])
             self.mpd_client._client.play()
 
             return {
@@ -1181,7 +1183,9 @@ class XMPDaemon:
             proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
 
             logger.info("Adding to queue: %s - %s", track_info["title"], track_info["artist"])
-            self.mpd_client._client.add(proxy_url)
+            song_id = self.mpd_client._client.addid(proxy_url)
+            self.mpd_client._client.addtagid(song_id, "Title", track_info["title"])
+            self.mpd_client._client.addtagid(song_id, "Artist", track_info["artist"])
 
             return {
                 "success": True,
