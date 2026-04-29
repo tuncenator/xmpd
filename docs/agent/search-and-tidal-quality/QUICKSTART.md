@@ -260,7 +260,12 @@ This project uses CAUTIOUS safety posture. Before performing any write operation
 
 - **Daemon commands**: Send commands via `bin/xmpctl`, check response
 - **Search actions**: Run `bin/xmpd-search`, select a track, press the keybinding, observe result
-- **Playback**: After play/queue, check MPD status (`mpc status`, `mpc playlist`) and logs
+- **Playback**: After play/queue, check ALL of the following:
+    - `mpc -p 6601 status` -- confirm playing state and progress
+    - `mpc -p 6601 playlist -f "%title% - %artist%"` -- confirm metadata (title, artist) is present, not blank or raw IDs
+    - `mpc -p 6601 current -f "title=%title% artist=%artist%"` -- confirm current track has tags
+    - If metadata is missing (empty title/artist, raw track ID shown), the fix is broken. Do NOT report success.
+    - After removing tracks: `mpc -p 6601 playlist` -- confirm the track is gone and remaining tracks still have metadata
 - **Stream proxy**: Check logs for 404 vs successful stream resolution
 - **fzf keybindings**: Run xmpd-search and test each binding manually
 
