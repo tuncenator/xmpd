@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Phase 0 - Initial Setup (2026-04-29)
+> Last updated by: Checkpoint 1 - Consolidated phases 1, 2, 3 (2026-04-29)
 
 ---
 
@@ -29,8 +29,8 @@ xmpd is a Python music player daemon proxy supporting multiple providers (Tidal,
 
 | File Path | Purpose | Notes |
 |-----------|---------|-------|
-| `xmpd/daemon.py` (1431 lines) | Main daemon, command dispatch | `_cmd_like_toggle` at line 1281; `_cmd_play`/`_cmd_queue` at 1095/1159 |
-| `xmpd/providers/tidal.py` (463 lines) | Tidal provider | `resolve_stream` -> `_fetch_manifest` for DASH; `report_play` at 449 (current: calls track.get_stream(), needs replacement) |
+| `xmpd/daemon.py` | Main daemon, command dispatch | `_cmd_like_toggle` calls `patch_playlist_files` and `patch_mpd_queue` after successful toggle; imports `pathlib.Path` |
+| `xmpd/providers/tidal.py` | Tidal provider | `resolve_stream` -> `_fetch_manifest` for DASH; `report_play` POSTs to `tidal.com/api/event-batch`; `_build_event_batch_body` for SQS encoding; `_last_quality` dict for quality tier cache |
 | `xmpd/providers/ytmusic.py` (1285 lines) | YouTube Music provider | `report_play` at 322 uses ytmusicapi's `report_history()` |
 | `xmpd/providers/base.py` (100 lines) | Provider protocol | `report_play(track_id, duration_seconds) -> bool` at line 100 |
 | `xmpd/history_reporter.py` (261 lines) | Play reporting orchestrator | Monitors MPD idle, calls `provider.report_play()` after 30s of play |
@@ -40,7 +40,8 @@ xmpd is a Python music player daemon proxy supporting multiple providers (Tidal,
 | `xmpd/stream_proxy.py` (692 lines) | HTTP stream proxy | Looks up tracks in TrackStore, resolves via provider |
 | `xmpd/config.py` (433 lines) | Config loader | Defaults: `playlist_format: "m3u"`, `mpd_playlist_directory: ~/.config/mpd/playlists` |
 | `xmpd/xspf_generator.py` (88 lines) | XSPF XML generator | `generate_xspf(tracks)` returns XML string |
-| `bin/xmpd-search` | Bash fzf search UI | Current: single-mode, 0.15s debounce, all keybinds always active |
+| `xmpd/playlist_patcher.py` | Immediate like-indicator patching | `patch_playlist_files` and `patch_mpd_queue` for M3U/XSPF and MPD queue after like-toggle |
+| `bin/xmpd-search` | Bash fzf search UI | Two-mode (Search/Browse), 350ms debounce, mode-aware keybinds via fzf transform action |
 | `bin/xmpctl` | Python CLI | Sends commands to daemon socket; `search-json` subcommand for fzf backend |
 
 ---
@@ -85,6 +86,7 @@ def _cmd_like_toggle(self, provider, track_id) -> dict:
 - Gets current like state from provider, applies LIKE toggle via rating state machine.
 - Calls `apply_to_provider(prov, transition, track_id)` for API call.
 - Invalidates `_liked_ids_cache_time` so next `search-json` reflects change.
+- Calls `patch_playlist_files` and `patch_mpd_queue` (from `playlist_patcher.py`) when `like_indicator.enabled` is true.
 - Returns `{"success": True, "liked": bool, "new_state": str, "message": str}`.
 
 ### MPD Tag Manipulation (via `_client: MPDClientBase`)
@@ -200,6 +202,6 @@ http://localhost:8080/proxy/tidal/12345
 
 ## External Services & APIs
 
-- Tidal event-batch API (`https://tidal.com/api/event-batch`): used in Phase 2 -- see phase plan for full reference.
+- Tidal event-batch API (`https://tidal.com/api/event-batch`): implemented in `tidal.py` via `report_play` -> `_post_play_event`. SQS SendMessageBatchRequestEntry encoding via `_build_event_batch_body`. Accepts up to 10 events per batch (currently sends one at a time).
 - Tidal v2 trackManifests API (`openapi.tidal.com/v2/trackManifests/{id}`): already implemented in `tidal.py:287-348`, provides DASH manifest URLs.
-- fzf 0.30+ features (`rebind`, `unbind`, `enable-search`, `disable-search`, `change-prompt`): used in Phase 1 -- see phase plan for full reference.
+- fzf 0.30+ features (`rebind`, `unbind`, `enable-search`, `disable-search`, `change-prompt`, `transform`, `transform-query`): implemented in `bin/xmpd-search` for two-mode (Search/Browse) design. Mode state tracked via temp file (`/tmp/xmpd-browse-mode-$$`).
