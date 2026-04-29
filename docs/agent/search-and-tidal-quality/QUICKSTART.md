@@ -261,13 +261,44 @@ This project uses CAUTIOUS safety posture. Before performing any write operation
 - **Daemon commands**: Send commands via `bin/xmpctl`, check response
 - **Search actions**: Run `bin/xmpd-search`, select a track, press the keybinding, observe result
 - **Playback**: After play/queue, check ALL of the following:
-    - `mpc -p 6601 status` -- confirm playing state and progress
+    - `mpc -p 6601 status` -- confirm playing state and progress advancing (not stuck at 0:00)
     - `mpc -p 6601 playlist -f "%title% - %artist%"` -- confirm metadata (title, artist) is present, not blank or raw IDs
     - `mpc -p 6601 current -f "title=%title% artist=%artist%"` -- confirm current track has tags
     - If metadata is missing (empty title/artist, raw track ID shown), the fix is broken. Do NOT report success.
     - After removing tracks: `mpc -p 6601 playlist` -- confirm the track is gone and remaining tracks still have metadata
 - **Stream proxy**: Check logs for 404 vs successful stream resolution
 - **fzf keybindings**: Run xmpd-search and test each binding manually
+
+### Mandatory End-to-End Smoke Test
+
+**Every phase that touches play, queue, search, radio, or MPD interaction MUST perform this test before reporting completion. No exceptions.**
+
+This test uses the running systemd service, not a test daemon. Do NOT spawn `python -m xmpd`.
+
+```bash
+# 1. Restart the service to load your code changes
+systemctl --user restart xmpd
+sleep 3
+
+# 2. Play a known track via CLI and verify
+bin/xmpctl play tidal 283628184
+mpc -p 6601 status                                    # Must show [playing]
+mpc -p 6601 current -f "title=%title% artist=%artist%" # Must show title=Breathe... artist=Pink Floyd
+
+# 3. Queue a second track and verify playlist metadata
+bin/xmpctl queue tidal 55391790
+mpc -p 6601 playlist -f "%title% - %artist%"           # Both tracks must show title - artist, not raw IDs
+
+# 4. Check daemon logs for errors
+tail -20 ~/.config/xmpd/xmpd.log | grep -i error       # Must be empty (no connection errors, no 404s)
+
+# 5. Check proxy resolved the stream (not 404)
+tail -20 ~/.config/xmpd/xmpd.log | grep -i 'proxy'     # Should show successful resolution, not "Track not found"
+```
+
+**If ANY step fails, your phase is not complete.** Fix the issue before reporting.
+
+**Why this exists:** Unit tests and `bin/xmpctl` CLI tests run against mocked MPD clients that never drop connections, never lose metadata, and never fail silently. The real daemon runs as a long-lived systemd service where MPD connections go stale, `execute-silent` in fzf swallows errors, and bare `mpd.add(url)` silently drops metadata. These bugs are invisible to unit tests and only surface when a human searches for a song and presses enter. This smoke test catches them.
 
 ### Verify Before Coding
 
