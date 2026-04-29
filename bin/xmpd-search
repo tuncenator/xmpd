@@ -90,7 +90,7 @@ BROWSE_HDR="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  $
 #   rebind(ctrl-q,ctrl-r,ctrl-l,tab)  -- activate Browse action keys
 #   transform-query(...)        -- save Search query, restore Browse query
 ENTER_TRANSFORM="transform:if [[ -f '${BROWSE_MODE_FILE}' ]]; then
-  echo 'execute-silent(${XMPCTL} play {1} {2})+abort'
+  echo 'execute-silent([ -n {2} ] && ${XMPCTL} play {1} {2})+abort'
 else
   touch '${BROWSE_MODE_FILE}'
   echo 'unbind(change)+enable-search+change-prompt(Browse: )+change-header(${BROWSE_HDR})+rebind(ctrl-q,ctrl-r,ctrl-l,tab)+transform-query(echo {q} > ${SEARCH_QUERY_FILE}; cat ${BROWSE_QUERY_FILE})'
@@ -143,9 +143,9 @@ FZF_OUTPUT=$(
         --expect='ctrl-a,ctrl-p' \
         --bind "enter:${ENTER_TRANSFORM}" \
         --bind "esc:${ESC_TRANSFORM}" \
-        --bind "ctrl-q:execute-silent(${XMPCTL} queue {1} {2})" \
-        --bind "ctrl-r:execute-silent(${XMPCTL} radio --provider {1} --track-id {2} --apply)+abort" \
-        --bind "ctrl-l:execute-silent(${XMPCTL} like-toggle {1} {2})+reload(${RELOAD_CMD})" \
+        --bind "ctrl-q:execute-silent([ -n {2} ] && ${XMPCTL} queue {1} {2})" \
+        --bind "ctrl-r:execute-silent([ -n {2} ] && ${XMPCTL} radio --provider {1} --track-id {2} --apply)+abort" \
+        --bind "ctrl-l:execute-silent([ -n {2} ] && ${XMPCTL} like-toggle {1} {2})+reload(${RELOAD_CMD})" \
         --bind "tab:toggle" \
     < /dev/null 2>/dev/null
 ) || exit 0
