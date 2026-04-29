@@ -145,7 +145,7 @@ FZF_OUTPUT=$(
         --bind "esc:${ESC_TRANSFORM}" \
         --bind "ctrl-q:execute-silent([ -n {2} ] && ${XMPCTL} queue {1} {2})" \
         --bind "ctrl-r:execute-silent([ -n {2} ] && ${XMPCTL} radio --provider {1} --track-id {2} --apply)+abort" \
-        --bind "ctrl-l:execute-silent([ -n {2} ] && ${XMPCTL} like-toggle {1} {2})+reload(${RELOAD_CMD})" \
+        --bind "ctrl-l:execute-silent([ -n {2} ] && ${XMPCTL} like-toggle {1} {2})" \
         --bind "tab:toggle" \
     < /dev/null 2>/dev/null
 ) || exit 0
