@@ -13,10 +13,13 @@ when LOSSLESS is requested -- see python-tidal issue #404.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
+import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 import tidalapi
@@ -29,6 +32,37 @@ from xmpd.exceptions import TidalAuthRequired, XMPDError
 from xmpd.providers.base import Playlist, Track, TrackMetadata
 
 logger = logging.getLogger(__name__)
+
+_EVENT_BATCH_URL = "https://tidal.com/api/event-batch"
+
+
+def _build_event_batch_body(events: list[dict[str, Any]]) -> str:
+    """Encode events into SQS SendMessageBatchRequestEntry form body.
+
+    Each event dict must have keys: id, name, message_body, headers.
+    Returns URL-encoded string suitable for POST with
+    Content-Type: application/x-www-form-urlencoded.
+    """
+    params: list[tuple[str, str]] = []
+    for i, event in enumerate(events, start=1):
+        prefix = f"SendMessageBatchRequestEntry.{i}"
+        attr_prefix = f"{prefix}.MessageAttribute"
+        params.append((f"{prefix}.Id", event["id"]))
+        params.append((f"{prefix}.MessageBody", event["message_body"]))
+        params.append((f"{attr_prefix}.1.Name", "Name"))
+        params.append(
+            (f"{attr_prefix}.1.Value.StringValue", event["name"])
+        )
+        params.append((f"{attr_prefix}.1.Value.DataType", "String"))
+        params.append((f"{attr_prefix}.2.Name", "Headers"))
+        params.append((f"{attr_prefix}.2.Value.DataType", "String"))
+        params.append(
+            (
+                f"{attr_prefix}.2.Value.StringValue",
+                json.dumps(event["headers"]),
+            )
+        )
+    return urlencode(params)
 
 
 class TidalProvider:
@@ -51,6 +85,10 @@ class TidalProvider:
         self._session: Any = None  # tidalapi.Session, lazily loaded
         # Lazy cache for get_like_state; populated on first call.
         self._favorites_ids: set[str] | None = None
+        # Quality tier cache: populated by _fetch_manifest, consumed by
+        # report_play. Keyed by track_id, value is Tidal actualQuality
+        # string (e.g. "LOSSLESS", "HI_RES_LOSSLESS").
+        self._last_quality: dict[str, str] = {}
 
     def is_enabled(self) -> bool:
         return bool(self._config.get("enabled", False))
@@ -447,17 +485,149 @@ class TidalProvider:
         return "LIKED" if str(track_id) in self._favorites_ids else "NEUTRAL"
 
     def report_play(self, track_id: str, duration_seconds: int) -> bool:
-        """Best-effort play attribution. Never raises.
+        """Report a play event to Tidal's event-batch API. Never raises.
 
-        Tidal has no documented play endpoint. The community pattern is to
-        call ``Track.get_stream()`` and discard the result.
+        Constructs a ``playback_session`` event in SQS
+        ``SendMessageBatchRequestEntry`` encoding and POSTs it to
+        ``https://tidal.com/api/event-batch``. On HTTP 401, attempts
+        a token refresh and retries once.
         """
         try:
             session = self._ensure_session()
-            track = session.track(track_id)
-            track.get_stream()
-            logger.debug("Tidal: reported play for %s (%ds)", track_id, duration_seconds)
-            return True
+            return self._post_play_event(session, track_id, duration_seconds)
         except Exception as e:
             logger.warning("Tidal report_play failed for %s: %s", track_id, e)
             return False
+
+    def _post_play_event(
+        self,
+        session: Any,
+        track_id: str,
+        duration_seconds: int,
+    ) -> bool:
+        """Build and POST the play event. Handles 401 retry."""
+        now_ms = int(time.time() * 1000)
+        start_ms = now_ms - int(duration_seconds * 1000)
+        event_uuid = str(uuid.uuid4())
+        playback_session_id = str(uuid.uuid4())
+
+        quality = self._last_quality.pop(str(track_id), "LOSSLESS")
+
+        payload = {
+            "playbackSessionId": playback_session_id,
+            "actualProductId": str(track_id),
+            "requestedProductId": str(track_id),
+            "productType": "TRACK",
+            "actualAssetPresentation": "FULL",
+            "actualAudioMode": "STEREO",
+            "actualQuality": quality,
+            "sourceType": "PLAYLIST",
+            "sourceId": "",
+            "isPostPaywall": True,
+            "startAssetPosition": 0.0,
+            "endAssetPosition": float(duration_seconds),
+            "startTimestamp": start_ms,
+            "endTimestamp": now_ms,
+            "actions": [
+                {
+                    "actionType": "PLAYBACK_START",
+                    "assetPosition": 0.0,
+                    "timestamp": start_ms,
+                },
+                {
+                    "actionType": "PLAYBACK_STOP",
+                    "assetPosition": float(duration_seconds),
+                    "timestamp": now_ms,
+                },
+            ],
+        }
+
+        message_body = json.dumps({
+            "name": "playback_session",
+            "group": "play_log",
+            "version": 2,
+            "payload": payload,
+            "ts": now_ms,
+            "uuid": event_uuid,
+        })
+
+        headers_obj = {
+            "app-name": "xmpd",
+            "app-version": "0.1.0",
+            "browser-name": "python-requests",
+            "browser-version": requests.__version__,
+            "os-name": "Linux",
+            "client-id": str(session.config.client_id),
+            "consent-category": "NECESSARY",
+            "requested-sent-timestamp": now_ms,
+            "authorization": session.access_token,
+        }
+
+        event_entry = {
+            "id": event_uuid,
+            "name": "playback_session",
+            "message_body": message_body,
+            "headers": headers_obj,
+        }
+
+        body = _build_event_batch_body([event_entry])
+        resp = requests.post(
+            _EVENT_BATCH_URL,
+            data=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Bearer {session.access_token}",
+            },
+            timeout=15,
+        )
+
+        if resp.status_code == 401:
+            if self._try_refresh_session():
+                logger.info(
+                    "Retrying play report after token refresh (track %s)",
+                    track_id,
+                )
+                return self._retry_play_post(body, track_id)
+            logger.warning(
+                "Tidal report_play 401 for %s, refresh failed", track_id
+            )
+            return False
+
+        if resp.ok:
+            logger.debug(
+                "Tidal: reported play for %s (%ds)",
+                track_id,
+                duration_seconds,
+            )
+            return True
+
+        logger.warning(
+            "Tidal report_play HTTP %s for %s: %s",
+            resp.status_code,
+            track_id,
+            resp.text[:200],
+        )
+        return False
+
+    def _retry_play_post(self, body: str, track_id: str) -> bool:
+        """Retry the event-batch POST with refreshed token."""
+        session = self._session
+        resp = requests.post(
+            _EVENT_BATCH_URL,
+            data=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Bearer {session.access_token}",
+            },
+            timeout=15,
+        )
+        if resp.ok:
+            logger.debug("Tidal: reported play for %s (retry)", track_id)
+            return True
+        logger.warning(
+            "Tidal report_play retry HTTP %s for %s: %s",
+            resp.status_code,
+            track_id,
+            resp.text[:200],
+        )
+        return False

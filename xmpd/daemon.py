@@ -14,6 +14,7 @@ import socket
 import threading
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from xmpd.config import get_config_dir, load_config
@@ -1327,6 +1328,53 @@ class XMPDaemon:
             )
 
             now_liked = transition.new_state == RatingState.LIKED
+
+            # Patch on-disk playlists and live MPD queue immediately
+            try:
+                from xmpd.playlist_patcher import patch_mpd_queue, patch_playlist_files
+                from xmpd.sync_engine import DEFAULT_FAVORITES_NAMES
+
+                proxy_port = (self.proxy_config or {}).get("port", 8080)
+                proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
+
+                like_indicator = self.config.get("like_indicator", {})
+                if like_indicator.get("enabled", False):
+                    playlist_dir = Path(
+                        self.config.get("mpd_playlist_directory", "~/.config/mpd/playlists")
+                    ).expanduser()
+                    xspf_dir = None
+                    if self.config.get("playlist_format") == "xspf":
+                        music_dir = self.config.get("mpd_music_directory", "~/Music")
+                        xspf_dir = Path(music_dir).expanduser() / "_xmpd"
+
+                    prefix_map = self.config.get(
+                        "playlist_prefix", {"yt": "YT: ", "tidal": "TD: "}
+                    )
+                    fav_names_cfg = self.config.get(
+                        "favorites_playlist_name_per_provider", {}
+                    )
+                    fav_names = {**DEFAULT_FAVORITES_NAMES, **fav_names_cfg}
+                    favorites_set = set()
+                    for prov_name, fav_name in fav_names.items():
+                        prov_prefix = prefix_map.get(prov_name, "")
+                        favorites_set.add(f"{prov_prefix}{fav_name}")
+
+                    patch_playlist_files(
+                        proxy_url, now_liked, playlist_dir, xspf_dir,
+                        like_indicator, favorites_set,
+                    )
+
+                    if self.mpd_client and self.mpd_client._client:
+                        self._ensure_mpd()
+                        track_info = self._get_track_info(provider, track_id)
+                        base_title = track_info.get("title", "Unknown")
+                        patch_mpd_queue(
+                            self.mpd_client._client, proxy_url, base_title,
+                            now_liked, like_indicator,
+                        )
+            except Exception as patch_exc:
+                logger.warning("Like-toggle playlist patching failed: %s", patch_exc)
+
             return {
                 "success": True,
                 "message": transition.user_message,

@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 # xmpd-search - Interactive fzf-based music search for xmpd.
 #
-# Launches fzf with live-as-you-type search results from Tidal and YouTube Music.
-# Results are colored by provider (Tidal teal, YouTube pink) with quality badges
-# and liked indicators.
+# Two-mode design:
+#   Search mode (initial): API-driven live search, 350ms debounce, minimal keybinds.
+#   Browse mode (after Enter): local fuzzy filtering, all action keybinds active.
 #
-# Keybindings:
+# Mode transitions:
+#   Enter       (Search -> Browse) Enable local filter, rebind action keys
+#   Esc         (Browse -> Search) Disable local filter, restore change:reload
+#   Esc         (Search)          Quit fzf
+#
+# Keybindings (Browse mode):
 #   enter      Play selected track (closes search)
 #   ctrl-e     Queue selected track (stays open)
 #   ctrl-r     Start radio from selected track (closes search)
-#   ctrl-l     Toggle like/unlike for selected track (stays open, reloads)
+#   ctrl-l     Toggle like/unlike for selected track (stays open)
 #   tab        Toggle multi-select on current line
 #   ctrl-a     Queue all selected tracks (closes search)
 #   ctrl-p     Clear playlist and play all selected (closes search)
 #
-# Requires: fzf, xmpctl (in PATH or sibling in bin/)
+# Requires: fzf >= 0.36.0, xmpctl (in PATH or sibling in bin/)
 
 set -euo pipefail
 
@@ -51,23 +56,74 @@ RESET=$'\033[0m'
 DIM=$'\033[2m'
 BOLD=$'\033[1m'
 
-LEGEND="${DIM}enter${RESET}=play  ${DIM}ctrl-e${RESET}=queue  ${DIM}ctrl-r${RESET}=radio  ${DIM}ctrl-l${RESET}=like  ${DIM}tab${RESET}=select  ${DIM}ctrl-a${RESET}=queue-all  ${DIM}ctrl-p${RESET}=play-all"
-HEADER="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  ${DIM}| Type to search${RESET}
-${LEGEND}"
+# Temp files for query preservation across mode switches and mode state tracking.
+#   SEARCH_QUERY_FILE: persists Search-mode query when switching to Browse
+#   BROWSE_QUERY_FILE: persists Browse-mode query when switching back to Search
+#   BROWSE_MODE_FILE:  presence indicates Browse mode is active (for Enter/Esc transform)
+SEARCH_QUERY_FILE="/tmp/xmpd-search-query-$$"
+BROWSE_QUERY_FILE="/tmp/xmpd-browse-query-$$"
+BROWSE_MODE_FILE="/tmp/xmpd-browse-mode-$$"
+trap 'rm -f "${SEARCH_QUERY_FILE}" "${BROWSE_QUERY_FILE}" "${BROWSE_MODE_FILE}"' EXIT
+
+# Initialize temp files
+printf '' > "${SEARCH_QUERY_FILE}"
+printf '' > "${BROWSE_QUERY_FILE}"
 
 # Build the reload command. fzf replaces {q} with the current query.
-# sleep 0.15 provides basic debounce since fzf fires on every keystroke.
-RELOAD_CMD="sleep 0.15; ${XMPCTL} search-json --format fzf {q}"
+# sleep 0.35 provides 350ms debounce since fzf fires on every keystroke.
+RELOAD_CMD="sleep 0.35; ${XMPCTL} search-json --format fzf {q}"
+
+# Headers (single-line to allow use in change-header transform output).
+# fzf processes ANSI codes in header lines.
+SEARCH_HDR="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  ${DIM}| Type to search  enter=browse${RESET}"
+BROWSE_HDR="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  ${DIM}| enter=play  ctrl-q=queue  ctrl-r=radio  ctrl-l=like  tab=select  ctrl-a=queue-all  ctrl-p=play-all  esc=back${RESET}"
+
+# Enter action: context-aware dispatch via transform.
+#   In Search mode (BROWSE_MODE_FILE absent): transition to Browse.
+#   In Browse mode (BROWSE_MODE_FILE present): play selected track and close.
+#
+# Browse transition actions (output of transform when entering Browse):
+#   unbind(change)              -- stop API reload during local filtering
+#   enable-search               -- activate fzf local fuzzy filtering
+#   change-prompt(Browse: )     -- update prompt text
+#   change-header(...)          -- update header legend for Browse mode
+#   rebind(ctrl-q,ctrl-r,ctrl-l,tab)  -- activate Browse action keys
+#   transform-query(...)        -- save Search query, restore Browse query
+ENTER_TRANSFORM="transform:if [[ -f '${BROWSE_MODE_FILE}' ]]; then
+  echo 'execute-silent([ -n {2} ] && ${XMPCTL} play {1} {2})+abort'
+else
+  touch '${BROWSE_MODE_FILE}'
+  echo 'unbind(change)+enable-search+change-prompt(Browse: )+change-header(${BROWSE_HDR})+rebind(ctrl-q,ctrl-r,ctrl-l,tab)+transform-query(echo {q} > ${SEARCH_QUERY_FILE}; cat ${BROWSE_QUERY_FILE})'
+fi"
+
+# Esc action: context-aware dispatch via transform.
+#   In Browse mode (BROWSE_MODE_FILE present): return to Search mode.
+#   In Search mode (BROWSE_MODE_FILE absent): abort fzf (quit).
+#
+# Search transition actions (output of transform when returning to Search):
+#   disable-search              -- return to API-driven mode (no local filtering)
+#   change-prompt(Search: )     -- update prompt text
+#   change-header(...)          -- update header legend for Search mode
+#   unbind(ctrl-q,ctrl-r,ctrl-l,tab)  -- deactivate Browse action keys
+#   rebind(change)              -- restore change:reload for API search
+#   transform-query(...)        -- save Browse query, restore Search query
+ESC_TRANSFORM="transform:if [[ -f '${BROWSE_MODE_FILE}' ]]; then
+  rm -f '${BROWSE_MODE_FILE}'
+  echo 'disable-search+change-prompt(Search: )+change-header(${SEARCH_HDR})+unbind(ctrl-q,ctrl-r,ctrl-l,tab)+rebind(change)+transform-query(echo {q} > ${BROWSE_QUERY_FILE}; cat ${SEARCH_QUERY_FILE})'
+else
+  echo 'abort'
+fi"
 
 # Launch fzf with keybindings and multi-select support.
 #
-# --expect captures which key triggered exit. fzf then prints:
-#   line 1: key name (ctrl-a, ctrl-p, or empty for enter/ctrl-e/ctrl-r)
-#   line 2+: selected lines
+# Initial state: Search mode
+#   - --disabled: no local filtering (API-driven)
+#   - change:reload: fires API search on every keystroke (350ms debounce)
+#   - enter: context-aware via transform (Search->Browse or Play)
+#   - esc: context-aware via transform (abort in Search, return in Browse)
+#   - ctrl-q, ctrl-r, ctrl-l, tab: unbound at start, rebound on Browse entry
 #
-# Single-track actions (enter, ctrl-e, ctrl-r) use execute/execute-silent
-# and abort fzf directly; they never reach the --expect output path.
-# Multi-select actions (ctrl-a, ctrl-p) use accept and are handled below.
+# --expect captures ctrl-a/ctrl-p for multi-select post-processing.
 FZF_OUTPUT=$(
     fzf --ansi \
         --disabled \
@@ -75,8 +131,8 @@ FZF_OUTPUT=$(
         --delimiter=$'\t' \
         --with-nth=3.. \
         --bind "change:reload:${RELOAD_CMD}" \
-        --bind "start:reload:echo ''" \
-        --header="${HEADER}" \
+        --bind "start:reload(echo '')+unbind(ctrl-q,ctrl-r,ctrl-l,tab)" \
+        --header="${SEARCH_HDR}" \
         --prompt="Search: " \
         --pointer=">" \
         --no-info \
@@ -85,10 +141,12 @@ FZF_OUTPUT=$(
         --no-scrollbar \
         --color='bg+:#1a1b26,pointer:#f7768e' \
         --expect='ctrl-a,ctrl-p' \
-        --bind "enter:execute-silent(${XMPCTL} play {1} {2})+abort" \
-        --bind "ctrl-e:execute-silent(${XMPCTL} queue {1} {2})" \
-        --bind "ctrl-r:execute-silent(${XMPCTL} radio --provider {1} --track-id {2} --apply)+abort" \
-        --bind "ctrl-l:execute-silent(${XMPCTL} like-toggle {1} {2})+reload(${RELOAD_CMD})" \
+        --bind "enter:${ENTER_TRANSFORM}" \
+        --bind "esc:${ESC_TRANSFORM}" \
+        --bind "ctrl-q:execute-silent([ -n {2} ] && ${XMPCTL} queue {1} {2})" \
+        --bind "ctrl-r:execute-silent([ -n {2} ] && ${XMPCTL} radio --provider {1} --track-id {2} --apply)+abort" \
+        --bind "ctrl-l:execute-silent([ -n {2} ] && ${XMPCTL} like-toggle {1} {2})" \
+        --bind "tab:toggle" \
     < /dev/null 2>/dev/null
 ) || exit 0
 

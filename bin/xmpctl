@@ -694,23 +694,18 @@ def get_current_track_from_mpd() -> tuple[str, str, str, str]:
 
 
 def cmd_like() -> None:
-    """Toggle like for current track via daemon round-trip."""
+    """Toggle like for current track via like-toggle (includes playlist patching)."""
     provider, track_id, title, artist = get_current_track_from_mpd()
 
-    result = send_command(f"like {provider} {track_id}")
+    result = send_command(f"like-toggle {provider} {track_id}")
     if result.get("success"):
-        check = "OK"
-        msg = result.get("message", "Liked")
-        print(colorize(f"{check} {msg}: {artist} - {title}", "green"))
-        # Trigger sync if the like state changed (so Liked Songs playlist updates)
-        print("\nTriggering sync to update playlists...")
-        sync_result = send_command("sync")
-        if sync_result.get("success"):
-            print(colorize("Sync started in background", "green"))
+        liked = result.get("liked", False)
+        state_str = "[+1]" if liked else "[-1]"
+        msg = result.get("message", "Toggled")
+        print(colorize(f"OK {state_str} {msg}", "green"))
     else:
-        cross = "ERROR"
         error = result.get("error", "Unknown error")
-        print(colorize(f"{cross} {error}", "red"), file=sys.stderr)
+        print(colorize(f"ERROR {error}", "red"), file=sys.stderr)
         sys.exit(1)
 
 
