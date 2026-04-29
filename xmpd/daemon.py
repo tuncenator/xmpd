@@ -14,6 +14,7 @@ import socket
 import threading
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from xmpd.config import get_config_dir, load_config
@@ -632,10 +633,6 @@ class XMPDaemon:
                 else:
                     provider, track_id = None, None
                 response = self._cmd_radio(provider, track_id)
-            elif cmd == "search":
-                provider, remaining = self._parse_provider_args(args)
-                query = " ".join(remaining) if remaining else None
-                response = self._cmd_search(query, provider=provider)
             elif cmd == "search-json":
                 # search-json [--provider yt|all] [--limit N] QUERY
                 response = self._cmd_search_json(parts[1:])
@@ -841,59 +838,6 @@ class XMPDaemon:
             statuses[name] = {"enabled": bool(enabled), "authenticated": bool(is_auth)}
         return {"success": True, "providers": statuses}
 
-    def _cmd_search(
-        self, query: str | None, *, provider: str | None = None,
-    ) -> dict[str, Any]:
-        """Handle 'search' command - search across providers.
-
-        Args:
-            query: Search query string.
-            provider: Restrict to a single provider, or None for all.
-        """
-        logger.info("Search command: query=%s provider=%s", query, provider)
-
-        try:
-            if query is None or not query.strip():
-                return {"success": False, "error": "Empty search query"}
-
-            # Determine which providers to search
-            if provider and provider != "all":
-                if provider not in self.provider_registry:
-                    return {"success": False, "error": f"Unknown provider: {provider}"}
-                targets = {provider: self.provider_registry[provider]}
-            else:
-                targets = self.provider_registry
-
-            formatted: list[dict[str, Any]] = []
-            global_idx = 1
-            for pname, prov in targets.items():
-                try:
-                    is_auth, _ = prov.is_authenticated()
-                    if not is_auth:
-                        continue
-                    results = prov.search(query, limit=10)
-                    for track in results:
-                        formatted.append({
-                            "number": global_idx,
-                            "provider": pname,
-                            "track_id": track.track_id,
-                            "title": track.metadata.title,
-                            "artist": track.metadata.artist or "Unknown Artist",
-                            "duration": self._format_duration(
-                                track.metadata.duration_seconds or 0
-                            ),
-                        })
-                        global_idx += 1
-                except Exception as e:
-                    logger.warning("Search failed for provider %s: %s", pname, e)
-
-            logger.info("Found %d results for: %s", len(formatted), query)
-            return {"success": True, "results": formatted, "count": len(formatted)}
-
-        except Exception as e:
-            logger.error("Search failed: %s", e)
-            return {"success": False, "error": f"Search failed: {e}"}
-
     def _cmd_radio(
         self, provider: str | None, track_id: str | None,
     ) -> dict[str, Any]:
@@ -1020,42 +964,66 @@ class XMPDaemon:
             return {"success": False, "error": f"Radio generation failed: {e}"}
 
     def _get_liked_ids(self) -> set[str]:
-        """Return the cached set of liked track IDs across all providers.
-
-        Uses provider_registry.get_favorites() to collect liked IDs.
-        Results are cached for 5 minutes to avoid repeated API calls.
-
-        Returns:
-            Set of liked track IDs (compound: "provider:track_id"). Empty set
-            if fetch fails.
-        """
+        """Return liked track IDs by reading local favorites playlists."""
         now = time.time()
         if now - self._liked_ids_cache_time < self._liked_ids_cache_ttl:
             return self._liked_ids_cache
 
+        from xmpd.sync_engine import DEFAULT_FAVORITES_NAMES
+
+        music_dir = Path(self.config.get("mpd_music_directory", "~/Music")).expanduser()
+        playlist_dir = music_dir / "_xmpd"
+        prefix_map = _build_playlist_prefix(self.config)
+        fmt = self.config.get("playlist_format", "m3u")
+
         liked: set[str] = set()
-        for pname, prov in self.provider_registry.items():
+        for pname in self.provider_registry:
+            prefix = prefix_map.get(pname, f"{pname.upper()}: ")
+            fav_name = DEFAULT_FAVORITES_NAMES.get(pname, "Favorites")
+            playlist_path = playlist_dir / f"{prefix}{fav_name}.{fmt}"
+            if not playlist_path.exists():
+                continue
             try:
-                is_auth, _ = prov.is_authenticated()
-                if not is_auth:
-                    continue
-                favorites = prov.get_favorites()
-                for track in favorites:
-                    liked.add(f"{pname}:{track.track_id}")
+                self._parse_liked_from_playlist(playlist_path, fmt, pname, liked)
             except Exception as e:
-                logger.warning("Failed to fetch favorites for %s: %s", pname, e)
+                logger.warning("Failed to parse liked playlist %s: %s", playlist_path, e)
 
         self._liked_ids_cache = liked
         self._liked_ids_cache_time = now
         logger.debug("Refreshed liked IDs cache: %d tracks", len(liked))
-
         return self._liked_ids_cache
 
     @staticmethod
-    def _quality_for_provider(provider_name: str) -> str:
-        """Return default quality label for a provider's search results."""
+    def _parse_liked_from_playlist(
+        path: Path, fmt: str, pname: str, liked: set[str],
+    ) -> None:
+        text = path.read_text(encoding="utf-8")
+        if fmt == "xspf":
+            for match in re.finditer(r"/proxy/[^/]+/([^<\s]+)", text):
+                liked.add(f"{pname}:{match.group(1)}")
+        else:
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                match = re.search(r"/proxy/[^/]+/([^?\s]+)", line)
+                if match:
+                    liked.add(f"{pname}:{match.group(1)}")
+
+    _TIDAL_QUALITY_LABELS: dict[str, str] = {
+        "HI_RES_LOSSLESS": "HiRes",
+        "LOSSLESS": "HiFi",
+        "HIGH": "320k",
+        "LOW": "96k",
+    }
+
+    def _quality_for_provider(self, provider_name: str) -> str:
+        """Return fallback quality label when per-track data is unavailable."""
         if provider_name == "tidal":
-            return "CD"
+            ceiling = self.config.get("tidal", {}).get(
+                "quality_ceiling", "LOSSLESS"
+            )
+            return self._TIDAL_QUALITY_LABELS.get(ceiling, "HiFi")
         return "Lo"
 
     def _cmd_search_json(self, args: list[str]) -> dict[str, Any]:
@@ -1107,24 +1075,27 @@ class XMPDaemon:
         else:
             targets = self.provider_registry
 
-        # Get liked IDs for like-state population
-        liked_ids = self._get_liked_ids()
-
-        results: list[dict[str, Any]] = []
+        auth_targets = {}
         for pname, prov in targets.items():
             try:
                 is_auth, _ = prov.is_authenticated()
-                if not is_auth:
-                    continue
-                search_results = prov.search(query, limit=limit)
+                if is_auth:
+                    auth_targets[pname] = prov
             except Exception as e:
-                logger.warning("search-json: search failed for %s: %s", pname, e)
-                continue
+                logger.warning("search-json: auth check failed for %s: %s", pname, e)
 
-            quality = self._quality_for_provider(pname)
+        def _search_provider(
+            pname: str, prov: Provider,
+        ) -> tuple[str, list[tuple[str, str, dict[str, Any]]]]:
+            search_results = prov.search(query, limit=limit)
+            fallback_quality = self._quality_for_provider(pname)
+            hits: list[tuple[str, str, dict[str, Any]]] = []
             for track in search_results:
                 duration_secs = track.metadata.duration_seconds or 0
-                results.append(
+                quality = track.metadata.quality or fallback_quality
+                hits.append((
+                    track.provider,
+                    track.track_id,
                     {
                         "provider": track.provider,
                         "track_id": track.track_id,
@@ -1134,13 +1105,44 @@ class XMPDaemon:
                         "duration": self._format_duration(duration_secs),
                         "duration_seconds": duration_secs,
                         "quality": quality,
-                        "liked": f"{track.provider}:{track.track_id}" in liked_ids
-                        if track.track_id else None,
-                    }
-                )
+                    },
+                ))
+            return pname, hits
 
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        raw_hits: list[tuple[str, str, dict[str, Any]]] = []
+        with ThreadPoolExecutor(max_workers=len(auth_targets) + 1) as pool:
+            liked_ids_future = pool.submit(self._get_liked_ids)
+            search_futures = {
+                pool.submit(_search_provider, pname, prov): pname
+                for pname, prov in auth_targets.items()
+            }
+            for future in as_completed(search_futures):
+                pname = search_futures[future]
+                try:
+                    _, hits = future.result()
+                    raw_hits.extend(hits)
+                except Exception as e:
+                    logger.warning("search-json: search failed for %s: %s", pname, e)
+            liked_ids = liked_ids_future.result()
+
+        results: list[dict[str, Any]] = []
+        for provider, track_id, entry in raw_hits:
+            entry["liked"] = (
+                f"{provider}:{track_id}" in liked_ids if track_id else None
+            )
+            results.append(entry)
         logger.info("search-json: returning %d results for %r", len(results), query)
         return {"success": True, "results": results}
+
+    def _ensure_mpd(self) -> None:
+        """Reconnect to MPD if the connection was lost."""
+        try:
+            self.mpd_client._client.ping()
+        except Exception:
+            logger.warning("MPD connection lost, reconnecting")
+            self.mpd_client.connect()
 
     def _cmd_play(self, provider: str, track_id: str | None) -> dict[str, Any]:
         """Handle 'play' command - play track immediately.
@@ -1158,14 +1160,30 @@ class XMPDaemon:
             # Get track metadata via provider
             track_info = self._get_track_info(provider, track_id)
 
+            # Register in TrackStore so stream proxy can resolve the track
+            if self.track_store:
+                try:
+                    self.track_store.add_track(
+                        provider=provider,
+                        track_id=track_id,
+                        stream_url=None,
+                        title=track_info.get("title", "Unknown"),
+                        artist=track_info.get("artist", None),
+                    )
+                except Exception:
+                    logger.warning("Failed to register track in store: %s/%s", provider, track_id)
+
             # Build proxy URL
             proxy_port = (self.proxy_config or {}).get("port", 8080)
             proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
 
-            # Clear queue, add track, start playback
+            # Clear queue, add track with metadata, start playback
             logger.info("Playing: %s - %s", track_info["title"], track_info["artist"])
+            self._ensure_mpd()
             self.mpd_client._client.clear()
-            self.mpd_client._client.add(proxy_url)
+            song_id = self.mpd_client._client.addid(proxy_url)
+            self.mpd_client._client.addtagid(song_id, "Title", track_info["title"])
+            self.mpd_client._client.addtagid(song_id, "Artist", track_info["artist"])
             self.mpd_client._client.play()
 
             return {
@@ -1194,11 +1212,27 @@ class XMPDaemon:
 
             track_info = self._get_track_info(provider, track_id)
 
+            # Register in TrackStore so stream proxy can resolve the track
+            if self.track_store:
+                try:
+                    self.track_store.add_track(
+                        provider=provider,
+                        track_id=track_id,
+                        stream_url=None,
+                        title=track_info.get("title", "Unknown"),
+                        artist=track_info.get("artist", None),
+                    )
+                except Exception:
+                    logger.warning("Failed to register track in store: %s/%s", provider, track_id)
+
             proxy_port = (self.proxy_config or {}).get("port", 8080)
             proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
 
             logger.info("Adding to queue: %s - %s", track_info["title"], track_info["artist"])
-            self.mpd_client._client.add(proxy_url)
+            self._ensure_mpd()
+            song_id = self.mpd_client._client.addid(proxy_url)
+            self.mpd_client._client.addtagid(song_id, "Title", track_info["title"])
+            self.mpd_client._client.addtagid(song_id, "Artist", track_info["artist"])
 
             return {
                 "success": True,
@@ -1334,6 +1368,53 @@ class XMPDaemon:
             )
 
             now_liked = transition.new_state == RatingState.LIKED
+
+            # Patch on-disk playlists and live MPD queue immediately
+            try:
+                from xmpd.playlist_patcher import patch_mpd_queue, patch_playlist_files
+                from xmpd.sync_engine import DEFAULT_FAVORITES_NAMES
+
+                proxy_port = (self.proxy_config or {}).get("port", 8080)
+                proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
+
+                like_indicator = self.config.get("like_indicator", {})
+                if like_indicator.get("enabled", False):
+                    playlist_dir = Path(
+                        self.config.get("mpd_playlist_directory", "~/.config/mpd/playlists")
+                    ).expanduser()
+                    xspf_dir = None
+                    if self.config.get("playlist_format") == "xspf":
+                        music_dir = self.config.get("mpd_music_directory", "~/Music")
+                        xspf_dir = Path(music_dir).expanduser() / "_xmpd"
+
+                    prefix_map = self.config.get(
+                        "playlist_prefix", {"yt": "YT: ", "tidal": "TD: "}
+                    )
+                    fav_names_cfg = self.config.get(
+                        "favorites_playlist_name_per_provider", {}
+                    )
+                    fav_names = {**DEFAULT_FAVORITES_NAMES, **fav_names_cfg}
+                    favorites_set = set()
+                    for prov_name, fav_name in fav_names.items():
+                        prov_prefix = prefix_map.get(prov_name, "")
+                        favorites_set.add(f"{prov_prefix}{fav_name}")
+
+                    patch_playlist_files(
+                        proxy_url, now_liked, playlist_dir, xspf_dir,
+                        like_indicator, favorites_set,
+                    )
+
+                    if self.mpd_client and self.mpd_client._client:
+                        self._ensure_mpd()
+                        track_info = self._get_track_info(provider, track_id)
+                        base_title = track_info.get("title", "Unknown")
+                        patch_mpd_queue(
+                            self.mpd_client._client, proxy_url, base_title,
+                            now_liked, like_indicator,
+                        )
+            except Exception as patch_exc:
+                logger.warning("Like-toggle playlist patching failed: %s", patch_exc)
+
             return {
                 "success": True,
                 "message": transition.user_message,

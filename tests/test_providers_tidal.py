@@ -85,6 +85,9 @@ def mock_session() -> MagicMock:
     session.user = MagicMock()
     session.user.favorites = MagicMock()
     session.config = MagicMock()
+    session.config.client_id = "mock-client-id"
+    # Needs a real string (not MagicMock) for JSON serialization in report_play
+    setattr(session, "access_token", "tok")
     return session
 
 
@@ -759,27 +762,29 @@ class TestGetLikeState:
 
 
 class TestReportPlay:
-    def test_calls_get_stream_and_swallows_exceptions(
+    def test_swallows_exceptions_and_returns_false(
         self, wired_provider: tuple[TidalProvider, MagicMock]
     ) -> None:
-        prov, session = wired_provider
-        mock_track = MagicMock()
-        mock_track.get_stream.side_effect = RuntimeError("boom")
-        session.track.return_value = mock_track
-
-        result = prov.report_play("12345", 120)
+        prov, _ = wired_provider
+        with patch(
+            "xmpd.providers.tidal.requests.post",
+            side_effect=RuntimeError("boom"),
+        ):
+            result = prov.report_play("12345", 120)
         assert result is False
 
     def test_happy_path_logs_debug(
         self, wired_provider: tuple[TidalProvider, MagicMock],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        prov, session = wired_provider
-        mock_track = MagicMock()
-        session.track.return_value = mock_track
+        prov, _ = wired_provider
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
 
-        with caplog.at_level(logging.DEBUG, logger="xmpd.providers.tidal"):
-            result = prov.report_play("12345", 180)
+        with patch("xmpd.providers.tidal.requests.post", return_value=mock_resp):
+            with caplog.at_level(logging.DEBUG, logger="xmpd.providers.tidal"):
+                result = prov.report_play("12345", 180)
 
         assert result is True
         assert any("reported play" in r.message for r in caplog.records)

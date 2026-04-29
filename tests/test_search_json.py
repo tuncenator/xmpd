@@ -245,6 +245,120 @@ class TestCmdSearchJson:
         assert response["results"][0]["duration"] == "1:05"
         assert response["results"][0]["duration_seconds"] == 65
 
+    def test_tidal_quality_reflects_configured_ceiling(self, tmp_path):
+        """Tidal search results show quality label matching quality_ceiling config."""
+        tidal = MagicMock(name="tidal_provider")
+        tidal.name = "tidal"
+        tidal.is_authenticated.return_value = (True, "")
+        tidal.is_enabled.return_value = True
+        tidal.search.return_value = [
+            _make_track(
+                provider="tidal",
+                track_id="12345678",
+                title="Karma Police",
+                duration_seconds=259,
+            )
+        ]
+        tidal.get_favorites.return_value = []
+
+        daemon = _make_daemon(
+            tmp_path,
+            registry={"tidal": tidal},
+            config={"tidal": {"quality_ceiling": "HI_RES_LOSSLESS"}},
+        )
+        response = daemon._cmd_search_json(["radiohead"])
+        assert response["success"] is True
+        assert response["results"][0]["quality"] == "HiRes"
+
+    def test_tidal_quality_lossless_shows_hifi(self, tmp_path):
+        """LOSSLESS ceiling maps to 'HiFi' label."""
+        tidal = MagicMock(name="tidal_provider")
+        tidal.name = "tidal"
+        tidal.is_authenticated.return_value = (True, "")
+        tidal.is_enabled.return_value = True
+        tidal.search.return_value = [
+            _make_track(
+                provider="tidal",
+                track_id="12345678",
+                title="Test",
+                duration_seconds=180,
+            )
+        ]
+        tidal.get_favorites.return_value = []
+
+        daemon = _make_daemon(
+            tmp_path,
+            registry={"tidal": tidal},
+            config={"tidal": {"quality_ceiling": "LOSSLESS"}},
+        )
+        response = daemon._cmd_search_json(["test"])
+        assert response["results"][0]["quality"] == "HiFi"
+
+    def test_tidal_quality_no_config_falls_back_to_hifi(self, tmp_path):
+        """Missing tidal config falls back to 'HiFi' label."""
+        tidal = MagicMock(name="tidal_provider")
+        tidal.name = "tidal"
+        tidal.is_authenticated.return_value = (True, "")
+        tidal.is_enabled.return_value = True
+        tidal.search.return_value = [
+            _make_track(
+                provider="tidal",
+                track_id="12345678",
+                title="Test",
+                duration_seconds=180,
+            )
+        ]
+        tidal.get_favorites.return_value = []
+
+        daemon = _make_daemon(tmp_path, registry={"tidal": tidal})
+        response = daemon._cmd_search_json(["test"])
+        assert response["results"][0]["quality"] == "HiFi"
+
+
+# ---------------------------------------------------------------------------
+# Quality label unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestQualityForProvider:
+    """Unit tests for XMPDaemon._quality_for_provider()."""
+
+    def test_hi_res_lossless(self, tmp_path):
+        daemon = _make_daemon(
+            tmp_path, config={"tidal": {"quality_ceiling": "HI_RES_LOSSLESS"}}
+        )
+        assert daemon._quality_for_provider("tidal") == "HiRes"
+
+    def test_lossless_maps_to_hifi(self, tmp_path):
+        daemon = _make_daemon(
+            tmp_path, config={"tidal": {"quality_ceiling": "LOSSLESS"}}
+        )
+        assert daemon._quality_for_provider("tidal") == "HiFi"
+
+    def test_high_maps_to_320k(self, tmp_path):
+        daemon = _make_daemon(
+            tmp_path, config={"tidal": {"quality_ceiling": "HIGH"}}
+        )
+        assert daemon._quality_for_provider("tidal") == "320k"
+
+    def test_low_maps_to_96k(self, tmp_path):
+        daemon = _make_daemon(
+            tmp_path, config={"tidal": {"quality_ceiling": "LOW"}}
+        )
+        assert daemon._quality_for_provider("tidal") == "96k"
+
+    def test_yt_always_lo(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        assert daemon._quality_for_provider("yt") == "Lo"
+
+    def test_unknown_provider_lo(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        assert daemon._quality_for_provider("spotify") == "Lo"
+
+    def test_missing_tidal_config_falls_back_to_hifi(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        assert daemon._quality_for_provider("tidal") == "HiFi"
+
 
 # ---------------------------------------------------------------------------
 # liked IDs cache unit tests
@@ -443,7 +557,7 @@ _FZF_FAKE_RESPONSE = {
             "album": "Pablo Honey",
             "duration": "3:59",
             "duration_seconds": 239,
-            "quality": "CD",
+            "quality": "HiFi",
             "liked": True,
         },
         {

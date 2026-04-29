@@ -240,91 +240,6 @@ class TestSocketCommands:
 
 
 # ---------------------------------------------------------------------------
-# TestSearch
-# ---------------------------------------------------------------------------
-
-
-class TestCmdSearch:
-    """Tests for _cmd_search with provider awareness."""
-
-    def test_cmd_search_empty_query(self, tmp_path):
-        daemon = _make_daemon(tmp_path)
-        assert daemon._cmd_search("")["success"] is False
-        assert daemon._cmd_search("   ")["success"] is False
-        assert daemon._cmd_search(None)["success"] is False
-
-    def test_cmd_search_success(self, tmp_path):
-        yt = _make_yt_provider()
-        yt.search.return_value = [
-            Track(
-                provider="yt", track_id="abc12345678",
-                metadata=TrackMetadata(
-                    title="Test Song", artist="Test Artist",
-                    album=None, duration_seconds=180, art_url=None,
-                ),
-            ),
-        ]
-        daemon = _make_daemon(tmp_path, registry={"yt": yt})
-        response = daemon._cmd_search("miles davis")
-        assert response["success"] is True
-        assert response["count"] == 1
-        assert response["results"][0]["provider"] == "yt"
-        assert response["results"][0]["track_id"] == "abc12345678"
-
-    def test_cmd_search_with_provider_flag(self, tmp_path):
-        yt = _make_yt_provider()
-        tidal = _make_tidal_provider()
-        yt.search.return_value = []
-        tidal.search.return_value = [
-            Track(
-                provider="tidal", track_id="12345",
-                metadata=TrackMetadata(
-                    title="Tidal Song", artist="Tidal Artist",
-                    album=None, duration_seconds=200, art_url=None,
-                ),
-            ),
-        ]
-        daemon = _make_daemon(tmp_path, registry={"yt": yt, "tidal": tidal})
-        response = daemon._cmd_search("foo bar", provider="tidal")
-        assert response["count"] == 1
-        assert response["results"][0]["provider"] == "tidal"
-        yt.search.assert_not_called()
-
-    def test_cmd_search_default_all(self, tmp_path):
-        yt = _make_yt_provider()
-        tidal = _make_tidal_provider()
-        yt.search.return_value = [
-            Track(
-                provider="yt", track_id="abc12345678",
-                metadata=TrackMetadata(
-                    title="YT Song", artist="A", album=None,
-                    duration_seconds=100, art_url=None,
-                ),
-            ),
-        ]
-        tidal.search.return_value = [
-            Track(
-                provider="tidal", track_id="99999",
-                metadata=TrackMetadata(
-                    title="TD Song", artist="B", album=None,
-                    duration_seconds=200, art_url=None,
-                ),
-            ),
-        ]
-        daemon = _make_daemon(tmp_path, registry={"yt": yt, "tidal": tidal})
-        response = daemon._cmd_search("jazz")
-        assert response["count"] == 2
-        yt.search.assert_called_once()
-        tidal.search.assert_called_once()
-
-    def test_cmd_search_unknown_provider(self, tmp_path):
-        daemon = _make_daemon(tmp_path)
-        response = daemon._cmd_search("test", provider="spotify")
-        assert response["success"] is False
-        assert "Unknown provider" in response["error"]
-
-
-# ---------------------------------------------------------------------------
 # TestRadio
 # ---------------------------------------------------------------------------
 
@@ -407,10 +322,41 @@ class TestCmdPlayQueue:
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
         daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
         daemon.mpd_client._client = Mock()
+        daemon.mpd_client._client.addid.return_value = "42"
         response = daemon._cmd_play("yt", "abc12345678")
         assert response["success"] is True
-        add_call = daemon.mpd_client._client.add.call_args[0][0]
-        assert add_call == "http://localhost:6602/proxy/yt/abc12345678"
+        daemon.mpd_client._client.addid.assert_called_once_with(
+            "http://localhost:6602/proxy/yt/abc12345678"
+        )
+        daemon.mpd_client._client.addtagid.assert_any_call("42", "Title", "Test Song")
+        daemon.mpd_client._client.addtagid.assert_any_call("42", "Artist", "Test Artist")
+        daemon.track_store.add_track.assert_called_once_with(
+            provider="yt",
+            track_id="abc12345678",
+            stream_url=None,
+            title="Test Song",
+            artist="Test Artist",
+        )
+
+    def test_cmd_play_registers_track_before_mpd_add(self, tmp_path):
+        """TrackStore registration happens before MPD addid call."""
+        yt = _make_yt_provider()
+        yt.get_track_metadata.return_value = TrackMetadata(
+            title="Order Song", artist="Order Artist",
+            album=None, duration_seconds=120, art_url=None,
+        )
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
+        daemon.mpd_client._client = Mock()
+        daemon.mpd_client._client.addid.return_value = "99"
+        call_order = []
+        daemon.track_store.add_track.side_effect = lambda **kw: call_order.append("add_track")
+        def _addid(url):
+            call_order.append("mpd_add")
+            return "99"
+        daemon.mpd_client._client.addid.side_effect = _addid
+        daemon._cmd_play("yt", "order123")
+        assert call_order.index("add_track") < call_order.index("mpd_add")
 
     def test_cmd_queue_success(self, tmp_path):
         yt = _make_yt_provider()
@@ -421,10 +367,47 @@ class TestCmdPlayQueue:
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
         daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
         daemon.mpd_client._client = Mock()
+        daemon.mpd_client._client.addid.return_value = "77"
         response = daemon._cmd_queue("yt", "def12345678")
         assert response["success"] is True
-        add_call = daemon.mpd_client._client.add.call_args[0][0]
-        assert add_call == "http://localhost:6602/proxy/yt/def12345678"
+        daemon.mpd_client._client.addid.assert_called_once_with(
+            "http://localhost:6602/proxy/yt/def12345678"
+        )
+        daemon.mpd_client._client.addtagid.assert_any_call(
+            "77", "Title", "Q Song"
+        )
+        daemon.mpd_client._client.addtagid.assert_any_call(
+            "77", "Artist", "Q Artist"
+        )
+        daemon.track_store.add_track.assert_called_once_with(
+            provider="yt",
+            track_id="def12345678",
+            stream_url=None,
+            title="Q Song",
+            artist="Q Artist",
+        )
+
+    def test_cmd_queue_registers_track_before_mpd_add(self, tmp_path):
+        """TrackStore registration happens before MPD addid call."""
+        yt = _make_yt_provider()
+        yt.get_track_metadata.return_value = TrackMetadata(
+            title="Q Order Song", artist="Q Order Artist",
+            album=None, duration_seconds=240, art_url=None,
+        )
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
+        daemon.mpd_client._client = Mock()
+        call_order = []
+        daemon.track_store.add_track.side_effect = (
+            lambda **kw: call_order.append("add_track")
+        )
+
+        def _addid(url):
+            call_order.append("mpd_add")
+            return "99"
+        daemon.mpd_client._client.addid.side_effect = _addid
+        daemon._cmd_queue("yt", "qorder456")
+        assert call_order.index("add_track") < call_order.index("mpd_add")
 
 
 # ---------------------------------------------------------------------------

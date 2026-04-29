@@ -101,31 +101,6 @@ class TestYtmpctlPythonSyntax:
         assert result.returncode == 0, f"Syntax error in xmpctl: {result.stderr}"
 
 
-class TestYtmpctlSearch:
-    """Tests for xmpctl search command functionality."""
-
-    def test_search_help_includes_command(self):
-        """Test that help message includes search command."""
-        result = subprocess.run(
-            [str(XMPCTL), "help"],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "search" in result.stdout.lower()
-
-    def test_search_command_requires_daemon(self):
-        """Test that search command handles daemon not running gracefully."""
-        result = subprocess.run(
-            [str(XMPCTL), "search"],
-            capture_output=True,
-            text=True,
-            input="\n",
-        )
-        if result.returncode != 0:
-            assert "daemon" in result.stderr.lower() or "socket" in result.stderr.lower()
-
-
 # ---------------------------------------------------------------------------
 # Phase 8 tests
 # ---------------------------------------------------------------------------
@@ -182,3 +157,51 @@ class TestXmpctlParseProviderFlag:
             text=True,
         )
         assert "--provider" in result.stdout
+
+
+class TestXmpctlRadioEmptyArgs:
+    """Radio command must reject empty --track-id (fzf expansion guard).
+
+    When fzf has no highlighted item, {1} and {2} expand to empty strings.
+    The radio command must not silently fall back to MPD's current track in
+    that case -- it must fail with an error so the caller can handle it.
+    """
+
+    def test_empty_track_id_exits_nonzero(self):
+        """radio --track-id '' exits 1."""
+        result = subprocess.run(
+            [str(XMPCTL), "radio", "--provider", "yt", "--track-id", ""],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+
+    def test_empty_track_id_error_message(self):
+        """radio --track-id '' prints an error to stderr."""
+        result = subprocess.run(
+            [str(XMPCTL), "radio", "--provider", "yt", "--track-id", ""],
+            capture_output=True,
+            text=True,
+        )
+        assert "error" in result.stderr.lower()
+        assert "--track-id" in result.stderr
+
+    def test_whitespace_track_id_exits_nonzero(self):
+        """radio --track-id '  ' (whitespace only) exits 1."""
+        result = subprocess.run(
+            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id", "   "],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+
+    def test_valid_track_id_does_not_exit_on_parse(self):
+        """radio --provider yt --track-id valid reaches the daemon call (not parse error)."""
+        result = subprocess.run(
+            [str(XMPCTL), "radio", "--provider", "yt", "--track-id", "validid123"],
+            capture_output=True,
+            text=True,
+        )
+        # Should fail because daemon is not reachable in unit test, not because of arg parsing.
+        # The error must not mention --track-id argument validation.
+        assert "--track-id was given but resolved to an empty value" not in result.stderr

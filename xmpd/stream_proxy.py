@@ -19,6 +19,7 @@ This module is the renamed successor of xmpd.icy_proxy / ICYProxyServer
 """
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -76,10 +77,64 @@ async def _kill_ffmpeg(proc: asyncio.subprocess.Process) -> bytes:
     return stderr_bytes
 
 
+async def _probe_best_audio_stream(manifest_url: str) -> int:
+    """Return the index of the highest-bitrate audio stream in the manifest.
+
+    Runs ``ffprobe`` against ``manifest_url`` and picks the audio stream with
+    the highest ``bit_rate`` value. Falls back to index 0 on any error or when
+    the manifest contains only one audio stream.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe",
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams",
+            "-select_streams", "a",
+            manifest_url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        data = json.loads(stdout)
+        streams = data.get("streams", [])
+    except Exception as e:
+        logger.debug("ffprobe failed for DASH manifest, using stream 0: %s", e)
+        return 0
+
+    if len(streams) <= 1:
+        return 0
+
+    best_idx = 0
+    best_bitrate = -1
+    for i, stream in enumerate(streams):
+        try:
+            br = int(stream.get("bit_rate", 0))
+        except (ValueError, TypeError):
+            br = 0
+        if br > best_bitrate:
+            best_bitrate = br
+            best_idx = i
+
+    logger.debug(
+        "ffprobe: %d audio streams found, selecting index %d (bitrate %d)",
+        len(streams), best_idx, best_bitrate,
+    )
+    return best_idx
+
+
 async def _stream_dash_via_ffmpeg(
-    request: web.Request, manifest_url: str, provider: str, track_id: str
+    request: web.Request,
+    manifest_url: str,
+    provider: str,
+    track_id: str,
+    stream_index: int = 0,
 ) -> web.StreamResponse:
     """Pipe ffmpeg's FLAC remux of a DASH manifest back to the client.
+
+    ``stream_index`` selects which audio adaptation set to map. Pass the value
+    returned by ``_probe_best_audio_stream`` to get the highest-quality stream.
+    Defaults to 0 (safe fallback when probing is skipped).
 
     Reads the first chunk *before* committing HTTP 200 so that a failed
     ffmpeg (network down, expired manifest) raises DashStreamError instead
@@ -95,6 +150,8 @@ async def _stream_dash_via_ffmpeg(
         "error",
         "-i",
         manifest_url,
+        "-map",
+        f"0:a:{stream_index}",
         "-c",
         "copy",
         "-f",
@@ -468,16 +525,22 @@ class StreamRedirectProxy:
     ) -> web.StreamResponse:
         """Try DASH streaming with retries on ffmpeg failure.
 
-        If ffmpeg produces no audio data (network outage, expired manifest),
-        re-resolves the stream URL and retries up to DASH_MAX_RETRIES times
-        before returning 502.
+        Probes the manifest with ffprobe first to select the highest-quality
+        audio stream. If ffmpeg produces no audio data (network outage, expired
+        manifest), re-resolves the stream URL and retries up to DASH_MAX_RETRIES
+        times before returning 502.
         """
+        stream_index = await _probe_best_audio_stream(stream_url)
+        logger.info(
+            "[PROXY:%s] DASH probe selected audio stream %d for %s/%s",
+            req_id, stream_index, provider, track_id,
+        )
         last_err: DashStreamError | None = None
         for attempt in range(DASH_MAX_RETRIES + 1):
             await self._increment_counter("_active_streams")
             try:
                 return await _stream_dash_via_ffmpeg(
-                    request, stream_url, provider, track_id
+                    request, stream_url, provider, track_id, stream_index
                 )
             except DashStreamError as e:
                 last_err = e
