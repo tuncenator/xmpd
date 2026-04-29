@@ -1367,10 +1367,7 @@ class XMPDaemon:
                     if self.mpd_client and self.mpd_client._client:
                         self._ensure_mpd()
                         track_info = self._get_track_info(provider, track_id)
-                        base_title = (
-                            f"{track_info.get('artist', 'Unknown')} - "
-                            f"{track_info.get('title', 'Unknown')}"
-                        )
+                        base_title = track_info.get("title", "Unknown")
                         patch_mpd_queue(
                             self.mpd_client._client, proxy_url, base_title,
                             now_liked, like_indicator,
