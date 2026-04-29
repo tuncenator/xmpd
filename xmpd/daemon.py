@@ -964,36 +964,51 @@ class XMPDaemon:
             return {"success": False, "error": f"Radio generation failed: {e}"}
 
     def _get_liked_ids(self) -> set[str]:
-        """Return the cached set of liked track IDs across all providers.
-
-        Uses provider_registry.get_favorites() to collect liked IDs.
-        Results are cached for 5 minutes to avoid repeated API calls.
-
-        Returns:
-            Set of liked track IDs (compound: "provider:track_id"). Empty set
-            if fetch fails.
-        """
+        """Return liked track IDs by reading local favorites playlists."""
         now = time.time()
         if now - self._liked_ids_cache_time < self._liked_ids_cache_ttl:
             return self._liked_ids_cache
 
+        from xmpd.sync_engine import DEFAULT_FAVORITES_NAMES
+
+        music_dir = Path(self.config.get("mpd_music_directory", "~/Music")).expanduser()
+        playlist_dir = music_dir / "_xmpd"
+        prefix_map = _build_playlist_prefix(self.config)
+        fmt = self.config.get("playlist_format", "m3u")
+
         liked: set[str] = set()
-        for pname, prov in self.provider_registry.items():
+        for pname in self.provider_registry:
+            prefix = prefix_map.get(pname, f"{pname.upper()}: ")
+            fav_name = DEFAULT_FAVORITES_NAMES.get(pname, "Favorites")
+            playlist_path = playlist_dir / f"{prefix}{fav_name}.{fmt}"
+            if not playlist_path.exists():
+                continue
             try:
-                is_auth, _ = prov.is_authenticated()
-                if not is_auth:
-                    continue
-                favorites = prov.get_favorites()
-                for track in favorites:
-                    liked.add(f"{pname}:{track.track_id}")
+                self._parse_liked_from_playlist(playlist_path, fmt, pname, liked)
             except Exception as e:
-                logger.warning("Failed to fetch favorites for %s: %s", pname, e)
+                logger.warning("Failed to parse liked playlist %s: %s", playlist_path, e)
 
         self._liked_ids_cache = liked
         self._liked_ids_cache_time = now
         logger.debug("Refreshed liked IDs cache: %d tracks", len(liked))
-
         return self._liked_ids_cache
+
+    @staticmethod
+    def _parse_liked_from_playlist(
+        path: Path, fmt: str, pname: str, liked: set[str],
+    ) -> None:
+        text = path.read_text(encoding="utf-8")
+        if fmt == "xspf":
+            for match in re.finditer(r"/proxy/[^/]+/([^<\s]+)", text):
+                liked.add(f"{pname}:{match.group(1)}")
+        else:
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                match = re.search(r"/proxy/[^/]+/([^?\s]+)", line)
+                if match:
+                    liked.add(f"{pname}:{match.group(1)}")
 
     _TIDAL_QUALITY_LABELS: dict[str, str] = {
         "HI_RES_LOSSLESS": "HiRes",
@@ -1060,25 +1075,27 @@ class XMPDaemon:
         else:
             targets = self.provider_registry
 
-        # Get liked IDs for like-state population
-        liked_ids = self._get_liked_ids()
-
-        results: list[dict[str, Any]] = []
+        auth_targets = {}
         for pname, prov in targets.items():
             try:
                 is_auth, _ = prov.is_authenticated()
-                if not is_auth:
-                    continue
-                search_results = prov.search(query, limit=limit)
+                if is_auth:
+                    auth_targets[pname] = prov
             except Exception as e:
-                logger.warning("search-json: search failed for %s: %s", pname, e)
-                continue
+                logger.warning("search-json: auth check failed for %s: %s", pname, e)
 
+        def _search_provider(
+            pname: str, prov: Provider,
+        ) -> tuple[str, list[tuple[str, str, dict[str, Any]]]]:
+            search_results = prov.search(query, limit=limit)
             fallback_quality = self._quality_for_provider(pname)
+            hits: list[tuple[str, str, dict[str, Any]]] = []
             for track in search_results:
                 duration_secs = track.metadata.duration_seconds or 0
                 quality = track.metadata.quality or fallback_quality
-                results.append(
+                hits.append((
+                    track.provider,
+                    track.track_id,
                     {
                         "provider": track.provider,
                         "track_id": track.track_id,
@@ -1088,11 +1105,34 @@ class XMPDaemon:
                         "duration": self._format_duration(duration_secs),
                         "duration_seconds": duration_secs,
                         "quality": quality,
-                        "liked": f"{track.provider}:{track.track_id}" in liked_ids
-                        if track.track_id else None,
-                    }
-                )
+                    },
+                ))
+            return pname, hits
 
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        raw_hits: list[tuple[str, str, dict[str, Any]]] = []
+        with ThreadPoolExecutor(max_workers=len(auth_targets) + 1) as pool:
+            liked_ids_future = pool.submit(self._get_liked_ids)
+            search_futures = {
+                pool.submit(_search_provider, pname, prov): pname
+                for pname, prov in auth_targets.items()
+            }
+            for future in as_completed(search_futures):
+                pname = search_futures[future]
+                try:
+                    _, hits = future.result()
+                    raw_hits.extend(hits)
+                except Exception as e:
+                    logger.warning("search-json: search failed for %s: %s", pname, e)
+            liked_ids = liked_ids_future.result()
+
+        results: list[dict[str, Any]] = []
+        for provider, track_id, entry in raw_hits:
+            entry["liked"] = (
+                f"{provider}:{track_id}" in liked_ids if track_id else None
+            )
+            results.append(entry)
         logger.info("search-json: returning %d results for %r", len(results), query)
         return {"success": True, "results": results}
 
