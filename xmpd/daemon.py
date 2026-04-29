@@ -1099,6 +1099,14 @@ class XMPDaemon:
         logger.info("search-json: returning %d results for %r", len(results), query)
         return {"success": True, "results": results}
 
+    def _ensure_mpd(self) -> None:
+        """Reconnect to MPD if the connection was lost."""
+        try:
+            self.mpd_client._client.ping()
+        except Exception:
+            logger.warning("MPD connection lost, reconnecting")
+            self.mpd_client.connect()
+
     def _cmd_play(self, provider: str, track_id: str | None) -> dict[str, Any]:
         """Handle 'play' command - play track immediately.
 
@@ -1134,6 +1142,7 @@ class XMPDaemon:
 
             # Clear queue, add track with metadata, start playback
             logger.info("Playing: %s - %s", track_info["title"], track_info["artist"])
+            self._ensure_mpd()
             self.mpd_client._client.clear()
             song_id = self.mpd_client._client.addid(proxy_url)
             self.mpd_client._client.addtagid(song_id, "Title", track_info["title"])
@@ -1183,6 +1192,7 @@ class XMPDaemon:
             proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
 
             logger.info("Adding to queue: %s - %s", track_info["title"], track_info["artist"])
+            self._ensure_mpd()
             song_id = self.mpd_client._client.addid(proxy_url)
             self.mpd_client._client.addtagid(song_id, "Title", track_info["title"])
             self.mpd_client._client.addtagid(song_id, "Artist", track_info["artist"])
