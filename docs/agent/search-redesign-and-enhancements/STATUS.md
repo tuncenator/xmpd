@@ -51,7 +51,7 @@
 
 - **Conductor Mode**: enabled
 - **Total Batches**: 1
-- **Current Batch**: 0 (not started)
+- **Current Batch**: 1 (complete)
 - **Pacing**: full-auto
 - **Batches Per Session**: N/A
 - **Execution Plan**: docs/agent/search-redesign-and-enhancements/EXECUTION_PLAN.md
@@ -59,16 +59,16 @@
 ---
 
 **Last Updated:** 2026-04-29
-**Current Phase:** 1 of 3
-**Phase Name:** Two-Mode fzf Search
-**Progress:** 0% (0/3 phases complete)
+**Current Phase:** Complete
+**Phase Name:** Complete
+**Progress:** 100% (3/3 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[--------------------] 0% (0/3)
+[####################] 100% (3/3)
 ```
 
 ---
@@ -77,24 +77,15 @@
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 1 | Two-Mode fzf Search | `[Current]` |
-| 2 | Tidal Play Reporting | `[Pending]` |
-| 3 | Like-Toggle Playlist Patching | `[Pending]` |
+| 1 | Two-Mode fzf Search | `[Complete]` |
+| 2 | Tidal Play Reporting | `[Complete]` |
+| 3 | Like-Toggle Playlist Patching | `[Complete]` |
 
 ---
 
 ## Instructions for Agents
 
-1. Read `phase_plans/PHASE_01.md` for detailed requirements for Phase 1
-2. This is the first phase - no previous summaries to read
-3. Complete the phase following the build-verify-commit cycle
-4. Create `summaries/PHASE_01_SUMMARY.md`
-5. Update this file:
-   - Mark Phase 1 as `[Complete]`
-   - Set Phase 2 as `[Current]`
-   - Update "Current Phase" to "2 of 3"
-   - Update "Progress" percentage and count
-   - Update progress bar (each `#` = completed phase, each `-` = remaining phase)
+All phases complete. See `summaries/` for phase summaries and `summaries/CHECKPOINT_1_SUMMARY.md` for the checkpoint report.
 
 **Phase plans:** See `phase_plans/PHASE_XX.md`
 **Project overview:** See `PROJECT_PLAN.md`
