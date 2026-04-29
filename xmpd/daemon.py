@@ -996,23 +996,18 @@ class XMPDaemon:
 
     _TIDAL_QUALITY_LABELS: dict[str, str] = {
         "HI_RES_LOSSLESS": "HiRes",
-        "LOSSLESS": "CD",
+        "LOSSLESS": "HiFi",
         "HIGH": "320k",
         "LOW": "96k",
     }
 
     def _quality_for_provider(self, provider_name: str) -> str:
-        """Return quality label for a provider's search results.
-
-        For Tidal, reflects the configured ``quality_ceiling`` rather than
-        returning a hardcoded "CD" for every subscription tier. Falls back to
-        "CD" (LOSSLESS) when no config is present.
-        """
+        """Return fallback quality label when per-track data is unavailable."""
         if provider_name == "tidal":
             ceiling = self.config.get("tidal", {}).get(
                 "quality_ceiling", "LOSSLESS"
             )
-            return self._TIDAL_QUALITY_LABELS.get(ceiling, "CD")
+            return self._TIDAL_QUALITY_LABELS.get(ceiling, "HiFi")
         return "Lo"
 
     def _cmd_search_json(self, args: list[str]) -> dict[str, Any]:
@@ -1078,9 +1073,10 @@ class XMPDaemon:
                 logger.warning("search-json: search failed for %s: %s", pname, e)
                 continue
 
-            quality = self._quality_for_provider(pname)
+            fallback_quality = self._quality_for_provider(pname)
             for track in search_results:
                 duration_secs = track.metadata.duration_seconds or 0
+                quality = track.metadata.quality or fallback_quality
                 results.append(
                     {
                         "provider": track.provider,

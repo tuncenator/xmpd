@@ -368,8 +368,8 @@ def format_track_fzf(track: dict[str, Any]) -> str:
     badge = ""
     if quality in ("HR", "HiRes"):
         badge = f" {ANSI_BOLD}HiRes{ANSI_RESET}{color}"
-    elif quality in ("CD", "LOSSLESS"):
-        badge = " CD"
+    elif quality in ("CD", "HiFi", "LOSSLESS"):
+        badge = " HiFi"
     elif quality == "320k":
         badge = " 320k"
     elif quality in ("Lo", "96k"):

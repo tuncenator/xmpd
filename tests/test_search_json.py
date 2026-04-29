@@ -270,8 +270,8 @@ class TestCmdSearchJson:
         assert response["success"] is True
         assert response["results"][0]["quality"] == "HiRes"
 
-    def test_tidal_quality_lossless_shows_cd(self, tmp_path):
-        """LOSSLESS ceiling maps to 'CD' label."""
+    def test_tidal_quality_lossless_shows_hifi(self, tmp_path):
+        """LOSSLESS ceiling maps to 'HiFi' label."""
         tidal = MagicMock(name="tidal_provider")
         tidal.name = "tidal"
         tidal.is_authenticated.return_value = (True, "")
@@ -292,10 +292,10 @@ class TestCmdSearchJson:
             config={"tidal": {"quality_ceiling": "LOSSLESS"}},
         )
         response = daemon._cmd_search_json(["test"])
-        assert response["results"][0]["quality"] == "CD"
+        assert response["results"][0]["quality"] == "HiFi"
 
-    def test_tidal_quality_no_config_falls_back_to_cd(self, tmp_path):
-        """Missing tidal config falls back to 'CD' label."""
+    def test_tidal_quality_no_config_falls_back_to_hifi(self, tmp_path):
+        """Missing tidal config falls back to 'HiFi' label."""
         tidal = MagicMock(name="tidal_provider")
         tidal.name = "tidal"
         tidal.is_authenticated.return_value = (True, "")
@@ -312,7 +312,7 @@ class TestCmdSearchJson:
 
         daemon = _make_daemon(tmp_path, registry={"tidal": tidal})
         response = daemon._cmd_search_json(["test"])
-        assert response["results"][0]["quality"] == "CD"
+        assert response["results"][0]["quality"] == "HiFi"
 
 
 # ---------------------------------------------------------------------------
@@ -329,11 +329,11 @@ class TestQualityForProvider:
         )
         assert daemon._quality_for_provider("tidal") == "HiRes"
 
-    def test_lossless_maps_to_cd(self, tmp_path):
+    def test_lossless_maps_to_hifi(self, tmp_path):
         daemon = _make_daemon(
             tmp_path, config={"tidal": {"quality_ceiling": "LOSSLESS"}}
         )
-        assert daemon._quality_for_provider("tidal") == "CD"
+        assert daemon._quality_for_provider("tidal") == "HiFi"
 
     def test_high_maps_to_320k(self, tmp_path):
         daemon = _make_daemon(
@@ -355,9 +355,9 @@ class TestQualityForProvider:
         daemon = _make_daemon(tmp_path)
         assert daemon._quality_for_provider("spotify") == "Lo"
 
-    def test_missing_tidal_config_falls_back_to_cd(self, tmp_path):
+    def test_missing_tidal_config_falls_back_to_hifi(self, tmp_path):
         daemon = _make_daemon(tmp_path)
-        assert daemon._quality_for_provider("tidal") == "CD"
+        assert daemon._quality_for_provider("tidal") == "HiFi"
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +557,7 @@ _FZF_FAKE_RESPONSE = {
             "album": "Pablo Honey",
             "duration": "3:59",
             "duration_seconds": 239,
-            "quality": "CD",
+            "quality": "HiFi",
             "liked": True,
         },
         {
