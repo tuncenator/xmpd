@@ -632,10 +632,6 @@ class XMPDaemon:
                 else:
                     provider, track_id = None, None
                 response = self._cmd_radio(provider, track_id)
-            elif cmd == "search":
-                provider, remaining = self._parse_provider_args(args)
-                query = " ".join(remaining) if remaining else None
-                response = self._cmd_search(query, provider=provider)
             elif cmd == "search-json":
                 # search-json [--provider yt|all] [--limit N] QUERY
                 response = self._cmd_search_json(parts[1:])
@@ -841,59 +837,6 @@ class XMPDaemon:
             statuses[name] = {"enabled": bool(enabled), "authenticated": bool(is_auth)}
         return {"success": True, "providers": statuses}
 
-    def _cmd_search(
-        self, query: str | None, *, provider: str | None = None,
-    ) -> dict[str, Any]:
-        """Handle 'search' command - search across providers.
-
-        Args:
-            query: Search query string.
-            provider: Restrict to a single provider, or None for all.
-        """
-        logger.info("Search command: query=%s provider=%s", query, provider)
-
-        try:
-            if query is None or not query.strip():
-                return {"success": False, "error": "Empty search query"}
-
-            # Determine which providers to search
-            if provider and provider != "all":
-                if provider not in self.provider_registry:
-                    return {"success": False, "error": f"Unknown provider: {provider}"}
-                targets = {provider: self.provider_registry[provider]}
-            else:
-                targets = self.provider_registry
-
-            formatted: list[dict[str, Any]] = []
-            global_idx = 1
-            for pname, prov in targets.items():
-                try:
-                    is_auth, _ = prov.is_authenticated()
-                    if not is_auth:
-                        continue
-                    results = prov.search(query, limit=10)
-                    for track in results:
-                        formatted.append({
-                            "number": global_idx,
-                            "provider": pname,
-                            "track_id": track.track_id,
-                            "title": track.metadata.title,
-                            "artist": track.metadata.artist or "Unknown Artist",
-                            "duration": self._format_duration(
-                                track.metadata.duration_seconds or 0
-                            ),
-                        })
-                        global_idx += 1
-                except Exception as e:
-                    logger.warning("Search failed for provider %s: %s", pname, e)
-
-            logger.info("Found %d results for: %s", len(formatted), query)
-            return {"success": True, "results": formatted, "count": len(formatted)}
-
-        except Exception as e:
-            logger.error("Search failed: %s", e)
-            return {"success": False, "error": f"Search failed: {e}"}
-
     def _cmd_radio(
         self, provider: str | None, track_id: str | None,
     ) -> dict[str, Any]:
@@ -1051,11 +994,20 @@ class XMPDaemon:
 
         return self._liked_ids_cache
 
-    @staticmethod
-    def _quality_for_provider(provider_name: str) -> str:
-        """Return default quality label for a provider's search results."""
+    _TIDAL_QUALITY_LABELS: dict[str, str] = {
+        "HI_RES_LOSSLESS": "HiRes",
+        "LOSSLESS": "HiFi",
+        "HIGH": "320k",
+        "LOW": "96k",
+    }
+
+    def _quality_for_provider(self, provider_name: str) -> str:
+        """Return fallback quality label when per-track data is unavailable."""
         if provider_name == "tidal":
-            return "CD"
+            ceiling = self.config.get("tidal", {}).get(
+                "quality_ceiling", "LOSSLESS"
+            )
+            return self._TIDAL_QUALITY_LABELS.get(ceiling, "HiFi")
         return "Lo"
 
     def _cmd_search_json(self, args: list[str]) -> dict[str, Any]:
@@ -1121,9 +1073,10 @@ class XMPDaemon:
                 logger.warning("search-json: search failed for %s: %s", pname, e)
                 continue
 
-            quality = self._quality_for_provider(pname)
+            fallback_quality = self._quality_for_provider(pname)
             for track in search_results:
                 duration_secs = track.metadata.duration_seconds or 0
+                quality = track.metadata.quality or fallback_quality
                 results.append(
                     {
                         "provider": track.provider,
@@ -1142,6 +1095,14 @@ class XMPDaemon:
         logger.info("search-json: returning %d results for %r", len(results), query)
         return {"success": True, "results": results}
 
+    def _ensure_mpd(self) -> None:
+        """Reconnect to MPD if the connection was lost."""
+        try:
+            self.mpd_client._client.ping()
+        except Exception:
+            logger.warning("MPD connection lost, reconnecting")
+            self.mpd_client.connect()
+
     def _cmd_play(self, provider: str, track_id: str | None) -> dict[str, Any]:
         """Handle 'play' command - play track immediately.
 
@@ -1158,14 +1119,30 @@ class XMPDaemon:
             # Get track metadata via provider
             track_info = self._get_track_info(provider, track_id)
 
+            # Register in TrackStore so stream proxy can resolve the track
+            if self.track_store:
+                try:
+                    self.track_store.add_track(
+                        provider=provider,
+                        track_id=track_id,
+                        stream_url=None,
+                        title=track_info.get("title", "Unknown"),
+                        artist=track_info.get("artist", None),
+                    )
+                except Exception:
+                    logger.warning("Failed to register track in store: %s/%s", provider, track_id)
+
             # Build proxy URL
             proxy_port = (self.proxy_config or {}).get("port", 8080)
             proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
 
-            # Clear queue, add track, start playback
+            # Clear queue, add track with metadata, start playback
             logger.info("Playing: %s - %s", track_info["title"], track_info["artist"])
+            self._ensure_mpd()
             self.mpd_client._client.clear()
-            self.mpd_client._client.add(proxy_url)
+            song_id = self.mpd_client._client.addid(proxy_url)
+            self.mpd_client._client.addtagid(song_id, "Title", track_info["title"])
+            self.mpd_client._client.addtagid(song_id, "Artist", track_info["artist"])
             self.mpd_client._client.play()
 
             return {
@@ -1194,11 +1171,27 @@ class XMPDaemon:
 
             track_info = self._get_track_info(provider, track_id)
 
+            # Register in TrackStore so stream proxy can resolve the track
+            if self.track_store:
+                try:
+                    self.track_store.add_track(
+                        provider=provider,
+                        track_id=track_id,
+                        stream_url=None,
+                        title=track_info.get("title", "Unknown"),
+                        artist=track_info.get("artist", None),
+                    )
+                except Exception:
+                    logger.warning("Failed to register track in store: %s/%s", provider, track_id)
+
             proxy_port = (self.proxy_config or {}).get("port", 8080)
             proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
 
             logger.info("Adding to queue: %s - %s", track_info["title"], track_info["artist"])
-            self.mpd_client._client.add(proxy_url)
+            self._ensure_mpd()
+            song_id = self.mpd_client._client.addid(proxy_url)
+            self.mpd_client._client.addtagid(song_id, "Title", track_info["title"])
+            self.mpd_client._client.addtagid(song_id, "Artist", track_info["artist"])
 
             return {
                 "success": True,

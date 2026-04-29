@@ -141,12 +141,25 @@ class TidalProvider:
                 logger.debug("Tidal album.image(640) failed for track %s: %s", t.id, e)
                 art_url = None
 
+        tags = getattr(t, "media_metadata_tags", None) or []
+        if "HIRES_LOSSLESS" in tags:
+            quality = "HiRes"
+        elif "LOSSLESS" in tags:
+            quality = "HiFi"
+        elif getattr(t, "audio_quality", None) == "HIGH":
+            quality = "320k"
+        elif getattr(t, "audio_quality", None) == "LOW":
+            quality = "96k"
+        else:
+            quality = None
+
         metadata = TrackMetadata(
             title=t.full_name or t.name or "",
             artist=t.artist.name if t.artist is not None else None,
             album=t.album.name if t.album is not None else None,
             duration_seconds=int(t.duration) if t.duration is not None else None,
             art_url=art_url,
+            quality=quality,
         )
         return Track(
             provider="tidal",

@@ -159,19 +159,17 @@ class TestProviderColors:
 class TestQualityBadges:
     """Quality tier badges: HR bold, CD plain, Lo dim."""
 
-    def test_hr_badge_uses_bold(self):
-        line = format_track_fzf(_make_track(quality="HR"))
+    def test_hires_badge_uses_bold(self):
+        line = format_track_fzf(_make_track(quality="HiRes"))
         visible = line.split("\t")[2]
-        assert f"{BOLD}HR{RESET}" in visible
+        assert f"{BOLD}HiRes{RESET}" in visible
 
-    def test_cd_badge_plain(self):
-        line = format_track_fzf(_make_track(provider="tidal", quality="CD"))
+    def test_hifi_badge_plain(self):
+        line = format_track_fzf(_make_track(provider="tidal", quality="HiFi"))
         visible = line.split("\t")[2]
-        assert " CD" in visible
-        # CD should not have bold or dim
-        cd_pos = visible.index(" CD")
-        # Check no bold immediately before CD
-        preceding = visible[max(0, cd_pos - len(BOLD)):cd_pos]
+        assert " HiFi" in visible
+        hifi_pos = visible.index(" HiFi")
+        preceding = visible[max(0, hifi_pos - len(BOLD)):hifi_pos]
         assert BOLD not in preceding
 
     def test_lo_badge_uses_dim(self):
@@ -182,9 +180,8 @@ class TestQualityBadges:
     def test_null_quality_no_badge(self):
         line = format_track_fzf(_make_track(quality=None))
         visible = line.split("\t")[2]
-        # Should not have any quality badge text
-        assert " HR" not in visible
-        assert " CD" not in visible
+        assert " HiRes" not in visible
+        assert " HiFi" not in visible
         assert " Lo" not in visible
 
     def test_empty_quality_no_badge(self):
@@ -223,13 +220,13 @@ class TestLikedIndicator:
     def test_liked_indicator_position(self):
         """[+1] appears after quality badge and before artist."""
         line = format_track_fzf(
-            _make_track(provider="tidal", quality="CD", liked=True, artist="Radiohead")
+            _make_track(provider="tidal", quality="HiFi", liked=True, artist="Radiohead")
         )
         visible = line.split("\t")[2]
-        cd_pos = visible.index("CD")
+        hifi_pos = visible.index("HiFi")
         plus_pos = visible.index("[+1]")
         artist_pos = visible.index("Radiohead")
-        assert cd_pos < plus_pos < artist_pos
+        assert hifi_pos < plus_pos < artist_pos
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +266,7 @@ class TestEdgeCases:
                 title="Creep",
                 artist="Radiohead",
                 duration="3:59",
-                quality="CD",
+                quality="HiFi",
                 liked=True,
             )
         )
@@ -279,7 +276,7 @@ class TestEdgeCases:
         visible = parts[2]
         assert TIDAL_COLOR in visible
         assert "[TD]" in visible
-        assert " CD" in visible
+        assert " HiFi" in visible
         assert "[+1]" in visible
         assert "Radiohead - Creep (3:59)" in visible
 

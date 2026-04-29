@@ -1100,3 +1100,131 @@ async def test_cancellation_releases_resolution_slot(track_store):
 
     # Semaphore must be fully released
     assert proxy._resolution_semaphore._value == 1
+
+
+# ---------------------------------------------------------------------------
+# ffprobe stream selection tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_best_audio_stream_picks_highest_bitrate():
+    """_probe_best_audio_stream selects the stream index with the highest bitrate."""
+    import json as _json
+
+    from xmpd.stream_proxy import _probe_best_audio_stream
+
+    ffprobe_output = _json.dumps({
+        "streams": [
+            {"index": 0, "codec_type": "audio", "bit_rate": "320000"},
+            {"index": 1, "codec_type": "audio", "bit_rate": "1411200"},
+        ]
+    }).encode()
+
+    fake_proc = AsyncMock()
+    fake_proc.communicate = AsyncMock(return_value=(ffprobe_output, b""))
+
+    with patch(
+        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=fake_proc),
+    ):
+        idx = await _probe_best_audio_stream("https://example.com/manifest.mpd")
+
+    assert idx == 1
+
+
+@pytest.mark.asyncio
+async def test_probe_best_audio_stream_single_stream_returns_zero():
+    """Falls back to index 0 when only one audio stream exists."""
+    import json as _json
+
+    from xmpd.stream_proxy import _probe_best_audio_stream
+
+    ffprobe_output = _json.dumps({
+        "streams": [
+            {"index": 0, "codec_type": "audio", "bit_rate": "1411200"},
+        ]
+    }).encode()
+
+    fake_proc = AsyncMock()
+    fake_proc.communicate = AsyncMock(return_value=(ffprobe_output, b""))
+
+    with patch(
+        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=fake_proc),
+    ):
+        idx = await _probe_best_audio_stream("https://example.com/manifest.mpd")
+
+    assert idx == 0
+
+
+@pytest.mark.asyncio
+async def test_probe_best_audio_stream_ffprobe_failure_returns_zero():
+    """Falls back to index 0 when ffprobe raises an exception."""
+    from xmpd.stream_proxy import _probe_best_audio_stream
+
+    with patch(
+        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        side_effect=OSError("ffprobe not found"),
+    ):
+        idx = await _probe_best_audio_stream("https://example.com/manifest.mpd")
+
+    assert idx == 0
+
+
+@pytest.mark.asyncio
+async def test_route_tidal_dash_ffmpeg_receives_map_flag(track_store, tidal_provider_mock):
+    """ffmpeg command must include -map 0:a:{index} to select the probed audio stream."""
+    track_store.add_track(
+        "tidal",
+        "99887766",
+        stream_url="https://manifest.tidal.com/track.mpd?token=abc",
+        title="HiRes Track",
+        artist="Artist",
+    )
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"tidal": tidal_provider_mock},
+        stream_cache_hours={"tidal": 5},
+    )
+
+    # ffprobe returns two streams; index 1 has the higher bitrate
+    import json as _json
+
+    ffprobe_output = _json.dumps({
+        "streams": [
+            {"index": 0, "codec_type": "audio", "bit_rate": "320000"},
+            {"index": 1, "codec_type": "audio", "bit_rate": "1411200"},
+        ]
+    }).encode()
+
+    fake_ffprobe = AsyncMock()
+    fake_ffprobe.communicate = AsyncMock(return_value=(ffprobe_output, b""))
+
+    fake_flac_bytes = b"fLaC" + b"\x00" * 4096
+    fake_ffmpeg = Mock()
+    fake_ffmpeg.returncode = 0
+    fake_ffmpeg.stdout = AsyncMock()
+    fake_ffmpeg.stdout.read = AsyncMock(side_effect=[fake_flac_bytes, b""])
+    fake_ffmpeg.stderr = AsyncMock()
+    fake_ffmpeg.stderr.read = AsyncMock(return_value=b"")
+    fake_ffmpeg.wait = AsyncMock(return_value=0)
+    fake_ffmpeg.kill = Mock()
+
+    spawn_calls = []
+
+    async def fake_spawn(*args, **kwargs):
+        spawn_calls.append(args)
+        if args[0] == "ffprobe":
+            return fake_ffprobe
+        return fake_ffmpeg
+
+    with patch("xmpd.stream_proxy.asyncio.create_subprocess_exec", side_effect=fake_spawn):
+        async with TestClient(TestServer(proxy.app)) as client:
+            resp = await client.get("/proxy/tidal/99887766", allow_redirects=False)
+            assert resp.status == 200
+
+    ffmpeg_args = next(a for a in spawn_calls if a[0] == "ffmpeg")
+    assert "-map" in ffmpeg_args
+    map_idx = list(ffmpeg_args).index("-map")
+    assert ffmpeg_args[map_idx + 1] == "0:a:1"

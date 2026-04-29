@@ -27,6 +27,7 @@ class TrackMetadata:
     album: str | None
     duration_seconds: int | None
     art_url: str | None
+    quality: str | None = None
 
 
 @dataclass(frozen=True)
