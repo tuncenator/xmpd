@@ -551,7 +551,7 @@ _FZF_FAKE_RESPONSE = {
     "results": [
         {
             "provider": "tidal",
-            "track_id": "58990486",
+            "track_id": "99999999",
             "title": "Creep",
             "artist": "Radiohead",
             "album": "Pablo Honey",
@@ -601,7 +601,7 @@ class TestXmpctlSearchJsonFzfFormat:
         ns["cmd_search_json"](["--format", "fzf", "radiohead"])
         captured = capsys.readouterr()
         lines = captured.out.strip().splitlines()
-        assert lines[0].split("\t")[1] == "58990486"
+        assert lines[0].split("\t")[1] == "99999999"
         assert lines[1].split("\t")[1] == "9RfVp-GhKfs"
 
     def test_fzf_format_visible_has_ansi_colors(self, monkeypatch, capsys):
