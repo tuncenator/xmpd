@@ -197,7 +197,7 @@ def classify_audio_quality(
     if bit_depth >= 24 or sample_rate > 48000:
         return "HR" if compact else "HiRes"
     if bit_depth == 16:
-        return "CD" if compact else "HiFi"
+        return "HF" if compact else "HiFi"
     return None
 
 
@@ -1264,6 +1264,20 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
             next_line = smart_truncate(next_line, max_length)
             additional_lines.append(next_line)
 
+        # Build shortform: icon + title + elapsed/duration + compact quality
+        short_quality_suffix = ""
+        if args.show_quality:
+            short_quality = classify_audio_quality(
+                status.get("audio", ""),
+                status.get("bitrate", ""),
+                track_type,
+                compact=True,
+            )
+            if short_quality:
+                short_quality_suffix = f" [{short_quality}]"
+        short_output = f"{icon} {title} - {position_str}/{duration_str}{short_quality_suffix}"
+        short_output = smart_truncate(short_output, max_length)
+
         # Output for i3blocks
         # If we have additional lines, append them to the full text
         if additional_lines:
@@ -1278,7 +1292,7 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
         else:
             # Interval mode: output full_text, short_text, color
             print(full_output)  # Full text (may include next/prev)
-            print(output)  # Short text (just main line)
+            print(short_output)  # Short text (compact: icon + title + time + quality)
             print(color)  # Color
             sys.stdout.flush()
 
@@ -1685,6 +1699,20 @@ def main() -> None:
             next_line = smart_truncate(next_line, max_length)
             additional_lines.append(next_line)
 
+        # Build shortform: icon + title + elapsed/duration + compact quality
+        short_quality_suffix = ""
+        if args.show_quality:
+            short_quality = classify_audio_quality(
+                status.get("audio", ""),
+                status.get("bitrate", ""),
+                track_type,
+                compact=True,
+            )
+            if short_quality:
+                short_quality_suffix = f" [{short_quality}]"
+        short_output = f"{icon} {title} - {position_str}/{duration_str}{short_quality_suffix}"
+        short_output = smart_truncate(short_output, max_length)
+
         # Output for i3blocks (interval mode - always 3-line format)
         # If we have additional lines, append them to the full text
         if additional_lines:
@@ -1694,7 +1722,7 @@ def main() -> None:
 
         # Interval mode: output full_text, short_text, color
         print(full_output)  # Full text (may include next/prev)
-        print(output)  # Short text (just main line)
+        print(short_output)  # Short text (compact: icon + title + time + quality)
         print(color)  # Color
         sys.stdout.flush()
 

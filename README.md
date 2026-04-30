@@ -241,6 +241,11 @@ shrinks, song name ellipsises last. `--show-position` displays playlist
 position (e.g. `[3/15]`). `--handle-clicks` enables left/right click
 play/pause and next/prev.
 
+The shortform (rendered by i3blocks when the bar is too narrow for the full
+text) is a compact `{icon} {title} - {elapsed}/{duration} [QUALITY]` line.
+Quality badges in compact mode are `HR` (HiRes), `HF` (HiFi), `Lo` (Lossy);
+the bracket is omitted for local files.
+
 ## Troubleshooting
 
 **Daemon won't start -- config shape error:**
