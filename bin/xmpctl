@@ -19,6 +19,9 @@ import socket  # noqa: E402
 import subprocess  # noqa: E402
 from typing import Any, NoReturn  # noqa: E402
 
+from xmpd import audio_flow  # noqa: E402
+from xmpd.config import load_config  # noqa: E402
+
 
 def get_sync_socket_path() -> Path:
     """Get the Unix socket path for xmpd sync daemon.
@@ -264,6 +267,30 @@ def cmd_status() -> None:
                 print(f"  - {error}")
             if len(errors) > 5:
                 print(f"  ... and {len(errors) - 5} more errors")
+
+
+def cmd_flow(args: list[str]) -> None:
+    """Show end-to-end audio quality for the currently playing track."""
+    short = "--short" in args
+    brief = "--brief" in args
+    if short and brief:
+        print("Error: --short and --brief are mutually exclusive", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        config = load_config()
+    except Exception as e:
+        print(f"Error loading config: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    report = audio_flow.probe_flow(config)
+
+    if short:
+        print(audio_flow.format_short(report))
+    elif brief:
+        print(audio_flow.format_brief(report))
+    else:
+        print(audio_flow.format_default(report, colorize))
 
 
 def cmd_list_playlists() -> None:
@@ -862,6 +889,9 @@ def show_help() -> None:
 {colorize("Usage:", "bold")}
   xmpctl sync                    Trigger immediate sync
   xmpctl status                  Show sync status and statistics
+  xmpctl flow                    Show end-to-end audio quality for current track
+                                  --short  one-line summary (status bar friendly)
+                                  --brief  one-sentence verdict
   xmpctl list-playlists          List playlists from all providers
 
   xmpctl auth <provider>         Set up authentication for a provider
@@ -979,6 +1009,8 @@ def main() -> NoReturn:
             print("Error: like-toggle requires <provider> <track_id>", file=sys.stderr)
             sys.exit(1)
         cmd_like_toggle(args[0], args[1])
+    elif command == "flow":
+        cmd_flow(args)
     elif command == "auth":
         # Legacy compat: bare `auth` or `auth --auto` -> `auth yt`
         legacy_auto = "--auto" in args
