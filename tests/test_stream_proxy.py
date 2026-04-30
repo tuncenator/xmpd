@@ -1,5 +1,6 @@
 """Unit tests for StreamRedirectProxy and build_proxy_url."""
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -589,6 +590,70 @@ async def test_route_tidal_dash_pipes_through_ffmpeg(track_store, tidal_provider
     assert "flac" in args
     # No redirect should have been attempted
     tidal_provider_mock.resolve_stream.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_route_tidal_dash_terminates_on_idle_ffmpeg(
+    track_store, tidal_provider_mock, monkeypatch
+):
+    """If ffmpeg stops producing data mid-stream, the proxy must time out,
+    kill the subprocess, and end the response cleanly. Regression for the
+    silent hang where a stalled CDN segment left MPD with a half-buffered
+    stream and no recovery path.
+    """
+    monkeypatch.setattr("xmpd.stream_proxy.DASH_STREAM_IDLE_TIMEOUT", 0.2)
+
+    track_store.add_track(
+        "tidal",
+        "12345678",
+        stream_url="https://im-fa.manifest.tidal.com/abc.mpd?token=xyz",
+        title="Track",
+        artist="Artist",
+    )
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"tidal": tidal_provider_mock},
+        stream_cache_hours={"tidal": 5},
+    )
+
+    fake_flac_bytes = b"fLaC" + b"\x00" * 4096
+    call_count = {"n": 0}
+
+    async def fake_read(_size):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return fake_flac_bytes
+        # Subsequent reads hang forever; timeout must trip.
+        await asyncio.Event().wait()
+        return b""
+
+    fake_proc = Mock()
+    fake_proc.returncode = None
+    fake_proc.stdout = AsyncMock()
+    fake_proc.stdout.read = fake_read
+    fake_proc.stderr = AsyncMock()
+    fake_proc.stderr.read = AsyncMock(return_value=b"")
+    fake_proc.wait = AsyncMock(return_value=-9)
+
+    def kill_impl():
+        fake_proc.returncode = -9
+
+    fake_proc.kill = Mock(side_effect=kill_impl)
+
+    with patch(
+        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=fake_proc),
+    ):
+        async with TestClient(TestServer(proxy.app)) as client:
+            resp = await asyncio.wait_for(
+                client.get("/proxy/tidal/12345678", allow_redirects=False),
+                timeout=5,
+            )
+            assert resp.status == 200
+            body = await asyncio.wait_for(resp.read(), timeout=5)
+            assert body == fake_flac_bytes
+
+    fake_proc.kill.assert_called()
 
 
 @pytest.mark.asyncio
