@@ -88,24 +88,24 @@ class TestFieldExtraction:
     """Provider and track_id must be extractable from fzf output lines."""
 
     def test_yt_provider_extracted(self):
-        line = format_track_fzf(_make_track(provider="yt", track_id="dQw4w9WgXcQ"))
+        line = format_track_fzf(_make_track(provider="yt", track_id="testvideoid"))
         provider, track_id, _ = _extract_fields(line)
         assert provider == "yt"
 
     def test_tidal_provider_extracted(self):
-        line = format_track_fzf(_make_track(provider="tidal", track_id="58990486"))
+        line = format_track_fzf(_make_track(provider="tidal", track_id="99999999"))
         provider, track_id, _ = _extract_fields(line)
         assert provider == "tidal"
 
     def test_track_id_yt_format(self):
-        line = format_track_fzf(_make_track(provider="yt", track_id="dQw4w9WgXcQ"))
+        line = format_track_fzf(_make_track(provider="yt", track_id="testvideoid"))
         _, track_id, _ = _extract_fields(line)
-        assert track_id == "dQw4w9WgXcQ"
+        assert track_id == "testvideoid"
 
     def test_track_id_tidal_format(self):
-        line = format_track_fzf(_make_track(provider="tidal", track_id="58990486"))
+        line = format_track_fzf(_make_track(provider="tidal", track_id="99999999"))
         _, track_id, _ = _extract_fields(line)
-        assert track_id == "58990486"
+        assert track_id == "99999999"
 
     def test_visible_field_not_used_for_action(self):
         """Visible field (field 3) is display-only; actions use fields 1 and 2."""
@@ -190,7 +190,7 @@ class TestXmpctlPlayCommand:
     def test_play_with_args_attempts_daemon(self):
         """play with valid args attempts to connect to daemon (fails gracefully)."""
         result = subprocess.run(
-            [str(XMPCTL), "play", "yt", "dQw4w9WgXcQ"],
+            [str(XMPCTL), "play", "yt", "testvideoid"],
             capture_output=True,
             text=True,
         )
@@ -226,7 +226,7 @@ class TestXmpctlQueueCommand:
 
     def test_queue_with_args_attempts_daemon(self):
         result = subprocess.run(
-            [str(XMPCTL), "queue", "tidal", "58990486"],
+            [str(XMPCTL), "queue", "tidal", "99999999"],
             capture_output=True,
             text=True,
         )
@@ -243,9 +243,9 @@ class TestXmpctlRadioTrackId:
     """xmpctl radio --track-id parses correctly and sends to daemon."""
 
     def test_radio_with_track_id_attempts_daemon(self):
-        """radio --provider tidal --track-id 58990486 --apply reaches daemon."""
+        """radio --provider tidal --track-id 99999999 --apply reaches daemon."""
         result = subprocess.run(
-            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id", "58990486", "--apply"],
+            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id", "99999999", "--apply"],
             capture_output=True,
             text=True,
         )
@@ -267,9 +267,9 @@ class TestXmpctlRadioTrackId:
             )), f"Unexpected stderr: {result.stderr!r}"
 
     def test_radio_track_id_equals_syntax(self):
-        """radio --track-id=58990486 syntax also accepted."""
+        """radio --track-id=99999999 syntax also accepted."""
         result = subprocess.run(
-            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id=58990486"],
+            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id=99999999"],
             capture_output=True,
             text=True,
         )

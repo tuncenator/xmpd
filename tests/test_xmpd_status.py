@@ -70,7 +70,7 @@ class TestGetTrackType:
 
     def test_youtube_proxy_url(self):
         """Test YouTube track detection from proxy URL."""
-        file_path = "http://localhost:6602/proxy/yt/dQw4w9WgXcQ"
+        file_path = "http://localhost:6602/proxy/yt/testvideoid"
         track_type = ytmpd_status.get_track_type(file_path)
         assert track_type == "youtube"
 
@@ -82,7 +82,7 @@ class TestGetTrackType:
 
     def test_legacy_proxy_url_without_provider(self):
         """Test legacy proxy URL without provider prefix defaults to youtube."""
-        file_path = "http://localhost:6602/proxy/dQw4w9WgXcQ"
+        file_path = "http://localhost:6602/proxy/testvideoid"
         track_type = ytmpd_status.get_track_type(file_path)
         assert track_type == "youtube"
 
@@ -115,14 +115,14 @@ class TestGetTrackType:
         """)
         cursor.execute(
             "INSERT INTO tracks (track_id, provider, title, updated_at) VALUES (?, ?, ?, ?)",
-            ("dQw4w9WgXcQ", "yt", "Test Song", 0),
+            ("testvideoid", "yt", "Test Song", 0),
         )
         conn.commit()
         conn.close()
 
         with patch("ytmpd_status.Path.home") as mock_home:
             mock_home.return_value = tmp_path
-            track_type = ytmpd_status.get_track_type("dQw4w9WgXcQ")
+            track_type = ytmpd_status.get_track_type("testvideoid")
             assert track_type == "youtube"
 
     def test_tidal_from_database(self, tmp_path):
@@ -1066,14 +1066,14 @@ class TestGetSyncStatus:
         """)
         cursor.execute(
             "INSERT INTO tracks (video_id, stream_url) VALUES (?, ?)",
-            ("dQw4w9WgXcQ", "https://youtube.com/stream/url"),
+            ("testvideoid", "https://youtube.com/stream/url"),
         )
         conn.commit()
         conn.close()
 
         with patch("ytmpd_status.Path.home") as mock_home:
             mock_home.return_value = tmp_path
-            status = ytmpd_status.get_sync_status("http://localhost:6602/proxy/dQw4w9WgXcQ")
+            status = ytmpd_status.get_sync_status("http://localhost:6602/proxy/testvideoid")
             assert status == "resolved"
 
     def test_youtube_unresolved(self, tmp_path):
@@ -1093,14 +1093,14 @@ class TestGetSyncStatus:
         """)
         cursor.execute(
             "INSERT INTO tracks (video_id, stream_url) VALUES (?, ?)",
-            ("dQw4w9WgXcQ", None),  # NULL stream_url
+            ("testvideoid", None),  # NULL stream_url
         )
         conn.commit()
         conn.close()
 
         with patch("ytmpd_status.Path.home") as mock_home:
             mock_home.return_value = tmp_path
-            status = ytmpd_status.get_sync_status("http://localhost:6602/proxy/dQw4w9WgXcQ")
+            status = ytmpd_status.get_sync_status("http://localhost:6602/proxy/testvideoid")
             assert status == "unresolved"
 
     def test_youtube_not_in_database(self, tmp_path):
@@ -1123,14 +1123,14 @@ class TestGetSyncStatus:
 
         with patch("ytmpd_status.Path.home") as mock_home:
             mock_home.return_value = tmp_path
-            status = ytmpd_status.get_sync_status("http://localhost:6602/proxy/dQw4w9WgXcQ")
+            status = ytmpd_status.get_sync_status("http://localhost:6602/proxy/testvideoid")
             assert status == "unknown"
 
     def test_no_database(self, tmp_path):
         """Test sync status when database doesn't exist."""
         with patch("ytmpd_status.Path.home") as mock_home:
             mock_home.return_value = tmp_path
-            status = ytmpd_status.get_sync_status("http://localhost:6602/proxy/dQw4w9WgXcQ")
+            status = ytmpd_status.get_sync_status("http://localhost:6602/proxy/testvideoid")
             assert status == "unknown"
 
 

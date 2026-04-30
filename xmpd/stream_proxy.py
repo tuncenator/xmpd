@@ -38,6 +38,11 @@ MAX_CONCURRENT_STREAMS = 10
 DASH_MAX_RETRIES = 3
 DASH_RETRY_DELAYS = (2, 4, 8)
 DASH_FIRST_CHUNK_TIMEOUT = 15
+# Mid-stream watchdog: kill ffmpeg if its stdout produces no data for this
+# many seconds. Guards against silent hangs where ffmpeg blocks waiting for
+# a CDN segment that never arrives, leaving MPD with a half-buffered stream
+# and no recovery path.
+DASH_STREAM_IDLE_TIMEOUT = 30
 
 # Chunk size for ffmpeg stdout reads when piping DASH-stitched FLAC to the
 # client. 64 KiB is a balance between latency and syscall overhead.
@@ -140,6 +145,10 @@ async def _stream_dash_via_ffmpeg(
     ffmpeg (network down, expired manifest) raises DashStreamError instead
     of sending an empty 200 that stalls MPD.
 
+    A mid-stream idle watchdog (DASH_STREAM_IDLE_TIMEOUT) kills ffmpeg if
+    it stops producing data after the response has started, so a stalled
+    CDN segment ends the stream cleanly instead of hanging forever.
+
     Kills the subprocess if the client disconnects mid-stream so we don't
     leak ffmpeg processes when MPD skips tracks.
     """
@@ -188,7 +197,17 @@ async def _stream_dash_via_ffmpeg(
     try:
         await response.write(first_chunk)
         while True:
-            chunk = await proc.stdout.read(FFMPEG_READ_CHUNK)
+            try:
+                chunk = await asyncio.wait_for(
+                    proc.stdout.read(FFMPEG_READ_CHUNK),
+                    timeout=DASH_STREAM_IDLE_TIMEOUT,
+                )
+            except TimeoutError:
+                logger.warning(
+                    f"[PROXY] ffmpeg idle >{DASH_STREAM_IDLE_TIMEOUT}s "
+                    f"mid-stream for {provider}/{track_id}, terminating"
+                )
+                break
             if not chunk:
                 break
             await response.write(chunk)

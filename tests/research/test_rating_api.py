@@ -11,7 +11,7 @@ Usage:
     python tests/research/test_rating_api.py <video_id>
 
 Example:
-    python tests/research/test_rating_api.py dQw4w9WgXcQ
+    python tests/research/test_rating_api.py testvideoid
 """
 
 import json
@@ -236,7 +236,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         print(__doc__)
         print("\n❌ Error: Please provide a video_id as an argument")
-        print("\nExample: python tests/research/test_rating_api.py dQw4w9WgXcQ")
+        print("\nExample: python tests/research/test_rating_api.py testvideoid")
         sys.exit(1)
 
     video_id = sys.argv[1]

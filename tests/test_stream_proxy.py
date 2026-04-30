@@ -1,5 +1,6 @@
 """Unit tests for StreamRedirectProxy and build_proxy_url."""
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -82,10 +83,10 @@ async def test_health_endpoint_200(track_store):
 @pytest.mark.asyncio
 async def test_route_yt_valid_id_307(track_store, yt_provider_mock):
     track_store.add_track(
-        "yt", "dQw4w9WgXcQ",
+        "yt", "testvideoid",
         stream_url="https://googlevideo.com/abc",
-        title="Never Gonna Give You Up",
-        artist="Rick Astley",
+        title="Test Track Title",
+        artist="Test Artist",
     )
     proxy = _make_proxy(
         track_store,
@@ -93,7 +94,7 @@ async def test_route_yt_valid_id_307(track_store, yt_provider_mock):
         stream_cache_hours={"yt": 5},
     )
     async with TestClient(TestServer(proxy.app)) as client:
-        resp = await client.get("/proxy/yt/dQw4w9WgXcQ", allow_redirects=False)
+        resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
         assert resp.status == 307
         assert resp.headers["Location"] == "https://googlevideo.com/abc"
     yt_provider_mock.resolve_stream.assert_not_called()
@@ -200,7 +201,7 @@ async def test_route_tidal_bad_id_400_too_long(track_store):
 async def test_route_track_not_in_store_404(track_store):
     proxy = _make_proxy(track_store)
     async with TestClient(TestServer(proxy.app)) as client:
-        resp = await client.get("/proxy/yt/dQw4w9WgXcQ")
+        resp = await client.get("/proxy/yt/testvideoid")
         assert resp.status == 404
 
 
@@ -212,7 +213,7 @@ async def test_route_track_not_in_store_404(track_store):
 @pytest.mark.asyncio
 async def test_per_provider_ttl_yt_5h_no_refresh(track_store, yt_provider_mock):
     track_store.add_track(
-        "yt", "dQw4w9WgXcQ",
+        "yt", "testvideoid",
         stream_url="https://googlevideo.com/fresh",
         title="Track",
         artist="Artist",
@@ -220,7 +221,7 @@ async def test_per_provider_ttl_yt_5h_no_refresh(track_store, yt_provider_mock):
     four_hours_ago = time.time() - (4 * 3600)
     track_store.conn.execute(
         "UPDATE tracks SET updated_at = ? WHERE provider = ? AND track_id = ?",
-        (four_hours_ago, "yt", "dQw4w9WgXcQ"),
+        (four_hours_ago, "yt", "testvideoid"),
     )
     track_store.conn.commit()
 
@@ -230,7 +231,7 @@ async def test_per_provider_ttl_yt_5h_no_refresh(track_store, yt_provider_mock):
         stream_cache_hours={"yt": 5},
     )
     async with TestClient(TestServer(proxy.app)) as client:
-        resp = await client.get("/proxy/yt/dQw4w9WgXcQ", allow_redirects=False)
+        resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
         assert resp.status == 307
     yt_provider_mock.resolve_stream.assert_not_called()
 
@@ -243,7 +244,7 @@ async def test_per_provider_ttl_yt_5h_no_refresh(track_store, yt_provider_mock):
 @pytest.mark.asyncio
 async def test_per_provider_ttl_yt_5h_refresh(track_store, yt_provider_mock):
     track_store.add_track(
-        "yt", "dQw4w9WgXcQ",
+        "yt", "testvideoid",
         stream_url="https://googlevideo.com/old",
         title="Track",
         artist="Artist",
@@ -251,7 +252,7 @@ async def test_per_provider_ttl_yt_5h_refresh(track_store, yt_provider_mock):
     six_hours_ago = time.time() - (6 * 3600)
     track_store.conn.execute(
         "UPDATE tracks SET updated_at = ? WHERE provider = ? AND track_id = ?",
-        (six_hours_ago, "yt", "dQw4w9WgXcQ"),
+        (six_hours_ago, "yt", "testvideoid"),
     )
     track_store.conn.commit()
 
@@ -263,12 +264,12 @@ async def test_per_provider_ttl_yt_5h_refresh(track_store, yt_provider_mock):
         stream_cache_hours={"yt": 5},
     )
     async with TestClient(TestServer(proxy.app)) as client:
-        resp = await client.get("/proxy/yt/dQw4w9WgXcQ", allow_redirects=False)
+        resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
         assert resp.status == 307
         assert resp.headers["Location"] == "https://googlevideo.com/new"
-    yt_provider_mock.resolve_stream.assert_called_once_with("dQw4w9WgXcQ")
+    yt_provider_mock.resolve_stream.assert_called_once_with("testvideoid")
 
-    updated = track_store.get_track("yt", "dQw4w9WgXcQ")
+    updated = track_store.get_track("yt", "testvideoid")
     assert updated["stream_url"] == "https://googlevideo.com/new"
 
 
@@ -313,7 +314,7 @@ async def test_per_provider_ttl_tidal_1h_refresh(track_store, tidal_provider_moc
 
 @pytest.mark.asyncio
 async def test_per_provider_ttl_default_5h_when_unset(track_store, yt_provider_mock):
-    for vid, hours_ago in [("dQw4w9WgXcQ", 4), ("AAAAAAAAAAA", 6)]:
+    for vid, hours_ago in [("testvideoid", 4), ("AAAAAAAAAAA", 6)]:
         track_store.add_track(
             "yt", vid,
             stream_url=f"https://old.example/{vid}",
@@ -335,7 +336,7 @@ async def test_per_provider_ttl_default_5h_when_unset(track_store, yt_provider_m
     )
     async with TestClient(TestServer(proxy.app)) as client:
         # 4h old: no refresh
-        resp = await client.get("/proxy/yt/dQw4w9WgXcQ", allow_redirects=False)
+        resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
         assert resp.status == 307
         yt_provider_mock.resolve_stream.assert_not_called()
 
@@ -353,7 +354,7 @@ async def test_per_provider_ttl_default_5h_when_unset(track_store, yt_provider_m
 @pytest.mark.asyncio
 async def test_lazy_resolve_when_stream_url_none(track_store, yt_provider_mock):
     track_store.add_track(
-        "yt", "dQw4w9WgXcQ",
+        "yt", "testvideoid",
         stream_url=None,
         title="Track",
         artist="Artist",
@@ -362,10 +363,10 @@ async def test_lazy_resolve_when_stream_url_none(track_store, yt_provider_mock):
 
     proxy = _make_proxy(track_store, provider_registry={"yt": yt_provider_mock})
     async with TestClient(TestServer(proxy.app)) as client:
-        resp = await client.get("/proxy/yt/dQw4w9WgXcQ", allow_redirects=False)
+        resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
         assert resp.status == 307
         assert resp.headers["Location"] == "https://googlevideo.com/resolved"
-    yt_provider_mock.resolve_stream.assert_called_once_with("dQw4w9WgXcQ")
+    yt_provider_mock.resolve_stream.assert_called_once_with("testvideoid")
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +377,7 @@ async def test_lazy_resolve_when_stream_url_none(track_store, yt_provider_mock):
 @pytest.mark.asyncio
 async def test_resolver_failure_502_when_no_cached_url(track_store, yt_provider_mock):
     track_store.add_track(
-        "yt", "dQw4w9WgXcQ",
+        "yt", "testvideoid",
         stream_url=None,
         title="Track",
         artist="Artist",
@@ -385,7 +386,7 @@ async def test_resolver_failure_502_when_no_cached_url(track_store, yt_provider_
 
     proxy = _make_proxy(track_store, provider_registry={"yt": yt_provider_mock})
     async with TestClient(TestServer(proxy.app)) as client:
-        resp = await client.get("/proxy/yt/dQw4w9WgXcQ")
+        resp = await client.get("/proxy/yt/testvideoid")
         assert resp.status == 502
 
 
@@ -397,7 +398,7 @@ async def test_resolver_failure_502_when_no_cached_url(track_store, yt_provider_
 @pytest.mark.asyncio
 async def test_resolver_failure_falls_through_to_stale_url(track_store, yt_provider_mock):
     track_store.add_track(
-        "yt", "dQw4w9WgXcQ",
+        "yt", "testvideoid",
         stream_url="https://old.example/x",
         title="Track",
         artist="Artist",
@@ -405,7 +406,7 @@ async def test_resolver_failure_falls_through_to_stale_url(track_store, yt_provi
     six_hours_ago = time.time() - (6 * 3600)
     track_store.conn.execute(
         "UPDATE tracks SET updated_at = ? WHERE provider = ? AND track_id = ?",
-        (six_hours_ago, "yt", "dQw4w9WgXcQ"),
+        (six_hours_ago, "yt", "testvideoid"),
     )
     track_store.conn.commit()
 
@@ -418,7 +419,7 @@ async def test_resolver_failure_falls_through_to_stale_url(track_store, yt_provi
         stream_cache_hours={"yt": 5},
     )
     async with TestClient(TestServer(proxy.app)) as client:
-        resp = await client.get("/proxy/yt/dQw4w9WgXcQ", allow_redirects=False)
+        resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
         assert resp.status == 307
         assert resp.headers["Location"] == "https://old.example/x"
 
@@ -431,7 +432,7 @@ async def test_resolver_failure_falls_through_to_stale_url(track_store, yt_provi
 @pytest.mark.asyncio
 async def test_concurrency_503_when_limit_exceeded(track_store):
     track_store.add_track(
-        "yt", "dQw4w9WgXcQ",
+        "yt", "testvideoid",
         stream_url=None,
         title="Slow Track",
         artist="Artist",
@@ -447,7 +448,7 @@ async def test_concurrency_503_when_limit_exceeded(track_store):
     await proxy._resolution_semaphore.acquire()
 
     async with TestClient(TestServer(proxy.app)) as client:
-        resp = await client.get("/proxy/yt/dQw4w9WgXcQ")
+        resp = await client.get("/proxy/yt/testvideoid")
         assert resp.status == 503
 
     proxy._resolution_semaphore.release()
@@ -511,8 +512,8 @@ def test_build_proxy_url_format():
         build_proxy_url("tidal", "12345", "192.168.1.1", 9090)
         == "http://192.168.1.1:9090/proxy/tidal/12345"
     )
-    assert build_proxy_url("yt", "dQw4w9WgXcQ", "localhost", 6602) == (
-        "http://localhost:6602/proxy/yt/dQw4w9WgXcQ"
+    assert build_proxy_url("yt", "testvideoid", "localhost", 6602) == (
+        "http://localhost:6602/proxy/yt/testvideoid"
     )
 
 
@@ -592,6 +593,70 @@ async def test_route_tidal_dash_pipes_through_ffmpeg(track_store, tidal_provider
 
 
 @pytest.mark.asyncio
+async def test_route_tidal_dash_terminates_on_idle_ffmpeg(
+    track_store, tidal_provider_mock, monkeypatch
+):
+    """If ffmpeg stops producing data mid-stream, the proxy must time out,
+    kill the subprocess, and end the response cleanly. Regression for the
+    silent hang where a stalled CDN segment left MPD with a half-buffered
+    stream and no recovery path.
+    """
+    monkeypatch.setattr("xmpd.stream_proxy.DASH_STREAM_IDLE_TIMEOUT", 0.2)
+
+    track_store.add_track(
+        "tidal",
+        "12345678",
+        stream_url="https://im-fa.manifest.tidal.com/abc.mpd?token=xyz",
+        title="Track",
+        artist="Artist",
+    )
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"tidal": tidal_provider_mock},
+        stream_cache_hours={"tidal": 5},
+    )
+
+    fake_flac_bytes = b"fLaC" + b"\x00" * 4096
+    call_count = {"n": 0}
+
+    async def fake_read(_size):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return fake_flac_bytes
+        # Subsequent reads hang forever; timeout must trip.
+        await asyncio.Event().wait()
+        return b""
+
+    fake_proc = Mock()
+    fake_proc.returncode = None
+    fake_proc.stdout = AsyncMock()
+    fake_proc.stdout.read = fake_read
+    fake_proc.stderr = AsyncMock()
+    fake_proc.stderr.read = AsyncMock(return_value=b"")
+    fake_proc.wait = AsyncMock(return_value=-9)
+
+    def kill_impl():
+        fake_proc.returncode = -9
+
+    fake_proc.kill = Mock(side_effect=kill_impl)
+
+    with patch(
+        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=fake_proc),
+    ):
+        async with TestClient(TestServer(proxy.app)) as client:
+            resp = await asyncio.wait_for(
+                client.get("/proxy/tidal/12345678", allow_redirects=False),
+                timeout=5,
+            )
+            assert resp.status == 200
+            body = await asyncio.wait_for(resp.read(), timeout=5)
+            assert body == fake_flac_bytes
+
+    fake_proc.kill.assert_called()
+
+
+@pytest.mark.asyncio
 async def test_route_tidal_non_dash_still_redirects(track_store, tidal_provider_mock):
     """A non-.mpd Tidal URL (legacy or future) keeps the 307 redirect path."""
     track_store.add_track(
@@ -659,7 +724,7 @@ def test_track_id_patterns():
     from xmpd.stream_proxy import TRACK_ID_PATTERNS
 
     yt = TRACK_ID_PATTERNS["yt"]
-    assert yt.match("dQw4w9WgXcQ")
+    assert yt.match("testvideoid")
     assert yt.match("AAAAAAAAAAA")
     assert yt.match("abc-def_GHI")
     assert not yt.match("short")
@@ -701,9 +766,9 @@ def test_is_url_expired(track_store):
 async def test_refresh_stream_url_via_registry(track_store, yt_provider_mock):
     proxy = _make_proxy(track_store, provider_registry={"yt": yt_provider_mock})
     yt_provider_mock.resolve_stream.return_value = "https://new.example/url"
-    result = await proxy._refresh_stream_url("yt", "dQw4w9WgXcQ")
+    result = await proxy._refresh_stream_url("yt", "testvideoid")
     assert result == "https://new.example/url"
-    yt_provider_mock.resolve_stream.assert_called_once_with("dQw4w9WgXcQ")
+    yt_provider_mock.resolve_stream.assert_called_once_with("testvideoid")
 
 
 @pytest.mark.asyncio
@@ -711,7 +776,7 @@ async def test_refresh_stream_url_via_legacy_resolver(track_store):
     mock_resolver = Mock()
     mock_resolver.resolve_video_id = Mock(return_value="https://legacy.example/url")
     proxy = _make_proxy(track_store, provider_registry={}, stream_resolver=mock_resolver)
-    result = await proxy._refresh_stream_url("yt", "dQw4w9WgXcQ")
+    result = await proxy._refresh_stream_url("yt", "testvideoid")
     assert result == "https://legacy.example/url"
 
 
@@ -721,7 +786,7 @@ async def test_refresh_stream_url_no_resolver_raises(track_store):
 
     proxy = _make_proxy(track_store, provider_registry={}, stream_resolver=None)
     with pytest.raises(URLRefreshError, match="No resolver available"):
-        await proxy._refresh_stream_url("yt", "dQw4w9WgXcQ")
+        await proxy._refresh_stream_url("yt", "testvideoid")
 
 
 @pytest.mark.asyncio
@@ -731,7 +796,7 @@ async def test_refresh_stream_url_returns_none_raises(track_store, yt_provider_m
     yt_provider_mock.resolve_stream.return_value = None
     proxy = _make_proxy(track_store, provider_registry={"yt": yt_provider_mock})
     with pytest.raises(URLRefreshError, match="Failed to resolve URL"):
-        await proxy._refresh_stream_url("yt", "dQw4w9WgXcQ")
+        await proxy._refresh_stream_url("yt", "testvideoid")
 
 
 # ---------------------------------------------------------------------------
@@ -834,7 +899,7 @@ async def test_resolution_counter_returns_to_zero_after_errors(track_store):
     async with TestClient(TestServer(proxy.app)) as client:
         # 404: track not in store
         for _ in range(3):
-            resp = await client.get("/proxy/yt/dQw4w9WgXcQ")
+            resp = await client.get("/proxy/yt/testvideoid")
             assert resp.status == 404
 
     assert proxy._active_resolutions == 0

@@ -534,10 +534,10 @@ class TestExtractProviderAndTrack:
     def test_legacy_shape(self, tmp_path):
         daemon = _make_daemon(tmp_path)
         p, t = daemon._extract_provider_and_track(
-            "http://localhost:8080/proxy/dQw4w9WgXcQ"
+            "http://localhost:8080/proxy/testvideoid"
         )
         assert p == "yt"
-        assert t == "dQw4w9WgXcQ"
+        assert t == "testvideoid"
 
     def test_empty_url(self, tmp_path):
         daemon = _make_daemon(tmp_path)
