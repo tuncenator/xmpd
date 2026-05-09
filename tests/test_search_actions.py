@@ -243,9 +243,15 @@ class TestXmpctlRadioTrackId:
     """xmpctl radio --track-id parses correctly and sends to daemon."""
 
     def test_radio_with_track_id_attempts_daemon(self):
-        """radio --provider tidal --track-id 99999999 --apply reaches daemon."""
+        """radio --provider tidal --track-id 99999999 reaches daemon.
+
+        ``--apply`` is intentionally omitted: this test only verifies flag
+        parsing and daemon dispatch. Including ``--apply`` clears the user's
+        live MPD queue and starts whatever Tidal returns for the fake ID,
+        which restarts playback every time the suite runs.
+        """
         result = subprocess.run(
-            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id", "99999999", "--apply"],
+            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id", "99999999"],
             capture_output=True,
             text=True,
         )
@@ -289,7 +295,10 @@ class TestXmpctlRadioTrackId:
         )
         if result.returncode != 0:
             stderr_lower = result.stderr.lower()
-            assert "daemon" in stderr_lower or "socket" in stderr_lower or "error" in stderr_lower
+            assert any(kw in stderr_lower for kw in (
+                "daemon", "socket", "error", "no track", "no tracks",
+                "not authenticated", "failed",
+            )), f"Unexpected stderr: {result.stderr!r}"
 
 
 # ---------------------------------------------------------------------------

@@ -300,6 +300,143 @@ class TestCmdRadio:
         assert response["success"] is True
         assert response["playlist"] == "YT: Radio"
 
+    def test_cmd_radio_seed_missing_is_prepended(self, tmp_path):
+        """Tidal-like case: provider returns radio without seed -> seed prepended."""
+        tidal = _make_tidal_provider()
+        tidal.get_radio.return_value = [
+            Track(
+                provider="tidal", track_id="111",
+                metadata=TrackMetadata(
+                    title="Other", artist="A", album=None,
+                    duration_seconds=180, art_url=None,
+                ),
+            ),
+            Track(
+                provider="tidal", track_id="222",
+                metadata=TrackMetadata(
+                    title="Other2", artist="B", album=None,
+                    duration_seconds=200, art_url=None,
+                ),
+            ),
+        ]
+        tidal.get_track_metadata.return_value = TrackMetadata(
+            title="Seed", artist="S", album=None,
+            duration_seconds=210, art_url=None,
+        )
+        tidal.get_favorites.return_value = []
+        daemon = _make_daemon(tmp_path, registry={"tidal": tidal})
+
+        captured = {}
+        def _capture(name, tracks, **kwargs):
+            captured["tracks"] = tracks
+        daemon.mpd_client.create_or_replace_playlist = Mock(side_effect=_capture)
+
+        response = daemon._cmd_radio("tidal", "999")
+        assert response["success"] is True
+        assert response["tracks"] == 3
+        tidal.get_track_metadata.assert_called_once_with("999")
+        assert captured["tracks"][0].video_id == "999"
+        assert captured["tracks"][0].title == "Seed"
+        assert [t.video_id for t in captured["tracks"]] == ["999", "111", "222"]
+
+    def test_cmd_radio_seed_already_first_unchanged(self, tmp_path):
+        """YT-like case: seed already at index 0 -> order preserved, no metadata fetch."""
+        yt = _make_yt_provider()
+        yt.get_radio.return_value = [
+            Track(
+                provider="yt", track_id="seed_id_xx",
+                metadata=TrackMetadata(
+                    title="Seed", artist="S", album=None,
+                    duration_seconds=180, art_url=None,
+                ),
+            ),
+            Track(
+                provider="yt", track_id="next_id_xx",
+                metadata=TrackMetadata(
+                    title="Next", artist="N", album=None,
+                    duration_seconds=200, art_url=None,
+                ),
+            ),
+        ]
+        yt.get_favorites.return_value = []
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+
+        captured = {}
+        def _capture(name, tracks, **kwargs):
+            captured["tracks"] = tracks
+        daemon.mpd_client.create_or_replace_playlist = Mock(side_effect=_capture)
+
+        response = daemon._cmd_radio("yt", "seed_id_xx")
+        assert response["success"] is True
+        yt.get_track_metadata.assert_not_called()
+        assert [t.video_id for t in captured["tracks"]] == ["seed_id_xx", "next_id_xx"]
+
+    def test_cmd_radio_seed_present_but_not_first_moved(self, tmp_path):
+        """Seed appears at index >0 -> moved to index 0, no duplicate."""
+        yt = _make_yt_provider()
+        yt.get_radio.return_value = [
+            Track(
+                provider="yt", track_id="aaaaaaaaaa1",
+                metadata=TrackMetadata(
+                    title="A", artist="A", album=None,
+                    duration_seconds=180, art_url=None,
+                ),
+            ),
+            Track(
+                provider="yt", track_id="seed_id_xx",
+                metadata=TrackMetadata(
+                    title="Seed", artist="S", album=None,
+                    duration_seconds=190, art_url=None,
+                ),
+            ),
+            Track(
+                provider="yt", track_id="bbbbbbbbbb2",
+                metadata=TrackMetadata(
+                    title="B", artist="B", album=None,
+                    duration_seconds=200, art_url=None,
+                ),
+            ),
+        ]
+        yt.get_favorites.return_value = []
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})
+
+        captured = {}
+        def _capture(name, tracks, **kwargs):
+            captured["tracks"] = tracks
+        daemon.mpd_client.create_or_replace_playlist = Mock(side_effect=_capture)
+
+        response = daemon._cmd_radio("yt", "seed_id_xx")
+        assert response["success"] is True
+        yt.get_track_metadata.assert_not_called()
+        assert [t.video_id for t in captured["tracks"]] == [
+            "seed_id_xx", "aaaaaaaaaa1", "bbbbbbbbbb2",
+        ]
+
+    def test_cmd_radio_seed_metadata_lookup_fails_gracefully(self, tmp_path):
+        """If seed metadata lookup fails, radio still plays without prepending."""
+        tidal = _make_tidal_provider()
+        tidal.get_radio.return_value = [
+            Track(
+                provider="tidal", track_id="111",
+                metadata=TrackMetadata(
+                    title="Other", artist="A", album=None,
+                    duration_seconds=180, art_url=None,
+                ),
+            ),
+        ]
+        tidal.get_track_metadata.return_value = None
+        tidal.get_favorites.return_value = []
+        daemon = _make_daemon(tmp_path, registry={"tidal": tidal})
+
+        captured = {}
+        def _capture(name, tracks, **kwargs):
+            captured["tracks"] = tracks
+        daemon.mpd_client.create_or_replace_playlist = Mock(side_effect=_capture)
+
+        response = daemon._cmd_radio("tidal", "999")
+        assert response["success"] is True
+        assert [t.video_id for t in captured["tracks"]] == ["111"]
+
 
 # ---------------------------------------------------------------------------
 # TestPlayQueue

@@ -890,6 +890,13 @@ class XMPDaemon:
             if not radio_tracks:
                 return {"success": False, "error": "No tracks found in radio playlist"}
 
+            # Guarantee the seed track plays first regardless of provider.
+            # Tidal's get_track_radio omits the seed; YT's watch_playlist usually
+            # includes it but ordering is not contractual.
+            radio_tracks = self._ensure_seed_first(
+                prov, provider, track_id, radio_tracks,
+            )
+
             logger.info("Fetched %d radio tracks from %s", len(radio_tracks), provider)
 
             # Build TrackWithMetadata objects for MPD playlist creation
@@ -962,6 +969,43 @@ class XMPDaemon:
         except Exception as e:
             logger.error("Radio generation failed: %s", e)
             return {"success": False, "error": f"Radio generation failed: {e}"}
+
+    @staticmethod
+    def _ensure_seed_first(
+        prov: Provider, provider: str, seed_id: str, tracks: list[Any],
+    ) -> list[Any]:
+        """Return ``tracks`` with the seed track at index 0.
+
+        - If seed already at index 0: unchanged.
+        - If seed elsewhere: moved to index 0.
+        - If seed missing: prepended via ``get_track_metadata`` (silently skipped
+          on lookup failure so radio still plays).
+        """
+        from xmpd.providers.base import Track
+
+        seed_idx = next(
+            (i for i, t in enumerate(tracks) if t.track_id == seed_id), None,
+        )
+        if seed_idx == 0:
+            return tracks
+        if seed_idx is not None:
+            return [tracks[seed_idx], *tracks[:seed_idx], *tracks[seed_idx + 1:]]
+
+        try:
+            meta = prov.get_track_metadata(seed_id)
+        except Exception as e:
+            logger.warning(
+                "Could not fetch seed metadata for %s/%s: %s",
+                provider, seed_id, e,
+            )
+            return tracks
+        if meta is None:
+            logger.warning(
+                "Seed track %s/%s metadata unavailable; not prepending",
+                provider, seed_id,
+            )
+            return tracks
+        return [Track(provider=provider, track_id=seed_id, metadata=meta), *tracks]
 
     def _get_liked_ids(self) -> set[str]:
         """Return liked track IDs by reading local favorites playlists."""
