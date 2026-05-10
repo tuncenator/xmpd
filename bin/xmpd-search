@@ -90,10 +90,10 @@ BROWSE_HDR="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  $
 #   rebind(ctrl-q,ctrl-r,ctrl-l,tab)  -- activate Browse action keys
 #   transform-query(...)        -- save Search query, restore Browse query
 ENTER_TRANSFORM="transform:if [[ -f '${BROWSE_MODE_FILE}' ]]; then
-  echo 'execute-silent([ -n {2} ] && ${XMPCTL} play {1} {2})+abort'
+  echo 'execute-silent([ -n \{2} ] && ${XMPCTL} play \{1} \{2})+abort'
 else
   touch '${BROWSE_MODE_FILE}'
-  echo 'unbind(change)+enable-search+change-prompt(Browse: )+change-header(${BROWSE_HDR})+rebind(ctrl-q,ctrl-r,ctrl-l,tab)+transform-query(echo {q} > ${SEARCH_QUERY_FILE}; cat ${BROWSE_QUERY_FILE})'
+  echo 'unbind(change)+enable-search+change-prompt(Browse: )+change-header(${BROWSE_HDR})+rebind(ctrl-q,ctrl-r,ctrl-l,tab)+transform-query(echo \{q} > ${SEARCH_QUERY_FILE}; cat ${BROWSE_QUERY_FILE})'
 fi"
 
 # Esc action: context-aware dispatch via transform.
@@ -109,7 +109,7 @@ fi"
 #   transform-query(...)        -- save Browse query, restore Search query
 ESC_TRANSFORM="transform:if [[ -f '${BROWSE_MODE_FILE}' ]]; then
   rm -f '${BROWSE_MODE_FILE}'
-  echo 'disable-search+change-prompt(Search: )+change-header(${SEARCH_HDR})+unbind(ctrl-q,ctrl-r,ctrl-l,tab)+rebind(change)+transform-query(echo {q} > ${BROWSE_QUERY_FILE}; cat ${SEARCH_QUERY_FILE})'
+  echo 'disable-search+change-prompt(Search: )+change-header(${SEARCH_HDR})+unbind(ctrl-q,ctrl-r,ctrl-l,tab)+rebind(change)+transform-query(echo \{q} > ${BROWSE_QUERY_FILE}; cat ${SEARCH_QUERY_FILE})'
 else
   echo 'abort'
 fi"
