@@ -47,7 +47,24 @@ class FirefoxCookieExtractor:
         self.browser = browser
         self.profile = profile
         self.container = container
-        self._firefox_dir = Path.home() / ".mozilla" / "firefox"
+        self._firefox_dir = self._find_firefox_dir()
+
+    @staticmethod
+    def _find_firefox_dir() -> Path:
+        """Locate the Firefox profile root directory.
+
+        Checks XDG-compliant path first (~/.config/mozilla/firefox),
+        then falls back to the traditional path (~/.mozilla/firefox).
+        """
+        home = Path.home()
+        for candidate in (
+            home / ".config" / "mozilla" / "firefox",
+            home / ".mozilla" / "firefox",
+        ):
+            if (candidate / "profiles.ini").exists():
+                return candidate
+        # Default to traditional path; find_profile_dir() will raise a clear error
+        return home / ".mozilla" / "firefox"
 
     def find_profile_dir(self) -> Path:
         """Find the Firefox profile directory.
