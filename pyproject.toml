@@ -1,6 +1,6 @@
 [project]
 name = "xmpd"
-version = "2.1.0"
+version = "2.1.1"
 description = "Multi-source music daemon: syncs YouTube Music and Tidal libraries to MPD"
 authors = [
     {name = "Tunç Yıldırım", email = "tuncenator@gmail.com"}

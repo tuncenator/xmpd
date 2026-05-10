@@ -55,7 +55,7 @@ from contextlib import closing  # noqa: E402
 from mpd import ConnectionError as MPDConnectionError  # noqa: E402
 from mpd import MPDClient  # noqa: E402
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"
 
 WATCH_SUBSYSTEMS = ("player", "mixer", "options", "playlist")
 WATCH_TICK_SEC = 1.0
