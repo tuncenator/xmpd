@@ -37,10 +37,16 @@ Tidal HiFi    /
   Firefox cookies; no manual header pasting required.
 - **OAuth device flow (Tidal)** -- one-time Tidal sign-in via `xmpctl auth tidal`;
   session persists at `~/.config/xmpd/tidal_session.json`.
+- **Audio quality probe** -- `xmpctl flow` reports the end-to-end chain for
+  the current track (source codec/bitrate -> MPD -> sink), with verdicts
+  like `BIT-PERFECT`, `LOSSLESS (resampled)`, `LOSSY`, or `LOSSY (source)`.
+  Works for Tidal/YT proxy streams (DASH manifest probe via ffprobe) and
+  local files (ffprobe on the resolved path).
 - **AirPlay bridge (optional)** -- see `extras/airplay-bridge/`; includes
   Tidal album art lookup via xmpd's track-store DB.
-- **i3 integration** -- status script with adaptive truncation, playlist
-  position display, and click handling for i3blocks.
+- **i3 / waybar integration** -- status script with adaptive truncation,
+  playlist position display, click handling for i3blocks, and a `--watch`
+  mode that uses MPD's idle protocol to emit JSON for waybar.
 
 ## Requirements
 
@@ -74,7 +80,8 @@ cd xmpd
 `install.sh` is idempotent. It installs `uv`, creates a venv, installs xmpd
 and dependencies, migrates a legacy `~/.config/ytmpd/` config if present,
 prompts for YouTube Music auth, optionally installs the systemd user unit, and
-installs `xmpctl` / `xmpd-status` symlinks to `~/.local/bin`.
+installs `xmpctl` / `xmpd-status` / `xmpd-search` symlinks to `~/.local/bin`
+(warns if `fzf` is missing, which `xmpd-search` requires).
 
 Check current state without making changes:
 
@@ -243,8 +250,28 @@ play/pause and next/prev.
 
 The shortform (rendered by i3blocks when the bar is too narrow for the full
 text) is a compact `{icon} {title} - {elapsed}/{duration} [QUALITY]` line.
-Quality badges in compact mode are `HR` (HiRes), `HF` (HiFi), `Lo` (Lossy);
-the bracket is omitted for local files.
+Quality badges in compact mode are `HR` (HiRes), `HF` (HiFi), `Lo` (Lossy).
+Local files are classified by sniffing the file header (FLAC/WAV/AIFF ->
+lossless tier by sample rate/bit depth; MP3/AAC/Ogg/Opus -> Lossy; ALAC
+inside `.m4a` is detected by walking the MP4 atom names). Pass
+`--music-dir` if your MPD music directory differs from `~/Music`
+(env var: `XMPD_STATUS_MUSIC_DIR`).
+
+### waybar
+
+`xmpd-status --watch` is a long-running mode that uses MPD's idle protocol
+and emits one JSON line per state change for waybar's `custom/*` block:
+
+```json
+{"custom/xmpd": {
+  "exec": "/path/to/xmpd/bin/xmpd-status --watch --show-quality",
+  "return-type": "json",
+  "format": "{}"
+}}
+```
+
+It reconnects on MPD restart and refreshes on `player`/`mixer`/`options`/
+`playlist` events without polling.
 
 ## Troubleshooting
 
@@ -313,6 +340,7 @@ ruff check xmpd/
 xmpd/
 +-- xmpd/                         # Main package
 |   +-- __main__.py               # Daemon entry point
+|   +-- audio_flow.py             # End-to-end quality probe for `xmpctl flow`
 |   +-- config.py                 # Config load/validate (multi-source shape)
 |   +-- daemon.py                 # Orchestrator + socket server
 |   +-- history_reporter.py       # MPD -> provider history
