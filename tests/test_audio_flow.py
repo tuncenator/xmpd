@@ -1,5 +1,8 @@
 """Tests for xmpd.audio_flow probes, parsers, verdict logic, and formatters."""
 
+import json
+
+from xmpd import audio_flow
 from xmpd.audio_flow import (
     FlowReport,
     MPDInfo,
@@ -9,6 +12,8 @@ from xmpd.audio_flow import (
     Verdict,
     _compute_verdict,
     _parse_mpd_audio_field,
+    _probe_local_source,
+    _probe_source,
     codec_from_pactl_cards,
     format_audio_spec,
     format_brief,
@@ -347,3 +352,227 @@ class TestFormatters:
             note="MPD unreachable",
         )
         assert format_short(report) == "MPD unreachable"
+
+
+_FFPROBE_MP3_FIXTURE = {
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "mp3",
+            "sample_fmt": "fltp",
+            "sample_rate": "44100",
+            "channels": 2,
+            "bit_rate": "320000",
+        }
+    ]
+}
+
+_FFPROBE_FLAC_FIXTURE = {
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "flac",
+            "sample_fmt": "s16",
+            "sample_rate": "44100",
+            "channels": 2,
+            "bits_per_raw_sample": "16",
+            "bit_rate": "850000",
+        }
+    ]
+}
+
+
+class _FakeProc:
+    def __init__(self, stdout: str):
+        self.stdout = stdout
+        self.returncode = 0
+
+
+class TestProbeLocalSource:
+    def _mpd(self, file: str) -> MPDInfo:
+        return MPDInfo(
+            state="play", file=file, artist=None, title=None,
+            sample_rate=44100, bits=16, channels=2,
+            elapsed=0.0, duration=100.0, active_outputs=[],
+        )
+
+    def test_relative_path_resolves_against_music_dir(
+        self, monkeypatch, tmp_path
+    ):
+        track = tmp_path / "a" / "b.mp3"
+        track.parent.mkdir(parents=True)
+        track.write_bytes(b"")
+        captured: dict[str, list[str]] = {}
+
+        def fake_run(cmd, **_kw):
+            captured["cmd"] = cmd
+            return _FakeProc(json.dumps(_FFPROBE_MP3_FIXTURE))
+
+        monkeypatch.setattr(audio_flow.shutil, "which", lambda _x: "/usr/bin/ffprobe")
+        monkeypatch.setattr(audio_flow.subprocess, "run", fake_run)
+
+        info = _probe_local_source(
+            self._mpd("a/b.mp3"), {"mpd_music_directory": str(tmp_path)}
+        )
+        assert info.provider == "local"
+        assert info.track_id == "b.mp3"
+        assert info.manifest_url == str(track)
+        assert captured["cmd"][-1] == str(track)
+        assert info.selected is not None
+        assert info.selected.codec == "mp3"
+        assert info.selected.bitrate == 320000
+
+    def test_absolute_path_used_as_is(self, monkeypatch, tmp_path):
+        track = tmp_path / "absolute.flac"
+        track.write_bytes(b"")
+        monkeypatch.setattr(audio_flow.shutil, "which", lambda _x: "/usr/bin/ffprobe")
+        monkeypatch.setattr(
+            audio_flow.subprocess, "run",
+            lambda *_a, **_kw: _FakeProc(json.dumps(_FFPROBE_FLAC_FIXTURE)),
+        )
+
+        info = _probe_local_source(
+            self._mpd(str(track)),
+            {"mpd_music_directory": "/some/other/dir"},
+        )
+        assert info.manifest_url == str(track)
+        assert info.selected is not None
+        assert info.selected.codec == "flac"
+        assert info.selected.bits_per_raw_sample == 16
+
+    def test_missing_file_returns_error(self, tmp_path):
+        info = _probe_local_source(
+            self._mpd("does/not/exist.mp3"),
+            {"mpd_music_directory": str(tmp_path)},
+        )
+        assert info.provider == "local"
+        assert info.selected is None
+        assert info.error is not None
+        assert "not found" in info.error
+
+    def test_ffprobe_missing_returns_error(self, monkeypatch, tmp_path):
+        track = tmp_path / "x.mp3"
+        track.write_bytes(b"")
+        monkeypatch.setattr(audio_flow.shutil, "which", lambda _x: None)
+
+        info = _probe_local_source(
+            self._mpd("x.mp3"), {"mpd_music_directory": str(tmp_path)}
+        )
+        assert info.error == "ffprobe not on PATH"
+
+    def test_ffprobe_returns_no_streams(self, monkeypatch, tmp_path):
+        track = tmp_path / "x.mp3"
+        track.write_bytes(b"")
+        monkeypatch.setattr(audio_flow.shutil, "which", lambda _x: "/usr/bin/ffprobe")
+        monkeypatch.setattr(
+            audio_flow.subprocess, "run",
+            lambda *_a, **_kw: _FakeProc("{}"),
+        )
+
+        info = _probe_local_source(
+            self._mpd("x.mp3"), {"mpd_music_directory": str(tmp_path)}
+        )
+        assert info.selected is None
+        assert info.error == "ffprobe returned no audio streams"
+
+
+class TestProbeSourceDispatch:
+    def _mpd(self, file: str) -> MPDInfo:
+        return MPDInfo(
+            state="play", file=file, artist=None, title=None,
+            sample_rate=44100, bits=16, channels=2,
+            elapsed=0.0, duration=100.0, active_outputs=[],
+        )
+
+    def test_empty_file_returns_none(self):
+        assert _probe_source(self._mpd(""), {}) is None
+
+    def test_non_proxy_http_url_returns_none(self):
+        assert _probe_source(
+            self._mpd("http://radio.example.com/stream"), {}
+        ) is None
+
+    def test_proxy_url_routes_to_proxy_probe(self, monkeypatch):
+        captured: dict[str, str] = {}
+
+        def fake_proxy(mpd, config, provider, track_id):
+            captured["provider"] = provider
+            captured["track_id"] = track_id
+            return SourceInfo(
+                provider=provider, track_id=track_id, manifest_url=None,
+                candidates=[], selected=None,
+            )
+
+        monkeypatch.setattr(audio_flow, "_probe_proxy_source", fake_proxy)
+        _probe_source(
+            self._mpd("http://localhost:6602/proxy/tidal/abc123"), {}
+        )
+        assert captured == {"provider": "tidal", "track_id": "abc123"}
+
+    def test_relative_path_routes_to_local_probe(
+        self, monkeypatch, tmp_path
+    ):
+        called: dict[str, bool] = {}
+
+        def fake_local(mpd, config):
+            called["yes"] = True
+            return SourceInfo(
+                provider="local", track_id="x", manifest_url=None,
+                candidates=[], selected=None,
+            )
+
+        monkeypatch.setattr(audio_flow, "_probe_local_source", fake_local)
+        _probe_source(
+            self._mpd("Artist/Album/track.mp3"),
+            {"mpd_music_directory": str(tmp_path)},
+        )
+        assert called.get("yes") is True
+
+
+class TestLocalFormatters:
+    def _local_report(self, codec: str = "mp3", bitrate: int = 320000) -> FlowReport:
+        cand = StreamCandidate(
+            index=0, codec=codec, sample_fmt="fltp",
+            sample_rate=44100, channels=2,
+            bits_per_raw_sample=None, bitrate=bitrate, tag_id=None,
+        )
+        src = SourceInfo(
+            provider="local", track_id="track.mp3",
+            manifest_url="/home/u/Music/track.mp3",
+            candidates=[cand], selected=cand,
+        )
+        mpd = MPDInfo(
+            state="play", file="Artist/Album/track.mp3",
+            artist="Artist", title="Track",
+            sample_rate=44100, bits=16, channels=2,
+            elapsed=10.0, duration=200.0, active_outputs=[],
+        )
+        sink = SinkInfo(
+            backend="pulse", name="alsa_output.hdmi", description="HDMI",
+            state="RUNNING", sample_fmt="s32le", sample_rate=44100, channels=2,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+        )
+        verdict = Verdict(
+            label="LOSSY (source)",
+            detail=f"source codec {codec} is itself lossy",
+            bottleneck="source",
+        )
+        return FlowReport(mpd=mpd, source=src, sink=sink, verdict=verdict)
+
+    def test_format_default_shows_file_not_provider(self):
+        out = format_default(self._local_report(), lambda t, _c: t)
+        assert "Provider:" not in out
+        assert "File:         Artist/Album/track.mp3" in out
+        assert "MP3 (lossy)" in out
+        assert "320 kbps" in out
+
+    def test_format_default_skips_proxy_section_for_local(self):
+        out = format_default(self._local_report(), lambda t, _c: t)
+        assert "=== Proxy ===" not in out
+
+    def test_format_short_omits_local_prefix(self):
+        out = format_short(self._local_report())
+        assert "local/" not in out
+        assert out.startswith("track.mp3")
+        assert "[lossy (source)]" in out

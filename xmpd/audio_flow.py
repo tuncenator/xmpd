@@ -235,12 +235,70 @@ def _parse_mpd_audio_field(audio: str) -> tuple[int | None, int | None, int | No
 
 
 def _probe_source(mpd: MPDInfo, config: dict[str, Any]) -> SourceInfo | None:
-    m = _PROXY_URL_RE.match(mpd.file)
-    if not m:
+    if not mpd.file:
         return None
-    provider = m.group("provider")
-    track_id = m.group("id")
+    m = _PROXY_URL_RE.match(mpd.file)
+    if m:
+        return _probe_proxy_source(mpd, config, m.group("provider"), m.group("id"))
+    if "://" in mpd.file:
+        return None
+    return _probe_local_source(mpd, config)
 
+
+def _probe_local_source(
+    mpd: MPDInfo, config: dict[str, Any]
+) -> SourceInfo:
+    """Probe codec/format of a local file via ffprobe.
+
+    Resolves ``mpd.file`` against ``mpd_music_directory`` when relative.
+    """
+    music_dir = config.get("mpd_music_directory") or str(Path.home() / "Music")
+    path = Path(mpd.file)
+    if not path.is_absolute():
+        path = Path(music_dir).expanduser() / path
+    track_id = path.name
+
+    if not path.exists():
+        return SourceInfo(
+            provider="local", track_id=track_id, manifest_url=str(path),
+            candidates=[], selected=None,
+            error=f"file not found: {path}",
+        )
+    if shutil.which("ffprobe") is None:
+        return SourceInfo(
+            provider="local", track_id=track_id, manifest_url=str(path),
+            candidates=[], selected=None,
+            error="ffprobe not on PATH",
+        )
+
+    candidates: list[StreamCandidate] = []
+    selected: StreamCandidate | None = None
+    error: str | None = None
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_streams", "-select_streams", "a", str(path),
+            ],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        data = json.loads(proc.stdout) if proc.stdout else {}
+        candidates = parse_dash_streams(data)
+        selected = select_best_stream(candidates)
+        if selected is None:
+            error = "ffprobe returned no audio streams"
+    except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as e:
+        error = f"ffprobe failed: {e}"
+
+    return SourceInfo(
+        provider="local", track_id=track_id, manifest_url=str(path),
+        candidates=candidates, selected=selected, error=error,
+    )
+
+
+def _probe_proxy_source(
+    mpd: MPDInfo, config: dict[str, Any], provider: str, track_id: str
+) -> SourceInfo:
     db_path = config.get("proxy_track_mapping_db") or str(
         Path.home() / ".config" / "xmpd" / "track_mapping.db"
     )
@@ -713,7 +771,7 @@ def format_default(report: FlowReport, color: Any) -> str:
         lines.append(
             f"Position:     {_fmt_time(mpd.elapsed)} / {_fmt_time(mpd.duration)}"
         )
-    if report.source and report.source.provider:
+    if report.source and report.source.provider and report.source.provider != "local":
         lines.append(
             f"Provider:     {report.source.provider}/{report.source.track_id}"
         )
@@ -761,7 +819,7 @@ def format_default(report: FlowReport, color: Any) -> str:
         lines.append("(no source data)")
     lines.append("")
 
-    if src is not None and src.selected is not None:
+    if src is not None and src.selected is not None and src.provider != "local":
         lines.append(color("=== Proxy ===", "bold"))
         lines.append("Path:         ffmpeg -c copy -f flac (rewrap, no re-encode)")
         lines.append("")
@@ -839,12 +897,13 @@ def format_short(report: FlowReport) -> str:
         codec = sel.codec.upper()
         bps = sel.bits_per_raw_sample
         rate_khz = sel.sample_rate / 1000 if sel.sample_rate else 0
-        prov = f"{src.provider}/{src.track_id}"
+        prov = src.track_id if src.provider == "local" else f"{src.provider}/{src.track_id}"
         bps_part = f"{bps}/" if bps else ""
         br_part = f" ({sel.bitrate // 1000}k)" if sel.bitrate else ""
         parts.append(f"{prov}  {codec} {bps_part}{rate_khz:.1f}{br_part}")
     elif src:
-        parts.append(f"{src.provider}/{src.track_id}  source ?")
+        prov = src.track_id if src.provider == "local" else f"{src.provider}/{src.track_id}"
+        parts.append(f"{prov}  source ?")
     else:
         mpd_file = report.mpd.file
         parts.append(mpd_file.split("/")[-1] if mpd_file else "?")
