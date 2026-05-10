@@ -48,19 +48,19 @@ def test_add_track_insert(memory_store: TrackStore) -> None:
     """Test adding a new track to the store."""
     memory_store.add_track(
         provider="yt",
-        track_id="dQw4w9WgXcQ",
-        stream_url="https://youtube.com/watch?v=dQw4w9WgXcQ",
-        title="Never Gonna Give You Up",
-        artist="Rick Astley",
+        track_id="testvideoid",
+        stream_url="https://youtube.com/watch?v=testvideoid",
+        title="Test Track Title",
+        artist="Test Artist",
     )
 
-    track = memory_store.get_track("yt", "dQw4w9WgXcQ")
+    track = memory_store.get_track("yt", "testvideoid")
     assert track is not None
     assert track["provider"] == "yt"
-    assert track["track_id"] == "dQw4w9WgXcQ"
-    assert track["stream_url"] == "https://youtube.com/watch?v=dQw4w9WgXcQ"
-    assert track["title"] == "Never Gonna Give You Up"
-    assert track["artist"] == "Rick Astley"
+    assert track["track_id"] == "testvideoid"
+    assert track["stream_url"] == "https://youtube.com/watch?v=testvideoid"
+    assert track["title"] == "Test Track Title"
+    assert track["artist"] == "Test Artist"
     assert isinstance(track["updated_at"], float)
 
 

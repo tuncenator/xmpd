@@ -3,27 +3,27 @@
   "get_user_playlists_first": null,
   "get_playlist_tracks_LM_first2": [
     {
-      "video_id": "dQw4w9WgXcQ",
-      "title": "Never Gonna Give You Up",
-      "artist": "Rick Astley",
+      "video_id": "testvideoid",
+      "title": "Test Track Title",
+      "artist": "Test Artist",
       "duration_seconds": 213
     }
   ],
   "get_liked_songs_first2": [
     {
-      "video_id": "dQw4w9WgXcQ",
-      "title": "Never Gonna Give You Up",
-      "artist": "Rick Astley",
+      "video_id": "testvideoid",
+      "title": "Test Track Title",
+      "artist": "Test Artist",
       "duration_seconds": 213
     }
   ],
   "get_song_info_sample": {
-    "video_id": "dQw4w9WgXcQ",
-    "title": "Never Gonna Give You Up",
-    "artist": "Rick Astley",
+    "video_id": "testvideoid",
+    "title": "Test Track Title",
+    "artist": "Test Artist",
     "album": "",
     "duration": 213,
-    "thumbnail_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg"
+    "thumbnail_url": "https://i.ytimg.com/vi/testvideoid/maxresdefault.jpg"
   },
   "search_miles_davis_first2": [
     {

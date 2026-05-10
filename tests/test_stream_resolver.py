@@ -21,12 +21,12 @@ class TestCachedURL:
         cached = CachedURL(
             url="https://example.com/audio.m4a",
             cached_at=now,
-            video_id="dQw4w9WgXcQ"
+            video_id="testvideoid"
         )
 
         assert cached.url == "https://example.com/audio.m4a"
         assert cached.cached_at == now
-        assert cached.video_id == "dQw4w9WgXcQ"
+        assert cached.video_id == "testvideoid"
 
 
 class TestStreamResolverInit:
@@ -131,11 +131,11 @@ class TestStreamResolverExtraction:
         mock_ydl_class.return_value.__enter__.return_value = mock_ydl
 
         resolver = StreamResolver()
-        url = resolver._extract_url('dQw4w9WgXcQ')
+        url = resolver._extract_url('testvideoid')
 
         assert url == 'https://example.com/audio.m4a'
         mock_ydl.extract_info.assert_called_once_with(
-            'https://youtube.com/watch?v=dQw4w9WgXcQ',
+            'https://youtube.com/watch?v=testvideoid',
             download=False
         )
 
@@ -288,12 +288,12 @@ class TestStreamResolverResolveVideoId:
         mock_ydl_class.return_value.__enter__.return_value = mock_ydl
 
         resolver = StreamResolver()
-        url = resolver.resolve_video_id('dQw4w9WgXcQ')
+        url = resolver.resolve_video_id('testvideoid')
 
         assert url == 'https://example.com/audio.m4a'
         # Verify it was cached
-        assert 'dQw4w9WgXcQ' in resolver._cache
-        assert resolver._cache['dQw4w9WgXcQ'].url == 'https://example.com/audio.m4a'
+        assert 'testvideoid' in resolver._cache
+        assert resolver._cache['testvideoid'].url == 'https://example.com/audio.m4a'
 
     @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
     def test_resolve_video_id_cache_hit(self, mock_ydl_class):

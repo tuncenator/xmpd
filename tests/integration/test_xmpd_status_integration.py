@@ -145,9 +145,9 @@ class TestIntegrationScenarios:
         """
         # Setup
         mock_home.return_value = Path(self.temp_dir)
-        video_id = "dQw4w9WgXcQ"
+        video_id = "testvideoid"
         self._insert_track_in_db(
-            video_id, "https://googlevideo.com/stream123", "Never Gonna Give You Up", "Rick Astley"
+            video_id, "https://googlevideo.com/stream123", "Test Track Title", "Test Artist"
         )
 
         status = {
@@ -159,8 +159,8 @@ class TestIntegrationScenarios:
         }
         currentsong = {
             "file": f"http://localhost:6602/proxy/{video_id}",
-            "title": "Never Gonna Give You Up",
-            "artist": "Rick Astley",
+            "title": "Test Track Title",
+            "artist": "Test Artist",
             "time": "300",
         }
 
@@ -185,7 +185,7 @@ class TestIntegrationScenarios:
         assert "▶" in lines[0], "Should have playing icon"
 
         # Check track info (artist always shown, title may be truncated)
-        assert "Rick Astley" in lines[0], "Should show artist"
+        assert "Test Artist" in lines[0], "Should show artist"
         # Title might be truncated due to default max length, just check partial match
         assert (
             "Never Gonna" in lines[0] or "Give You Up" in lines[0]

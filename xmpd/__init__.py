@@ -1,3 +1,3 @@
 """xmpd - YouTube Music MPD daemon."""
 
-__version__ = "1.4.4"
+__version__ = "2.1.0"

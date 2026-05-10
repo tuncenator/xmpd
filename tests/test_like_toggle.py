@@ -186,10 +186,10 @@ class TestCmdLikeToggle:
         tidal = _make_tidal_provider()
         tidal.get_like_state.return_value = "NEUTRAL"
         daemon = _make_daemon(tmp_path, registry={"tidal": tidal})
-        response = daemon._cmd_like_toggle("tidal", "58990486")
+        response = daemon._cmd_like_toggle("tidal", "99999999")
         assert response["success"] is True
         assert response["liked"] is True
-        tidal.like.assert_called_once_with("58990486")
+        tidal.like.assert_called_once_with("99999999")
 
     def test_like_toggle_provider_api_error(self, tmp_path: Any) -> None:
         """If provider.like() raises, toggle returns failure without updating cache."""
@@ -374,7 +374,7 @@ class TestXmpctlLikeToggleCli:
     def test_like_toggle_with_args_attempts_daemon(self) -> None:
         """like-toggle with valid args reaches out to daemon (fails gracefully if not running)."""
         result = subprocess.run(
-            [str(XMPCTL), "like-toggle", "yt", "dQw4w9WgXcQ"],
+            [str(XMPCTL), "like-toggle", "yt", "testvideoid"],
             capture_output=True,
             text=True,
         )
@@ -386,7 +386,7 @@ class TestXmpctlLikeToggleCli:
 
     def test_like_toggle_tidal_with_args_attempts_daemon(self) -> None:
         result = subprocess.run(
-            [str(XMPCTL), "like-toggle", "tidal", "58990486"],
+            [str(XMPCTL), "like-toggle", "tidal", "99999999"],
             capture_output=True,
             text=True,
         )

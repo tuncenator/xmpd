@@ -15,9 +15,9 @@ from xmpd.providers.base import Provider
 
 
 def test_url_regex_yt_match():
-    m = PROXY_URL_RE.search("http://localhost:8080/proxy/yt/dQw4w9WgXcQ")
+    m = PROXY_URL_RE.search("http://localhost:8080/proxy/yt/testvideoid")
     assert m is not None
-    assert m.groups() == ("yt", "dQw4w9WgXcQ")
+    assert m.groups() == ("yt", "testvideoid")
 
 
 def test_url_regex_tidal_match():
@@ -57,7 +57,7 @@ def _make_reporter(registry=None):
 def _set_mpd_state(
     reporter: HistoryReporter,
     state: str = "play",
-    file_url: str | None = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ",
+    file_url: str | None = "http://localhost:8080/proxy/yt/testvideoid",
 ) -> None:
     mpd = MagicMock()
     mpd.status.return_value = {"state": state}
@@ -77,8 +77,8 @@ def test_dispatch_calls_provider_report_play():
     yt = MagicMock(spec=Provider)
     yt.report_play.return_value = True
     reporter = _make_reporter({"yt": yt})
-    reporter._report_track("http://localhost:8080/proxy/yt/dQw4w9WgXcQ", 45)
-    yt.report_play.assert_called_once_with("dQw4w9WgXcQ", 45)
+    reporter._report_track("http://localhost:8080/proxy/yt/testvideoid", 45)
+    yt.report_play.assert_called_once_with("testvideoid", 45)
 
 
 def test_dispatch_unknown_provider_skipped(caplog):
@@ -95,7 +95,7 @@ def test_dispatch_swallows_exceptions(caplog):
     yt.report_play.side_effect = RuntimeError("upstream blew up")
     reporter = _make_reporter({"yt": yt})
     with caplog.at_level("WARNING"):
-        reporter._report_track("http://localhost:8080/proxy/yt/dQw4w9WgXcQ", 60)
+        reporter._report_track("http://localhost:8080/proxy/yt/testvideoid", 60)
     assert any("report_play failed" in rec.message for rec in caplog.records)
 
 
@@ -119,7 +119,7 @@ def test_dispatch_report_play_false_logs_warning(caplog):
     yt.report_play.return_value = False
     reporter = _make_reporter({"yt": yt})
     with caplog.at_level("WARNING"):
-        reporter._report_track("http://localhost:8080/proxy/yt/dQw4w9WgXcQ", 45)
+        reporter._report_track("http://localhost:8080/proxy/yt/testvideoid", 45)
     assert any("returned False" in rec.message for rec in caplog.records)
 
 
@@ -135,7 +135,7 @@ def test_min_play_seconds_threshold_gate(monkeypatch):
     reporter._mpd.status.return_value = {"state": "stop"}
     reporter._mpd.currentsong.return_value = {}
     reporter._last_state = "play"
-    reporter._current_track_url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+    reporter._current_track_url = "http://localhost:8080/proxy/yt/testvideoid"
     reporter._current_track_start = 0.0
     monkeypatch.setattr(reporter, "_compute_elapsed", lambda: 10.0)
     spy = MagicMock()
@@ -151,7 +151,7 @@ def test_min_play_seconds_threshold_passes(monkeypatch):
     reporter._mpd.status.return_value = {"state": "stop"}
     reporter._mpd.currentsong.return_value = {}
     reporter._last_state = "play"
-    reporter._current_track_url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+    reporter._current_track_url = "http://localhost:8080/proxy/yt/testvideoid"
     reporter._current_track_start = 0.0
     monkeypatch.setattr(reporter, "_compute_elapsed", lambda: 60.0)
     spy = MagicMock()
@@ -159,7 +159,7 @@ def test_min_play_seconds_threshold_passes(monkeypatch):
     reporter._handle_player_event()
     spy.assert_called_once()
     args, _ = spy.call_args
-    assert args[0] == "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+    assert args[0] == "http://localhost:8080/proxy/yt/testvideoid"
     assert args[1] == 60
 
 
@@ -172,7 +172,7 @@ class TestHandlePlayerEvent:
     def _setup_playing(
         self,
         reporter: HistoryReporter,
-        url: str = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ",
+        url: str = "http://localhost:8080/proxy/yt/testvideoid",
         elapsed: float = 60.0,
     ) -> None:
         reporter._current_track_url = url
@@ -188,7 +188,7 @@ class TestHandlePlayerEvent:
         self._setup_playing(reporter, elapsed=60)
         _set_mpd_state(reporter, "play", "http://localhost:8080/proxy/yt/AAAAAAAAAAA")
         reporter._handle_player_event()
-        yt.report_play.assert_called_once_with("dQw4w9WgXcQ", pytest.approx(60, abs=2))
+        yt.report_play.assert_called_once_with("testvideoid", pytest.approx(60, abs=2))
 
     def test_track_change_skips_if_short(self) -> None:
         yt = MagicMock(spec=Provider)
@@ -205,12 +205,12 @@ class TestHandlePlayerEvent:
         self._setup_playing(reporter, elapsed=45)
         _set_mpd_state(reporter, "stop", None)
         reporter._handle_player_event()
-        yt.report_play.assert_called_once_with("dQw4w9WgXcQ", pytest.approx(45, abs=2))
+        yt.report_play.assert_called_once_with("testvideoid", pytest.approx(45, abs=2))
 
     def test_pause_does_not_report(self) -> None:
         yt = MagicMock(spec=Provider)
         reporter = _make_reporter({"yt": yt})
-        url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+        url = "http://localhost:8080/proxy/yt/testvideoid"
         self._setup_playing(reporter, url=url, elapsed=60)
         _set_mpd_state(reporter, "pause", url)
         reporter._handle_player_event()
@@ -220,7 +220,7 @@ class TestHandlePlayerEvent:
     def test_resume_does_not_report(self) -> None:
         yt = MagicMock(spec=Provider)
         reporter = _make_reporter({"yt": yt})
-        url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+        url = "http://localhost:8080/proxy/yt/testvideoid"
         reporter._current_track_url = url
         reporter._current_track_start = time.monotonic() - 20
         reporter._accumulated_play = 0.0
@@ -250,7 +250,7 @@ class TestHandlePlayerEvent:
 class TestPauseExclusion:
     def test_pause_time_not_counted(self) -> None:
         reporter = _make_reporter()
-        reporter._current_track_url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+        reporter._current_track_url = "http://localhost:8080/proxy/yt/testvideoid"
         reporter._accumulated_play = 20.0
         reporter._current_track_start = time.monotonic() - 15
         reporter._pause_start = None
@@ -296,7 +296,7 @@ class TestErrorRecovery:
         yt = MagicMock(spec=Provider)
         yt.report_play.side_effect = Exception("API down")
         reporter = _make_reporter({"yt": yt})
-        reporter._current_track_url = "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+        reporter._current_track_url = "http://localhost:8080/proxy/yt/testvideoid"
         reporter._current_track_start = time.monotonic() - 60
         reporter._accumulated_play = 0.0
         reporter._pause_start = None

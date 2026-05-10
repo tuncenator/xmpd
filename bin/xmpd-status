@@ -50,11 +50,17 @@ import signal  # noqa: E402
 import socket  # noqa: E402
 import sqlite3  # noqa: E402
 import time  # noqa: E402
+from contextlib import closing  # noqa: E402
 
 from mpd import ConnectionError as MPDConnectionError  # noqa: E402
 from mpd import MPDClient  # noqa: E402
 
 __version__ = "2.1.0"
+
+WATCH_SUBSYSTEMS = ("player", "mixer", "options", "playlist")
+WATCH_TICK_SEC = 1.0
+WATCH_IDLE_TIMEOUT_SEC = 60.0
+WATCH_CMD_TIMEOUT_SEC = 10.0
 
 
 def get_auth_status() -> tuple[bool, str, int]:
@@ -143,15 +149,13 @@ def get_track_type(file_path: str) -> str:
         return "local" if not file_path.startswith("http") else "unknown"
 
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            "SELECT provider FROM tracks WHERE track_id = ? LIMIT 1",
-            (file_path,),
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with closing(sqlite3.connect(db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT provider FROM tracks WHERE track_id = ? LIMIT 1",
+                (file_path,),
+            )
+            row = cursor.fetchone()
 
         if row:
             provider = row[0]
@@ -165,16 +169,68 @@ def get_track_type(file_path: str) -> str:
         return "local" if not file_path.startswith("http") else "unknown"
 
 
-def classify_audio_quality(
-    audio_str: str, bitrate: str, track_type: str, compact: bool = False
-) -> str | None:
-    """Return a short quality badge for streaming tracks, else None.
+def classify_local_lossy(file_path: str, music_dir: str) -> bool | None:
+    """Return True if a local file is lossy, False if lossless, None if unknown.
 
-    Uses MPD's 'audio' field (samplerate:bits:channels) and 'bitrate'.
-    Only shows badges for streaming providers (youtube, tidal), not local files.
-    Compact mode returns shorter labels (Lo/CD/HR).
+    Sniffs the file header (~64 KB at most for MP4/M4A to find the codec atom).
+    Resolves ``file_path`` against ``music_dir`` when relative. MPD reports
+    decoded PCM identically for MP3 and FLAC, so the container header is the
+    only signal that distinguishes them without ffprobe.
     """
-    if track_type == "local" or not audio_str:
+    if not file_path:
+        return None
+    p = Path(file_path)
+    if not p.is_absolute():
+        p = Path(music_dir).expanduser() / p
+    try:
+        with open(p, "rb") as f:
+            head = f.read(16)
+    except OSError:
+        return None
+    if len(head) < 12:
+        return None
+
+    if head[:4] == b"fLaC":
+        return False
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return False
+    if head[:4] == b"FORM" and head[8:12] in (b"AIFF", b"AIFC"):
+        return False
+    if head[:3] == b"ID3":
+        return True
+    if head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
+        return True
+    if head[:4] == b"OggS":
+        return True
+    if head[4:8] == b"ftyp":
+        try:
+            with open(p, "rb") as f:
+                blob = f.read(65536)
+        except OSError:
+            return None
+        if b"alac" in blob:
+            return False
+        if b"mp4a" in blob:
+            return True
+    return None
+
+
+def classify_audio_quality(
+    audio_str: str,
+    bitrate: str,
+    track_type: str,
+    file_path: str = "",
+    music_dir: str = "",
+    compact: bool = False,
+) -> str | None:
+    """Return a short quality badge, or None.
+
+    Uses MPD's 'audio' field (samplerate:bits:channels) for bit-depth tier.
+    Source codec is inferred from MPD's float bit format for streaming tracks,
+    and from the local file header for ``track_type == "local"``.
+    Compact mode returns shorter labels (Lo/HF/HR).
+    """
+    if not audio_str:
         return None
 
     try:
@@ -186,7 +242,17 @@ def classify_audio_quality(
     except (ValueError, IndexError):
         return None
 
-    if bit_fmt == "f":
+    is_lossy: bool | None = None
+    if track_type == "local":
+        is_lossy = classify_local_lossy(
+            file_path, music_dir or str(Path.home() / "Music")
+        )
+        if is_lossy is None:
+            return None
+    elif bit_fmt == "f":
+        is_lossy = True
+
+    if is_lossy:
         return "Lo" if compact else "Lossy"
 
     try:
@@ -353,7 +419,7 @@ def get_playlist_context(client: MPDClient) -> dict:
 
 
 def get_sync_status(file_path: str) -> str:
-    """Check if a YouTube track's stream URL is resolved in the database.
+    """Check if a streaming track's stream URL is resolved in the database.
 
     Args:
         file_path: File path from MPD currentsong (file field).
@@ -361,38 +427,36 @@ def get_sync_status(file_path: str) -> str:
     Returns:
         Status string: 'resolved', 'unresolved', 'local', or 'unknown'
     """
-    # Not a YouTube proxy URL - must be local
-    if not file_path.startswith("http://localhost:6602/proxy/"):
+    proxy_prefix = "http://localhost:6602/proxy/"
+    if not file_path.startswith(proxy_prefix):
         return "local"
 
-    # Extract video ID from proxy URL
-    video_id = file_path.replace("http://localhost:6602/proxy/", "")
+    # Proxy URL form: <prefix><provider>/<track_id>
+    remainder = file_path[len(proxy_prefix):]
+    if "/" in remainder:
+        provider, track_id = remainder.split("/", 1)
+    else:
+        provider, track_id = "yt", remainder
 
-    # Check database
     db_path = Path.home() / ".config" / "xmpd" / "track_mapping.db"
     if not db_path.exists():
         return "unknown"
 
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # Check if stream_url is NULL (unresolved)
-        cursor.execute("SELECT stream_url FROM tracks WHERE video_id = ?", (video_id,))
-        result = cursor.fetchone()
-        conn.close()
+        with closing(sqlite3.connect(db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT stream_url FROM tracks WHERE provider = ? AND track_id = ?",
+                (provider, track_id),
+            )
+            result = cursor.fetchone()
 
         if result is None:
-            # Video ID not in database
             return "unknown"
-
         stream_url = result[0]
         if stream_url is None:
-            # Stream URL is NULL - unresolved
             return "unresolved"
-        else:
-            # Stream URL exists - resolved
-            return "resolved"
+        return "resolved"
 
     except (sqlite3.Error, OSError):
         return "unknown"
@@ -840,6 +904,14 @@ Examples:
         in ("true", "1", "yes"),
         help="Show audio quality badge when hi-res (default: true)",
     )
+    display_group.add_argument(
+        "--music-dir",
+        type=str,
+        default=os.environ.get(
+            "XMPD_STATUS_MUSIC_DIR", str(Path.home() / "Music")
+        ),
+        help="Music directory for resolving local MPD paths (default: ~/Music)",
+    )
 
     # Playlist context options
     playlist_group = parser.add_argument_group("Playlist Context Options")
@@ -941,6 +1013,15 @@ Examples:
         "--idle",
         action="store_true",
         help="Run in idle mode (monitor MPD for changes, minimal CPU usage)",
+    )
+    i3blocks_group.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "Long-running waybar mode: emits one waybar JSON object per state "
+            "change via MPD's idle protocol. Replaces interval polling. ~0%% "
+            "CPU when paused/stopped, one tick/sec only when playing."
+        ),
     )
     i3blocks_group.add_argument(
         "--handle-clicks",
@@ -1183,6 +1264,8 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                         status.get("audio", ""),
                         status.get("bitrate", ""),
                         track_type,
+                        file_path=file_path,
+                        music_dir=args.music_dir,
                         compact=True,
                     )
                     if quality:
@@ -1226,6 +1309,8 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                         status.get("audio", ""),
                         status.get("bitrate", ""),
                         track_type,
+                        file_path=file_path,
+                        music_dir=args.music_dir,
                         compact=compact_mode,
                     )
                     if quality:
@@ -1271,6 +1356,8 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                 status.get("audio", ""),
                 status.get("bitrate", ""),
                 track_type,
+                file_path=file_path,
+                music_dir=args.music_dir,
                 compact=True,
             )
             if short_quality:
@@ -1427,10 +1514,347 @@ def run_idle_mode(args) -> None:
         print("Exiting idle mode", file=sys.stderr)
 
 
+def _emit_waybar_json(text: str, tooltip: str, color: str, urgent: bool = False) -> None:
+    """Emit one waybar custom-module JSON object to stdout, line-buffered.
+
+    Class list mirrors what i3wrap.sh produced: 'c' + sanitized hex color,
+    plus 'urgent' when applicable. Existing waybar CSS rules keep working.
+    """
+    color_clean = re.sub(r"[^a-zA-Z0-9]", "", color or "")
+    cls = ["c" + color_clean] if color_clean else []
+    if urgent:
+        cls.append("urgent")
+    obj = {
+        "text": text or "",
+        "tooltip": tooltip or text or "",
+        "class": cls,
+    }
+    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def _compute_status_triple(client: MPDClient, args) -> tuple[str, str, str, str]:
+    """Compute (full_text, short_text, color, state) for current MPD state.
+
+    Mirrors main()'s rendering logic but returns the triple instead of
+    printing it. Raises on connection errors so the caller can reconnect.
+    """
+    status = client.status()
+    current_song = client.currentsong()
+    state = status.get("state", "stop")
+
+    if state == "stop" or not current_song:
+        auth_valid, _auth_error, refresh_failures = get_auth_status()
+        icon = args.icon_stopped
+        if not auth_valid:
+            return (
+                f"{icon} Stopped | YTM Auth invalid",
+                f"{icon} Auth invalid",
+                "#ff5577",
+                state,
+            )
+        if refresh_failures > 0:
+            return (
+                f"{icon} Stopped | Auth refresh failing",
+                f"{icon} Stopped",
+                "#e0af68",
+                state,
+            )
+        return (f"{icon} Stopped", f"{icon} Stopped", args.color_stopped, state)
+
+    title = current_song.get("title", "Unknown")
+    artist = current_song.get("artist", "Unknown")
+    file_path = current_song.get("file", "")
+    elapsed = status.get("elapsed", "0")
+    duration = status.get("duration", current_song.get("time", "0"))
+    position_str = format_time(elapsed)
+    duration_str = format_time(duration)
+    track_type = get_track_type(file_path)
+
+    if state == "play":
+        icon = args.icon_playing
+        if track_type == "youtube":
+            color = args.color_youtube_playing
+        elif track_type == "tidal":
+            color = args.color_tidal_playing
+        else:
+            color = args.color_local_playing
+    elif state == "pause":
+        icon = args.icon_paused
+        if track_type == "youtube":
+            color = args.color_youtube_paused
+        elif track_type == "tidal":
+            color = args.color_tidal_paused
+        else:
+            color = args.color_local_paused
+    else:
+        icon = args.icon_stopped
+        color = args.color_stopped
+
+    if track_type == "youtube":
+        auth_valid, _auth_error, refresh_failures = get_auth_status()
+        if not auth_valid:
+            color = "#ff5577"
+        elif refresh_failures > 0:
+            color = "#e0af68"
+
+    playlist_ctx = get_playlist_context(client)
+    sync_status = get_sync_status(file_path)
+
+    progress_bar_str = ""
+    if args.show_bar:
+        try:
+            elapsed_float = float(elapsed)
+            duration_float = float(duration)
+            if duration_float > 0:
+                style = args.bar_style if args.bar_style else "blocks"
+                filled_blocks = calculate_progress(
+                    elapsed_float, duration_float, args.bar_length
+                )
+                progress_bar_str = render_progress_bar(
+                    filled_blocks, args.bar_length, style
+                )
+        except (ValueError, TypeError):
+            pass
+
+    context_suffix = ""
+    if sync_status == "unresolved":
+        context_suffix = " [Resolving...]"
+    elif (
+        args.show_position
+        and playlist_ctx["current_pos"] is not None
+        and playlist_ctx["total"] is not None
+    ):
+        pos = playlist_ctx["current_pos"]
+        total = playlist_ctx["total"]
+        context_suffix = f" [{pos}/{total}]"
+
+    if args.show_quality:
+        quality = classify_audio_quality(
+            status.get("audio", ""),
+            status.get("bitrate", ""),
+            track_type,
+            file_path=file_path,
+            music_dir=args.music_dir,
+            compact=args.compact,
+        )
+        if quality:
+            context_suffix += f" [{quality}]"
+
+    custom_format = args.format
+    if custom_format:
+        template_data = {
+            "icon": icon,
+            "artist": artist,
+            "title": title,
+            "album": current_song.get("album", ""),
+            "elapsed": position_str,
+            "duration": duration_str,
+            "bar": progress_bar_str,
+            "position": (playlist_ctx["current_pos"] if playlist_ctx["current_pos"] else ""),
+            "total": playlist_ctx["total"] if playlist_ctx["total"] else "",
+            "next": (
+                f"{playlist_ctx['next']['artist']} - {playlist_ctx['next']['title']}"
+                if playlist_ctx["next"]
+                else ""
+            ),
+            "prev": (
+                f"{playlist_ctx['prev']['artist']} - {playlist_ctx['prev']['title']}"
+                if playlist_ctx["prev"]
+                else ""
+            ),
+        }
+        full_output = format_with_template(custom_format, template_data)
+        full_output = smart_truncate(full_output, args.max_length)
+    elif args.compact:
+        full_output = f"{icon} {artist} - {title}{context_suffix}"
+        full_output = smart_truncate(full_output, args.max_length)
+    else:
+        full_output = adaptive_truncate_status(
+            icon=icon,
+            artist=artist,
+            title=title,
+            position_str=position_str,
+            duration_str=duration_str,
+            progress_bar_str=progress_bar_str,
+            context_suffix=context_suffix,
+            max_length=args.max_length,
+            min_bar_length=5,
+            fixed_bar_length=args.fixed_bar_length,
+        )
+
+    additional_lines: list[str] = []
+    if args.show_prev and playlist_ctx["prev"] is not None:
+        prev = playlist_ctx["prev"]
+        additional_lines.append(
+            smart_truncate(f"{chr(0x2191)} {prev['artist']} - {prev['title']}", args.max_length)
+        )
+    if args.show_next and playlist_ctx["next"] is not None:
+        nxt = playlist_ctx["next"]
+        additional_lines.append(
+            smart_truncate(f"{chr(0x2193)} {nxt['artist']} - {nxt['title']}", args.max_length)
+        )
+
+    short_quality_suffix = ""
+    if args.show_quality:
+        sq = classify_audio_quality(
+            status.get("audio", ""),
+            status.get("bitrate", ""),
+            track_type,
+            file_path=file_path,
+            music_dir=args.music_dir,
+            compact=True,
+        )
+        if sq:
+            short_quality_suffix = f" [{sq}]"
+    short_output = smart_truncate(
+        f"{icon} {title} - {position_str}/{duration_str}{short_quality_suffix}",
+        args.max_length,
+    )
+
+    if additional_lines:
+        full_text = full_output + "\n" + "\n".join(additional_lines)
+    else:
+        full_text = full_output
+
+    return full_text, short_output, color, state
+
+
+def run_watch_mode(args) -> None:
+    """Long-running mode: emit waybar JSON on MPD state changes.
+
+    Uses two strategies based on playback state:
+    - Playing (with progress bar): poll every WATCH_TICK_SEC for bar
+      progression. One MPD round-trip per tick, no process spawn.
+    - Paused/stopped/no-bar: blocking MPD idle() on subsystems player,
+      mixer, options, playlist. ~0%% CPU until something changes.
+
+    Idle uses a socket timeout (WATCH_IDLE_TIMEOUT_SEC) so a silently
+    dead MPD connection or missed event can't freeze the indicator
+    longer than that window: on timeout the loop wakes up, re-renders,
+    and re-enters idle.
+
+    Replaces the per-tick spawn + i3wrap.sh pattern. Configure waybar
+    with no 'interval' and return-type 'json'.
+    """
+    global should_refresh, should_exit
+
+    signal.signal(signal.SIGUSR1, signal_handler_refresh)
+    signal.signal(signal.SIGTERM, signal_handler_exit)
+    signal.signal(signal.SIGINT, signal_handler_exit)
+
+    if args.verbose:
+        print("Starting watch mode...", file=sys.stderr)
+
+    client: MPDClient | None = None
+    reconnect_delay = 1
+
+    def _disconnect() -> None:
+        nonlocal client
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+            try:
+                client.disconnect()
+            except Exception:
+                pass
+            client = None
+
+    def _emit_stopped(label: str, color: str | None = None) -> None:
+        icon = args.icon_stopped
+        text = f"{icon} {label}"
+        _emit_waybar_json(text, text, color or args.color_stopped)
+
+    while not should_exit:
+        if client is None:
+            if args.verbose:
+                print(
+                    f"Connecting to MPD at {args.host}:{args.port}...",
+                    file=sys.stderr,
+                )
+            client = get_mpd_client(host=args.host, port=args.port)
+            if client is None:
+                _emit_stopped("MPD down")
+                time.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, 30)
+                continue
+            try:
+                client.idletimeout = WATCH_IDLE_TIMEOUT_SEC
+                # Bound regular command reads (status/currentsong/playlistinfo)
+                # so MPD slowness during stream resolution can't freeze the
+                # render path indefinitely. socket.timeout is OSError, so it
+                # falls through the existing reconnect branch below.
+                client.timeout = WATCH_CMD_TIMEOUT_SEC
+            except Exception:
+                pass
+            reconnect_delay = 1
+
+        try:
+            full, short, color, state = _compute_status_triple(client, args)
+            _emit_waybar_json(full, short, color)
+        except (
+            MPDConnectionError,
+            ConnectionRefusedError,
+            OSError,
+            BrokenPipeError,
+        ) as e:
+            if args.verbose:
+                print(f"MPD error during render: {e}", file=sys.stderr)
+            _disconnect()
+            time.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, 30)
+            continue
+        except Exception as e:
+            if args.verbose:
+                print(f"Render error: {e}", file=sys.stderr)
+            _emit_stopped("Error")
+            time.sleep(1)
+            continue
+
+        if should_refresh:
+            should_refresh = False
+            continue
+
+        if state == "play" and args.show_bar:
+            time.sleep(WATCH_TICK_SEC)
+            continue
+
+        try:
+            client.idle(*WATCH_SUBSYSTEMS)
+        except socket.timeout:
+            # Idle window expired with no event. Loop and re-render to
+            # verify connection liveness and refresh any stale state.
+            continue
+        except (
+            MPDConnectionError,
+            ConnectionRefusedError,
+            OSError,
+            BrokenPipeError,
+        ) as e:
+            if args.verbose:
+                print(f"idle failed: {e}", file=sys.stderr)
+            _disconnect()
+            continue
+        except KeyboardInterrupt:
+            should_exit = True
+            break
+
+    _disconnect()
+    if args.verbose:
+        print("Exiting watch mode", file=sys.stderr)
+
+
 def main() -> None:
     """Display MPD/xmpd status for i3blocks."""
     # Parse arguments (with backward compatibility for env vars)
     args = parse_arguments()
+
+    # Watch mode: long-running waybar JSON emitter via MPD idle protocol
+    if args.watch:
+        run_watch_mode(args)
+        return
 
     # If idle mode requested, run that instead
     if args.idle:
@@ -1612,6 +2036,8 @@ def main() -> None:
                     status.get("audio", ""),
                     status.get("bitrate", ""),
                     track_type,
+                    file_path=file_path,
+                    music_dir=args.music_dir,
                     compact=True,
                 )
                 if quality:
@@ -1661,6 +2087,8 @@ def main() -> None:
                     status.get("audio", ""),
                     status.get("bitrate", ""),
                     track_type,
+                    file_path=file_path,
+                    music_dir=args.music_dir,
                     compact=compact_mode,
                 )
                 if quality:
@@ -1706,6 +2134,8 @@ def main() -> None:
                 status.get("audio", ""),
                 status.get("bitrate", ""),
                 track_type,
+                file_path=file_path,
+                music_dir=args.music_dir,
                 compact=True,
             )
             if short_quality:
