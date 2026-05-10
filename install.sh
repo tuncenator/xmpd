@@ -324,15 +324,20 @@ if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
     # Install current binaries.
     ln -sf "$SCRIPT_DIR/bin/xmpctl" "$HOME/.local/bin/xmpctl"
     ln -sf "$SCRIPT_DIR/bin/xmpd-status" "$HOME/.local/bin/xmpd-status"
+    ln -sf "$SCRIPT_DIR/bin/xmpd-search" "$HOME/.local/bin/xmpd-search"
     if [ -x "$SCRIPT_DIR/bin/xmpd-status-preview" ]; then
         ln -sf "$SCRIPT_DIR/bin/xmpd-status-preview" "$HOME/.local/bin/xmpd-status-preview"
     fi
     info "  Binaries installed to ~/.local/bin"
     info "  Ensure ~/.local/bin is in your PATH."
+    if ! command -v fzf &>/dev/null; then
+        warn "  xmpd-search requires fzf (not found). Install with your package manager (e.g. pacman -S fzf)."
+    fi
 else
     info "Skipping binary installation. Use absolute paths:"
     info "  $SCRIPT_DIR/bin/xmpctl"
     info "  $SCRIPT_DIR/bin/xmpd-status"
+    info "  $SCRIPT_DIR/bin/xmpd-search"
 fi
 
 # ---------------------------------------------------------------------------

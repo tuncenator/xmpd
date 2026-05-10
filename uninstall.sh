@@ -84,7 +84,7 @@ info "=========================================="
 info ""
 
 REMOVED=0
-for name in xmpctl xmpd-status xmpd-status-preview ytmpctl ytmpd-status ytmpd-status-preview; do
+for name in xmpctl xmpd-status xmpd-status-preview xmpd-search ytmpctl ytmpd-status ytmpd-status-preview; do
     if [ -L "$HOME/.local/bin/$name" ]; then
         rm "$HOME/.local/bin/$name"
         info "  Removed $HOME/.local/bin/$name"
