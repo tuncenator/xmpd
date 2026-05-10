@@ -283,11 +283,54 @@ class TestClassifyAudioQuality:
         )
         assert result == "HR"
 
-    def test_local_returns_none(self):
+    def test_local_without_file_path_returns_none(self):
         assert ytmpd_status.classify_audio_quality("44100:16:2", "320", "local") is None
 
-    def test_local_hires_still_none(self):
-        assert ytmpd_status.classify_audio_quality("96000:24:2", "0", "local") is None
+    def test_local_mp3_is_lossy(self, tmp_path):
+        track = tmp_path / "a.mp3"
+        track.write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x00\x00\x00")
+        assert ytmpd_status.classify_audio_quality(
+            "44100:16:2", "320", "local",
+            file_path="a.mp3", music_dir=str(tmp_path),
+        ) == "Lossy"
+
+    def test_local_flac_hifi(self, tmp_path):
+        track = tmp_path / "a.flac"
+        track.write_bytes(b"fLaC\x00\x00\x00\x00\x00\x00\x00\x00")
+        assert ytmpd_status.classify_audio_quality(
+            "44100:16:2", "0", "local",
+            file_path="a.flac", music_dir=str(tmp_path),
+        ) == "HiFi"
+
+    def test_local_flac_hires(self, tmp_path):
+        track = tmp_path / "a.flac"
+        track.write_bytes(b"fLaC\x00\x00\x00\x00\x00\x00\x00\x00")
+        assert ytmpd_status.classify_audio_quality(
+            "96000:24:2", "0", "local",
+            file_path="a.flac", music_dir=str(tmp_path),
+        ) == "HiRes"
+
+    def test_local_wav_lossless(self, tmp_path):
+        track = tmp_path / "a.wav"
+        track.write_bytes(b"RIFF\x00\x00\x00\x00WAVE\x00\x00\x00\x00")
+        assert ytmpd_status.classify_audio_quality(
+            "44100:16:2", "0", "local",
+            file_path="a.wav", music_dir=str(tmp_path),
+        ) == "HiFi"
+
+    def test_local_compact_mode(self, tmp_path):
+        track = tmp_path / "a.mp3"
+        track.write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x00\x00\x00")
+        assert ytmpd_status.classify_audio_quality(
+            "44100:16:2", "320", "local",
+            file_path="a.mp3", music_dir=str(tmp_path), compact=True,
+        ) == "Lo"
+
+    def test_local_missing_file_returns_none(self, tmp_path):
+        assert ytmpd_status.classify_audio_quality(
+            "44100:16:2", "0", "local",
+            file_path="missing.flac", music_dir=str(tmp_path),
+        ) is None
 
     def test_empty_audio(self):
         assert ytmpd_status.classify_audio_quality("", "0", "youtube") is None
@@ -300,6 +343,81 @@ class TestClassifyAudioQuality:
 
     def test_partial_audio(self):
         assert ytmpd_status.classify_audio_quality("44100", "0", "tidal") is None
+
+
+class TestClassifyLocalLossy:
+    """Test file-header-based local codec classification."""
+
+    def test_flac_header(self, tmp_path):
+        p = tmp_path / "a.flac"
+        p.write_bytes(b"fLaC\x00\x00\x00\x00\x00\x00\x00\x00")
+        assert ytmpd_status.classify_local_lossy(str(p), str(tmp_path)) is False
+
+    def test_wav_header(self, tmp_path):
+        p = tmp_path / "a.wav"
+        p.write_bytes(b"RIFF\x00\x00\x00\x00WAVE\x00\x00\x00\x00")
+        assert ytmpd_status.classify_local_lossy(str(p), str(tmp_path)) is False
+
+    def test_aiff_header(self, tmp_path):
+        p = tmp_path / "a.aiff"
+        p.write_bytes(b"FORM\x00\x00\x00\x00AIFF\x00\x00\x00\x00")
+        assert ytmpd_status.classify_local_lossy(str(p), str(tmp_path)) is False
+
+    def test_mp3_id3_header(self, tmp_path):
+        p = tmp_path / "a.mp3"
+        p.write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x00\x00\x00")
+        assert ytmpd_status.classify_local_lossy(str(p), str(tmp_path)) is True
+
+    def test_mp3_raw_sync(self, tmp_path):
+        p = tmp_path / "a.mp3"
+        p.write_bytes(b"\xff\xfb\x90\x00" + b"\x00" * 12)
+        assert ytmpd_status.classify_local_lossy(str(p), str(tmp_path)) is True
+
+    def test_ogg_header(self, tmp_path):
+        p = tmp_path / "a.ogg"
+        p.write_bytes(b"OggS\x00\x02\x00\x00\x00\x00\x00\x00")
+        assert ytmpd_status.classify_local_lossy(str(p), str(tmp_path)) is True
+
+    def test_mp4_alac_is_lossless(self, tmp_path):
+        p = tmp_path / "a.m4a"
+        p.write_bytes(b"\x00\x00\x00\x20ftypM4A " + b"\x00" * 200 + b"alac" + b"\x00" * 100)
+        assert ytmpd_status.classify_local_lossy(str(p), str(tmp_path)) is False
+
+    def test_mp4_aac_is_lossy(self, tmp_path):
+        p = tmp_path / "a.m4a"
+        p.write_bytes(b"\x00\x00\x00\x20ftypM4A " + b"\x00" * 200 + b"mp4a" + b"\x00" * 100)
+        assert ytmpd_status.classify_local_lossy(str(p), str(tmp_path)) is True
+
+    def test_unknown_format(self, tmp_path):
+        p = tmp_path / "a.xyz"
+        p.write_bytes(b"\x00" * 32)
+        assert ytmpd_status.classify_local_lossy(str(p), str(tmp_path)) is None
+
+    def test_truncated_file(self, tmp_path):
+        p = tmp_path / "a.mp3"
+        p.write_bytes(b"ID")
+        assert ytmpd_status.classify_local_lossy(str(p), str(tmp_path)) is None
+
+    def test_missing_file(self, tmp_path):
+        assert ytmpd_status.classify_local_lossy(
+            "missing.mp3", str(tmp_path)
+        ) is None
+
+    def test_absolute_path(self, tmp_path):
+        p = tmp_path / "a.flac"
+        p.write_bytes(b"fLaC\x00\x00\x00\x00\x00\x00\x00\x00")
+        assert ytmpd_status.classify_local_lossy(str(p), "/some/other") is False
+
+    def test_relative_resolved_against_music_dir(self, tmp_path):
+        sub = tmp_path / "Artist"
+        sub.mkdir()
+        (sub / "track.flac").write_bytes(b"fLaC\x00\x00\x00\x00\x00\x00\x00\x00")
+        assert ytmpd_status.classify_local_lossy(
+            "Artist/track.flac", str(tmp_path)
+        ) is False
+
+    def test_empty_path_returns_none(self, tmp_path):
+        assert ytmpd_status.classify_local_lossy("", str(tmp_path)) is None
 
 
 class TestTruncate:

@@ -60,6 +60,7 @@ __version__ = "2.1.0"
 WATCH_SUBSYSTEMS = ("player", "mixer", "options", "playlist")
 WATCH_TICK_SEC = 1.0
 WATCH_IDLE_TIMEOUT_SEC = 60.0
+WATCH_CMD_TIMEOUT_SEC = 10.0
 
 
 def get_auth_status() -> tuple[bool, str, int]:
@@ -168,16 +169,68 @@ def get_track_type(file_path: str) -> str:
         return "local" if not file_path.startswith("http") else "unknown"
 
 
-def classify_audio_quality(
-    audio_str: str, bitrate: str, track_type: str, compact: bool = False
-) -> str | None:
-    """Return a short quality badge for streaming tracks, else None.
+def classify_local_lossy(file_path: str, music_dir: str) -> bool | None:
+    """Return True if a local file is lossy, False if lossless, None if unknown.
 
-    Uses MPD's 'audio' field (samplerate:bits:channels) and 'bitrate'.
-    Only shows badges for streaming providers (youtube, tidal), not local files.
-    Compact mode returns shorter labels (Lo/CD/HR).
+    Sniffs the file header (~64 KB at most for MP4/M4A to find the codec atom).
+    Resolves ``file_path`` against ``music_dir`` when relative. MPD reports
+    decoded PCM identically for MP3 and FLAC, so the container header is the
+    only signal that distinguishes them without ffprobe.
     """
-    if track_type == "local" or not audio_str:
+    if not file_path:
+        return None
+    p = Path(file_path)
+    if not p.is_absolute():
+        p = Path(music_dir).expanduser() / p
+    try:
+        with open(p, "rb") as f:
+            head = f.read(16)
+    except OSError:
+        return None
+    if len(head) < 12:
+        return None
+
+    if head[:4] == b"fLaC":
+        return False
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return False
+    if head[:4] == b"FORM" and head[8:12] in (b"AIFF", b"AIFC"):
+        return False
+    if head[:3] == b"ID3":
+        return True
+    if head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
+        return True
+    if head[:4] == b"OggS":
+        return True
+    if head[4:8] == b"ftyp":
+        try:
+            with open(p, "rb") as f:
+                blob = f.read(65536)
+        except OSError:
+            return None
+        if b"alac" in blob:
+            return False
+        if b"mp4a" in blob:
+            return True
+    return None
+
+
+def classify_audio_quality(
+    audio_str: str,
+    bitrate: str,
+    track_type: str,
+    file_path: str = "",
+    music_dir: str = "",
+    compact: bool = False,
+) -> str | None:
+    """Return a short quality badge, or None.
+
+    Uses MPD's 'audio' field (samplerate:bits:channels) for bit-depth tier.
+    Source codec is inferred from MPD's float bit format for streaming tracks,
+    and from the local file header for ``track_type == "local"``.
+    Compact mode returns shorter labels (Lo/HF/HR).
+    """
+    if not audio_str:
         return None
 
     try:
@@ -189,7 +242,17 @@ def classify_audio_quality(
     except (ValueError, IndexError):
         return None
 
-    if bit_fmt == "f":
+    is_lossy: bool | None = None
+    if track_type == "local":
+        is_lossy = classify_local_lossy(
+            file_path, music_dir or str(Path.home() / "Music")
+        )
+        if is_lossy is None:
+            return None
+    elif bit_fmt == "f":
+        is_lossy = True
+
+    if is_lossy:
         return "Lo" if compact else "Lossy"
 
     try:
@@ -841,6 +904,14 @@ Examples:
         in ("true", "1", "yes"),
         help="Show audio quality badge when hi-res (default: true)",
     )
+    display_group.add_argument(
+        "--music-dir",
+        type=str,
+        default=os.environ.get(
+            "XMPD_STATUS_MUSIC_DIR", str(Path.home() / "Music")
+        ),
+        help="Music directory for resolving local MPD paths (default: ~/Music)",
+    )
 
     # Playlist context options
     playlist_group = parser.add_argument_group("Playlist Context Options")
@@ -1193,6 +1264,8 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                         status.get("audio", ""),
                         status.get("bitrate", ""),
                         track_type,
+                        file_path=file_path,
+                        music_dir=args.music_dir,
                         compact=True,
                     )
                     if quality:
@@ -1236,6 +1309,8 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                         status.get("audio", ""),
                         status.get("bitrate", ""),
                         track_type,
+                        file_path=file_path,
+                        music_dir=args.music_dir,
                         compact=compact_mode,
                     )
                     if quality:
@@ -1281,6 +1356,8 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                 status.get("audio", ""),
                 status.get("bitrate", ""),
                 track_type,
+                file_path=file_path,
+                music_dir=args.music_dir,
                 compact=True,
             )
             if short_quality:
@@ -1557,6 +1634,8 @@ def _compute_status_triple(client: MPDClient, args) -> tuple[str, str, str, str]
             status.get("audio", ""),
             status.get("bitrate", ""),
             track_type,
+            file_path=file_path,
+            music_dir=args.music_dir,
             compact=args.compact,
         )
         if quality:
@@ -1622,6 +1701,8 @@ def _compute_status_triple(client: MPDClient, args) -> tuple[str, str, str, str]
             status.get("audio", ""),
             status.get("bitrate", ""),
             track_type,
+            file_path=file_path,
+            music_dir=args.music_dir,
             compact=True,
         )
         if sq:
@@ -1701,6 +1782,11 @@ def run_watch_mode(args) -> None:
                 continue
             try:
                 client.idletimeout = WATCH_IDLE_TIMEOUT_SEC
+                # Bound regular command reads (status/currentsong/playlistinfo)
+                # so MPD slowness during stream resolution can't freeze the
+                # render path indefinitely. socket.timeout is OSError, so it
+                # falls through the existing reconnect branch below.
+                client.timeout = WATCH_CMD_TIMEOUT_SEC
             except Exception:
                 pass
             reconnect_delay = 1
@@ -1950,6 +2036,8 @@ def main() -> None:
                     status.get("audio", ""),
                     status.get("bitrate", ""),
                     track_type,
+                    file_path=file_path,
+                    music_dir=args.music_dir,
                     compact=True,
                 )
                 if quality:
@@ -1999,6 +2087,8 @@ def main() -> None:
                     status.get("audio", ""),
                     status.get("bitrate", ""),
                     track_type,
+                    file_path=file_path,
+                    music_dir=args.music_dir,
                     compact=compact_mode,
                 )
                 if quality:
@@ -2044,6 +2134,8 @@ def main() -> None:
                 status.get("audio", ""),
                 status.get("bitrate", ""),
                 track_type,
+                file_path=file_path,
+                music_dir=args.music_dir,
                 compact=True,
             )
             if short_quality:
