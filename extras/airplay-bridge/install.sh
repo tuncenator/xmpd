@@ -97,6 +97,11 @@ check_owntone_conf() {
   else
     miss "/etc/owntone.conf local audio not disabled"
   fi
+  if grep -Eq '^\s*pipe_autostart\s*=\s*true' /etc/owntone.conf 2>/dev/null; then
+    ok "/etc/owntone.conf pipe_autostart enabled"
+  else
+    miss "/etc/owntone.conf pipe_autostart not enabled"
+  fi
 }
 
 check_service() {
@@ -186,13 +191,20 @@ bootstrap_owntone_state() {
   info "ensuring /var/log/owntone.log"
   sudo install -o owntone -g owntone -m 644 /dev/null /var/log/owntone.log
 
-  info "patching /etc/owntone.conf (library dir, local audio off, mpd listener off)"
+  info "patching /etc/owntone.conf (library dir, local audio off, mpd listener off, pipe autostart)"
   sudo sed -i -E 's|^\s*directories\s*=\s*\{\s*"[^"]+"\s*\}|\tdirectories = { "/var/lib/owntone-stream" }|' /etc/owntone.conf
   if ! grep -Eq '^\s*type\s*=\s*"disabled"' /etc/owntone.conf; then
     sudo sed -i 's|^#\ttype = "alsa"|\ttype = "disabled"|' /etc/owntone.conf
   fi
   if ! grep -Eq '^\s*port\s*=\s*0\s*$' /etc/owntone.conf; then
     sudo sed -i 's|^#\tport = 6600|\tport = 0|' /etc/owntone.conf
+  fi
+  # pipe_autostart=true makes OwnTone re-attach to a pipe library item
+  # whenever data appears. Without it, an EOF on the pipe (e.g. xmpd's
+  # Tidal proxy switching streams between tracks) detaches the consumer
+  # and the AirPlay session goes silent until manually re-routed.
+  if ! grep -Eq '^\s*pipe_autostart\s*=\s*true' /etc/owntone.conf; then
+    sudo sed -i 's|^#\s*pipe_autostart\s*=\s*true|\tpipe_autostart = true|' /etc/owntone.conf
   fi
 
   if ! in_group owntone; then
@@ -264,12 +276,18 @@ patch_mpd_conf() {
   info "patching $MPD_CONF (adding Owntone Bridge output)"
   [[ -f "$MPD_CONF" ]] || fatal "$MPD_CONF not found; create your MPD config first"
   local block
+  # always_on=yes keeps MPD writing zero-PCM into the FIFO during track
+  # transitions (Tidal proxy briefly EOFs between streams). Without it,
+  # OwnTone's pipe consumer treats the gap as end-of-stream and detaches
+  # the read handle; AirPlay then goes silent until something pokes
+  # /api/player/play (and sometimes not even then).
   block=$(cat <<'EOF'
 audio_output {
-	type   "fifo"
-	name   "Owntone Bridge"
-	path   "/var/lib/owntone-stream/mpd.pcm"
-	format "44100:16:2"
+	type      "fifo"
+	name      "Owntone Bridge"
+	path      "/var/lib/owntone-stream/mpd.pcm"
+	format    "44100:16:2"
+	always_on "yes"
 }
 EOF
   )
