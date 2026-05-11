@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.1.3] - 2026-05-11
+
+### Changed
+
+- `extras/airplay-bridge/install.sh` patches both `~/.i3/config` and `~/.config/sway/config` (previously i3 only).
+- `extras/airplay-bridge` switches from a raw FIFO MPD output to a PipeWire null sink (`owntone-bridge`) driven by a `parec` systemd user unit (`mpd-owntone-padder.service`). The null sink runs on the audio clock and produces silence on its monitor when idle; parec writes the OwnTone FIFO at constant 176.4 kB/s regardless of upstream stalls. Fixes AirPlay 2 session drops on Tidal proxy gaps with strict receivers (e.g. JBL Boombox 3 Wi-Fi). MPD output type changes from `fifo` to `pulse sink="owntone-bridge" mixer_type="none"`.
+- `xmpctl flow` introspects the AirPlay/Chromecast fan-out via the OwnTone REST API when MPD's output targets the bridge sink, surfacing the actual receiver(s) and their state instead of the null sink itself.
+- `xmpctl flow` verdict for AirPlay sinks treats the 16-bit/44.1 kHz ceiling as protocol-level rather than a config bottleneck (OwnTone caps AP1 and AP2 alike at 16/44.1 in practice; widening the bridge wouldn't help). Chromecast bridges still get the actionable truncation hint.
+
+### Fixed
+
+- `_probe_pulse_sink` now reports the resolved sink name (previously fell back to the system default sink, a latent bug exposed by the pulse-output architecture).
+
 ## [Unreleased] - 2026-04-27
 
 ### Added
