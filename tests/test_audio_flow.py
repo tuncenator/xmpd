@@ -13,7 +13,10 @@ from xmpd.audio_flow import (
     _compute_verdict,
     _parse_mpd_audio_field,
     _probe_local_source,
+    _probe_owntone_sink,
+    _probe_sink,
     _probe_source,
+    _read_fifo_format,
     codec_from_pactl_cards,
     format_audio_spec,
     format_brief,
@@ -576,3 +579,298 @@ class TestLocalFormatters:
         assert "local/" not in out
         assert out.startswith("track.mp3")
         assert "[lossy (source)]" in out
+
+
+# ---------- AirPlay bridge sink probing ----------
+
+
+_MPD_CONF_FIXTURE = """\
+audio_output {
+    type   "pulse"
+    name   "PulseAudio"
+}
+
+audio_output {
+    type   "fifo"
+    name   "Visualizer Feed"
+    path   "/tmp/mpd.fifo"
+}
+
+audio_output {
+    type   "fifo"
+    name   "Owntone Bridge"
+    path   "/var/lib/owntone-stream/mpd.pcm"
+    format "44100:16:2"
+}
+"""
+
+
+_OWNTONE_OUTPUTS_FIXTURE = {
+    "outputs": [
+        {
+            "id": "1",
+            "name": "JBL Boombox 3 Wi-Fi",
+            "type": "AirPlay 2",
+            "selected": True,
+            "volume": 35,
+        },
+        {
+            "id": "2",
+            "name": "JBL Boombox 3 Wi-Fi",
+            "type": "Chromecast",
+            "selected": False,
+            "volume": 50,
+        },
+        {
+            "id": "3",
+            "name": "Kitchen",
+            "type": "AirPlay",
+            "selected": False,
+            "volume": 60,
+        },
+    ]
+}
+
+
+class TestReadFifoFormat:
+    def test_extracts_format_from_named_block(self, tmp_path):
+        conf = tmp_path / "mpd.conf"
+        conf.write_text(_MPD_CONF_FIXTURE)
+        rate, bits, ch = _read_fifo_format("Owntone Bridge", mpd_conf=conf)
+        assert (rate, bits, ch) == (44100, 16, 2)
+
+    def test_returns_none_for_block_without_format(self, tmp_path):
+        conf = tmp_path / "mpd.conf"
+        conf.write_text(_MPD_CONF_FIXTURE)
+        # "Visualizer Feed" block has no format directive
+        assert _read_fifo_format("Visualizer Feed", mpd_conf=conf) == (
+            None, None, None,
+        )
+
+    def test_returns_none_for_missing_block(self, tmp_path):
+        conf = tmp_path / "mpd.conf"
+        conf.write_text(_MPD_CONF_FIXTURE)
+        assert _read_fifo_format("Nonexistent", mpd_conf=conf) == (
+            None, None, None,
+        )
+
+    def test_returns_none_for_missing_file(self, tmp_path):
+        assert _read_fifo_format(
+            "Owntone Bridge", mpd_conf=tmp_path / "absent.conf",
+        ) == (None, None, None)
+
+
+class _FakeUrlOpen:
+    """Context-manager-shaped fake for ``urllib.request.urlopen``."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class TestProbeOwntoneSink:
+    def _patch(self, monkeypatch, payload, tmp_path):
+        body = json.dumps(payload).encode("utf-8")
+        monkeypatch.setattr(
+            audio_flow.urllib.request, "urlopen",
+            lambda *_a, **_kw: _FakeUrlOpen(body),
+        )
+        conf = tmp_path / "mpd.conf"
+        conf.write_text(_MPD_CONF_FIXTURE)
+        # Point the helper at our temp conf via monkeypatching Path.home().
+        monkeypatch.setattr(audio_flow.Path, "home", lambda: tmp_path.parent)
+        # Actually we test by passing mpd_conf directly to _read_fifo_format,
+        # so just ensure the default-path branch is harmless: set HOME.
+        monkeypatch.setenv("HOME", str(tmp_path.parent))
+
+    def test_single_airplay_receiver(self, monkeypatch, tmp_path):
+        # mpd_conf lookup goes via the default ~/.mpd/mpd.conf path inside
+        # _probe_owntone_sink; create that exact path under tmp.
+        home = tmp_path / "home"
+        (home / ".mpd").mkdir(parents=True)
+        (home / ".mpd" / "mpd.conf").write_text(_MPD_CONF_FIXTURE)
+        monkeypatch.setattr(audio_flow.Path, "home", classmethod(lambda _c: home))
+        body = json.dumps(_OWNTONE_OUTPUTS_FIXTURE).encode("utf-8")
+        monkeypatch.setattr(
+            audio_flow.urllib.request, "urlopen",
+            lambda *_a, **_kw: _FakeUrlOpen(body),
+        )
+
+        sink = _probe_owntone_sink({"outputname": "Owntone Bridge"})
+        assert sink.backend == "airplay"
+        assert sink.sample_rate == 44100
+        assert sink.bits == 16
+        assert sink.channels == 2
+        assert sink.error is None
+        assert sink.airplay_outputs and len(sink.airplay_outputs) == 1
+        assert sink.airplay_outputs[0]["name"] == "JBL Boombox 3 Wi-Fi"
+        assert sink.name == "JBL Boombox 3 Wi-Fi"
+        assert sink.description == "OwnTone AirPlay 2 bridge"
+        assert sink.sample_fmt == "ALAC 16-bit"
+
+    def test_multi_room_receivers(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        (home / ".mpd").mkdir(parents=True)
+        (home / ".mpd" / "mpd.conf").write_text(_MPD_CONF_FIXTURE)
+        monkeypatch.setattr(audio_flow.Path, "home", classmethod(lambda _c: home))
+        # Two AirPlay outputs both selected
+        payload = {
+            "outputs": [
+                {"name": "JBL",     "type": "AirPlay 2", "selected": True,  "volume": 35},
+                {"name": "Kitchen", "type": "AirPlay",   "selected": True,  "volume": 60},
+            ]
+        }
+        body = json.dumps(payload).encode("utf-8")
+        monkeypatch.setattr(
+            audio_flow.urllib.request, "urlopen",
+            lambda *_a, **_kw: _FakeUrlOpen(body),
+        )
+
+        sink = _probe_owntone_sink({"outputname": "Owntone Bridge"})
+        assert sink.backend == "airplay"
+        assert sink.name == "2 receivers"
+        # Two AirPlay type variants -> multi-type description form
+        assert sink.description and sink.description.startswith("OwnTone")
+        assert "AirPlay" in sink.description
+        # Receiver names live in airplay_outputs, not description
+        names = [o["name"] for o in sink.airplay_outputs]
+        assert "JBL" in names and "Kitchen" in names
+        assert len(sink.airplay_outputs) == 2
+
+    def test_no_receivers_selected_returns_error(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        (home / ".mpd").mkdir(parents=True)
+        (home / ".mpd" / "mpd.conf").write_text(_MPD_CONF_FIXTURE)
+        monkeypatch.setattr(audio_flow.Path, "home", classmethod(lambda _c: home))
+        body = json.dumps({"outputs": []}).encode("utf-8")
+        monkeypatch.setattr(
+            audio_flow.urllib.request, "urlopen",
+            lambda *_a, **_kw: _FakeUrlOpen(body),
+        )
+
+        sink = _probe_owntone_sink({"outputname": "Owntone Bridge"})
+        assert sink.error is not None
+        assert "no AirPlay/Chromecast" in sink.error
+
+    def test_api_unreachable_returns_error(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        (home / ".mpd").mkdir(parents=True)
+        (home / ".mpd" / "mpd.conf").write_text(_MPD_CONF_FIXTURE)
+        monkeypatch.setattr(audio_flow.Path, "home", classmethod(lambda _c: home))
+
+        def boom(*_a, **_kw):
+            raise audio_flow.urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(audio_flow.urllib.request, "urlopen", boom)
+        sink = _probe_owntone_sink({"outputname": "Owntone Bridge"})
+        assert sink.error is not None
+        assert "OwnTone API error" in sink.error
+        # FIFO format still reported even if API unreachable
+        assert sink.sample_rate == 44100
+        assert sink.bits == 16
+
+
+class TestProbeSinkFifoPreference:
+    """``_probe_sink`` should prefer the Owntone Bridge FIFO over other FIFOs."""
+
+    def test_bridge_fifo_beats_visualizer_when_both_active(
+        self, monkeypatch, tmp_path,
+    ):
+        home = tmp_path / "home"
+        (home / ".mpd").mkdir(parents=True)
+        (home / ".mpd" / "mpd.conf").write_text(_MPD_CONF_FIXTURE)
+        monkeypatch.setattr(audio_flow.Path, "home", classmethod(lambda _c: home))
+        body = json.dumps(_OWNTONE_OUTPUTS_FIXTURE).encode("utf-8")
+        monkeypatch.setattr(
+            audio_flow.urllib.request, "urlopen",
+            lambda *_a, **_kw: _FakeUrlOpen(body),
+        )
+
+        # Visualizer first in the list -- old code would have picked it.
+        outputs = [
+            {"plugin": "fifo", "outputname": "Visualizer Feed"},
+            {"plugin": "fifo", "outputname": "Owntone Bridge"},
+        ]
+        sink = _probe_sink(outputs)
+        assert sink is not None
+        assert sink.backend == "airplay"
+        assert sink.airplay_outputs  # OwnTone was consulted
+
+    def test_falls_back_to_first_fifo_when_no_bridge(self):
+        outputs = [
+            {"plugin": "fifo", "outputname": "Visualizer Feed"},
+            {"plugin": "fifo", "outputname": "Other"},
+        ]
+        sink = _probe_sink(outputs)
+        assert sink is not None
+        assert sink.backend == "fifo"
+        assert sink.name == "Visualizer Feed"
+
+
+class TestComputeVerdictBitDepth:
+    def _mpd(self):
+        return MPDInfo(
+            state="play", file="x", artist=None, title=None,
+            sample_rate=44100, bits=24, channels=2,
+            elapsed=0.0, duration=100.0, active_outputs=[],
+        )
+
+    def _src_24bit(self):
+        cand = StreamCandidate(
+            index=0, codec="flac", sample_fmt="s32",
+            sample_rate=44100, channels=2,
+            bits_per_raw_sample=24, bitrate=1432000, tag_id="FLAC_HIRES,44100,24",
+        )
+        return SourceInfo(
+            provider="tidal", track_id="x", manifest_url="u",
+            candidates=[cand], selected=cand,
+        )
+
+    def _airplay_sink_16bit(self):
+        return SinkInfo(
+            backend="airplay", name="JBL", description="JBL  [AirPlay 2, vol=35]",
+            state="RUNNING", sample_fmt="ALAC 16-bit",
+            sample_rate=44100, channels=2, bits=16,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+        )
+
+    def test_24bit_source_to_16bit_airplay_sink_is_truncated(self):
+        v = _compute_verdict(self._mpd(), self._src_24bit(), self._airplay_sink_16bit())
+        assert v.label == "LOSSLESS (bit-depth truncated)"
+        assert "24-bit" in v.detail and "16-bit" in v.detail
+        assert v.bottleneck and "FIFO" in v.bottleneck
+        # Hint should reference the bridge FIFO with the source bit depth
+        assert any("Owntone Bridge" in h and "24" in h for h in v.hints)
+
+    def test_16bit_source_to_16bit_airplay_sink_is_bit_perfect(self):
+        # Same fixture but 16-bit source -> no truncation
+        cand = StreamCandidate(
+            index=0, codec="flac", sample_fmt="s16",
+            sample_rate=44100, channels=2,
+            bits_per_raw_sample=16, bitrate=933000, tag_id="FLAC,44100,16",
+        )
+        src = SourceInfo(
+            provider="tidal", track_id="x", manifest_url="u",
+            candidates=[cand], selected=cand,
+        )
+        v = _compute_verdict(self._mpd(), src, self._airplay_sink_16bit())
+        assert v.label == "BIT-PERFECT"
+
+    def test_unknown_sink_bits_does_not_trigger_truncation(self):
+        sink = SinkInfo(
+            backend="pulse", name="x", description="x", state="RUNNING",
+            sample_fmt="float32le", sample_rate=44100, channels=2, bits=None,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+        )
+        v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
+        assert v.label == "BIT-PERFECT"

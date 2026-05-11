@@ -21,12 +21,21 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from mpd import ConnectionError as MPDConnectionError
 from mpd import MPDClient as MPDClientBase
+
+# AirPlay bridge constants. The MPD FIFO output named here feeds OwnTone,
+# which fans out to AirPlay/Chromecast receivers. When this FIFO is the
+# active sink, we treat OwnTone as the real downstream and surface the
+# selected receivers as the sink in the flow report.
+_OWNTONE_API_URL = "http://localhost:3689/api/outputs"
+_BRIDGE_FIFO_NAME = "Owntone Bridge"
 
 # Bluetooth A2DP codec ceiling table.
 # Maps lowercase codec key -> (display name, bitrate description, lossy flag).
@@ -107,7 +116,8 @@ class MPDInfo:
 @dataclass
 class SinkInfo:
     """Output sink details, with Bluetooth-specific fields when applicable."""
-    backend: str  # "pulse" | "pipewire" | "alsa" | "jack" | "fifo" | "unknown"
+    # "pulse" | "pipewire" | "alsa" | "jack" | "fifo" | "airplay" | "chromecast" | "unknown"
+    backend: str
     name: str | None
     description: str | None
     state: str | None
@@ -120,6 +130,10 @@ class SinkInfo:
     bt_bitrate: str | None
     bt_lossy: bool | None
     error: str | None = None
+    bits: int | None = None
+    # Per-receiver detail when the sink is the OwnTone AirPlay/Chromecast fan-out.
+    # Each entry is a dict with at least: name, type, volume, selected.
+    airplay_outputs: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -415,11 +429,20 @@ def _probe_sink(active_outputs: list[dict[str, Any]]) -> SinkInfo | None:
             bt_bitrate=None, bt_lossy=None, error="no enabled MPD outputs",
         )
 
+    # Preference order: a hardware-ish backend first, then the OwnTone bridge
+    # FIFO (since it has a known downstream), then any FIFO, then whatever.
+    # Multiple FIFOs are common (e.g. a visualizer tap alongside the bridge);
+    # the previous code grabbed active_outputs[0] which was arbitrary.
     chosen: dict[str, Any] | None = None
     for o in active_outputs:
         if o.get("plugin") in ("pulse", "pipewire", "alsa", "jack"):
             chosen = o
             break
+    if chosen is None:
+        for o in active_outputs:
+            if o.get("plugin") == "fifo" and o.get("outputname") == _BRIDGE_FIFO_NAME:
+                chosen = o
+                break
     if chosen is None:
         chosen = active_outputs[0]
 
@@ -446,6 +469,8 @@ def _probe_sink(active_outputs: list[dict[str, Any]]) -> SinkInfo | None:
             error="JACK probe not implemented in v1",
         )
     if plugin == "fifo":
+        if chosen.get("outputname") == _BRIDGE_FIFO_NAME:
+            return _probe_owntone_sink(chosen)
         return SinkInfo(
             backend="fifo", name=str(chosen.get("outputname") or "fifo"),
             description="FIFO bridge",
@@ -462,6 +487,115 @@ def _probe_sink(active_outputs: list[dict[str, Any]]) -> SinkInfo | None:
         bt_bitrate=None, bt_lossy=None,
         error=f"unsupported MPD plugin: {plugin}",
     )
+
+
+# ---------- OwnTone (AirPlay / Chromecast bridge) probe ----------
+
+
+def _probe_owntone_sink(fifo_output: dict[str, Any]) -> SinkInfo:
+    """Resolve the real downstream when MPD's active output is the bridge FIFO.
+
+    Calls the OwnTone REST API at localhost:3689 and surfaces the selected
+    AirPlay/Chromecast receivers as the sink. Sample format reflects the FIFO
+    parameters from mpd.conf (typically 44100:16:2), which is what OwnTone
+    actually sees -- not MPD's input format.
+    """
+    fifo_name = str(fifo_output.get("outputname") or _BRIDGE_FIFO_NAME)
+    fifo_rate, fifo_bits, fifo_ch = _read_fifo_format(fifo_name)
+
+    req = urllib.request.Request(_OWNTONE_API_URL)
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return SinkInfo(
+            backend="airplay", name=fifo_name,
+            description="OwnTone bridge (API unreachable)",
+            state=None, sample_fmt=None,
+            sample_rate=fifo_rate, channels=fifo_ch, bits=fifo_bits,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+            error=f"OwnTone API error: {e}",
+        )
+
+    outputs = data.get("outputs", []) if isinstance(data, dict) else []
+    selected = [
+        o for o in outputs
+        if o.get("selected")
+        and isinstance(o.get("type"), str)
+        and o["type"].startswith(("AirPlay", "Chromecast"))
+    ]
+    if not selected:
+        return SinkInfo(
+            backend="airplay", name=fifo_name,
+            description="OwnTone bridge (no receiver selected)",
+            state="idle", sample_fmt=None,
+            sample_rate=fifo_rate, channels=fifo_ch, bits=fifo_bits,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+            error="FIFO drains to OwnTone but no AirPlay/Chromecast output is selected",
+        )
+
+    types = sorted({str(o.get("type", "")) for o in selected})
+    backend = "chromecast" if all("Chromecast" in t for t in types) else "airplay"
+    receiver_names = [str(o.get("name", "?")) for o in selected]
+    name = (
+        receiver_names[0] if len(selected) == 1
+        else f"{len(selected)} receivers"
+    )
+    description = (
+        f"OwnTone {types[0]} bridge" if len(types) == 1
+        else "OwnTone bridge (" + ", ".join(types) + ")"
+    )
+    sample_fmt = None
+    if fifo_bits is not None:
+        codec = "ALAC" if backend == "airplay" else "PCM"
+        sample_fmt = f"{codec} {fifo_bits}-bit"
+
+    return SinkInfo(
+        backend=backend, name=name, description=description,
+        state="RUNNING", sample_fmt=sample_fmt,
+        sample_rate=fifo_rate, channels=fifo_ch, bits=fifo_bits,
+        is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+        bt_bitrate=None, bt_lossy=None,
+        airplay_outputs=selected,
+    )
+
+
+_MPD_AUDIO_OUTPUT_BLOCK_RE = re.compile(
+    r"audio_output\s*\{([^}]*)\}", re.DOTALL,
+)
+_MPD_KV_RE = re.compile(r'(\w+)\s+"([^"]*)"')
+
+
+def _read_fifo_format(
+    output_name: str, mpd_conf: Path | None = None,
+) -> tuple[int | None, int | None, int | None]:
+    """Parse mpd.conf, return (rate, bits, channels) for the named FIFO block.
+
+    Returns (None, None, None) if the file or block is missing, or if the block
+    has no ``format`` directive. The bridge installer writes 44100:16:2; users
+    may have overridden it.
+    """
+    if mpd_conf is None:
+        mpd_conf = Path.home() / ".mpd" / "mpd.conf"
+    if not mpd_conf.exists():
+        return None, None, None
+    try:
+        text = mpd_conf.read_text()
+    except OSError:
+        return None, None, None
+
+    for block in _MPD_AUDIO_OUTPUT_BLOCK_RE.finditer(text):
+        body = block.group(1)
+        kvs = dict(_MPD_KV_RE.findall(body))
+        if kvs.get("name") != output_name:
+            continue
+        fmt = kvs.get("format")
+        if not fmt:
+            return None, None, None
+        return _parse_mpd_audio_field(fmt)
+    return None, None, None
 
 
 def _probe_pulse_sink() -> SinkInfo:
@@ -701,9 +835,12 @@ def _compute_verdict(
         src_lossless = None
 
     src_rate = source.selected.sample_rate if source and source.selected else None
+    src_bits = source.selected.bits_per_raw_sample if source and source.selected else None
     sink_rate = sink.sample_rate if sink else None
+    sink_bits = sink.bits if sink else None
     sink_lossy = bool(sink and sink.is_bluetooth and sink.bt_lossy)
     rate_mismatch = bool(src_rate and sink_rate and src_rate != sink_rate)
+    bits_truncated = bool(src_bits and sink_bits and src_bits > sink_bits)
     mpd_rate = mpd.sample_rate
     if not src_rate and mpd_rate and sink_rate and mpd_rate != sink_rate:
         rate_mismatch = True
@@ -739,6 +876,26 @@ def _compute_verdict(
                 hints=[
                     f"set the sink sample rate to {src_rate} Hz for bit-perfect playback",
                 ],
+            )
+        if bits_truncated:
+            bottleneck = (
+                "bridge FIFO bit-depth" if sink and sink.backend in ("airplay", "chromecast")
+                else "sink bit-depth"
+            )
+            hint = (
+                f'set the "{_BRIDGE_FIFO_NAME}" audio_output format in mpd.conf to '
+                f'"{src_rate}:{src_bits}:2" if the receiver supports it'
+                if sink and sink.backend in ("airplay", "chromecast")
+                else f"configure the sink for {src_bits}-bit playback"
+            )
+            return Verdict(
+                label="LOSSLESS (bit-depth truncated)",
+                detail=(
+                    f"source {src_bits}-bit truncated to {sink_bits}-bit "
+                    "before reaching the sink"
+                ),
+                bottleneck=bottleneck,
+                hints=[hint],
             )
         return Verdict(
             label="BIT-PERFECT",
@@ -844,13 +1001,21 @@ def format_default(report: FlowReport, color: Any) -> str:
         if sink.description:
             lines.append(f"Device:       {sink.description}")
         if sink.sample_rate:
-            spec = format_audio_spec(sink.sample_rate, None, sink.channels)
+            spec = format_audio_spec(sink.sample_rate, sink.bits, sink.channels)
             fmt = f" ({sink.sample_fmt})" if sink.sample_fmt else ""
             resample = ""
             mpd_r = mpd.sample_rate
             if mpd_r and sink.sample_rate and mpd_r != sink.sample_rate:
                 resample = f"   resample {mpd_r} -> {sink.sample_rate}"
             lines.append(f"Mix format:   {spec}{fmt}{resample}")
+        if sink.airplay_outputs:
+            label = "Receivers" if len(sink.airplay_outputs) > 1 else "Receiver"
+            for o in sink.airplay_outputs:
+                rname = o.get("name", "?")
+                rtype = o.get("type", "?")
+                rvol = o.get("volume", "?")
+                lines.append(f"{label}:    {rname}  [{rtype}, vol={rvol}]")
+                label = " " * len(label)
         if sink.is_bluetooth:
             codec_str = sink.bt_codec_display or "unknown"
             br = sink.bt_bitrate or ""
