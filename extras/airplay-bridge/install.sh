@@ -29,6 +29,7 @@ CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/mpd-owntone-bridge"
 CFG_FILE="$CFG_DIR/config.env"
 MPD_CONF="${HOME}/.mpd/mpd.conf"
 I3_CONF="${HOME}/.i3/config"
+SWAY_CONF="${HOME}/.config/sway/config"
 SYSTEMD_UNIT="${HOME}/.config/systemd/user/mpd-owntone-metadata.service"
 PW_DROPIN="${HOME}/.config/pipewire/pipewire-pulse.conf.d/20-raop-discover.conf"
 
@@ -138,7 +139,13 @@ run_checks() {
   echo; echo "== User integrations =="
   check_service
   if file_has "$MPD_CONF" "$BEGIN_MARK"; then ok "mpd.conf has bridge block"; else miss "mpd.conf lacks bridge block"; fi
-  if file_has "$I3_CONF" "$BEGIN_MARK"; then ok "i3 config has bridge bindings"; else miss "i3 config lacks bridge bindings"; fi
+  if [[ -f "$I3_CONF" ]]; then
+    if file_has "$I3_CONF" "$BEGIN_MARK"; then ok "i3 config has bridge bindings"; else miss "i3 config lacks bridge bindings"; fi
+  fi
+  if [[ -f "$SWAY_CONF" ]]; then
+    if file_has "$SWAY_CONF" "$BEGIN_MARK"; then ok "sway config has bridge bindings"; else miss "sway config lacks bridge bindings"; fi
+  fi
+  if [[ ! -f "$I3_CONF" && ! -f "$SWAY_CONF" ]]; then miss "no i3 or sway config found"; fi
   if [[ -f "$PW_DROPIN" ]]; then ok "pipewire raop drop-in"; else miss "pipewire raop drop-in"; fi
 
   echo; echo "== Runtime =="
@@ -270,9 +277,11 @@ EOF
   info "reload MPD to pick up changes: systemctl --user restart mpd"
 }
 
-patch_i3_conf() {
-  info "patching $I3_CONF (vol-wrap + speaker-rofi keybindings)"
-  [[ -f "$I3_CONF" ]] || { warn "$I3_CONF not found; skipping"; return 0; }
+patch_wm_conf() {
+  # $1 = config file path, $2 = label (i3/sway), $3 = reload command
+  local conf="$1" label="$2" reload="$3"
+  [[ -f "$conf" ]] || { info "$label config $conf not found; skipping"; return 0; }
+  info "patching $conf ($label: vol-wrap + speaker-rofi keybindings)"
   local block
   block=$(cat <<EOF
 bindsym XF86AudioRaiseVolume exec $SCRIPT_DIR/vol-wrap up
@@ -284,8 +293,16 @@ bindsym Mode_switch+x        exec $SCRIPT_DIR/vol-wrap mute
 bindsym \$mod+Shift+s        exec $SCRIPT_DIR/speaker-rofi
 EOF
   )
-  replace_block "$I3_CONF" "$block"
-  info "reload i3: i3-msg reload"
+  replace_block "$conf" "$block"
+  info "reload $label: $reload"
+}
+
+patch_wm_confs() {
+  patch_wm_conf "$I3_CONF"   "i3"   "i3-msg reload"
+  patch_wm_conf "$SWAY_CONF" "sway" "swaymsg reload"
+  if [[ ! -f "$I3_CONF" && ! -f "$SWAY_CONF" ]]; then
+    warn "no i3 or sway config found; volume/speaker keybindings not installed"
+  fi
 }
 
 install_pipewire_dropin() {
@@ -325,7 +342,7 @@ discover_and_configure
 install_pipewire_dropin
 install_systemd_unit
 patch_mpd_conf
-patch_i3_conf
+patch_wm_confs
 
 echo
 info "install complete."
