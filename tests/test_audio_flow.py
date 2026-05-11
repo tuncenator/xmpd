@@ -843,13 +843,15 @@ class TestComputeVerdictBitDepth:
             bt_bitrate=None, bt_lossy=None,
         )
 
-    def test_24bit_source_to_16bit_airplay_sink_is_truncated(self):
+    def test_24bit_source_to_16bit_airplay_sink_is_protocol_ceiling(self):
+        # AirPlay-backed sink: 16-bit ceiling is protocol-level via OwnTone,
+        # not a config bottleneck -- verdict is plain LOSSLESS with detail
+        # explaining the cap, no actionable hint.
         v = _compute_verdict(self._mpd(), self._src_24bit(), self._airplay_sink_16bit())
-        assert v.label == "LOSSLESS (bit-depth truncated)"
-        assert "24-bit" in v.detail and "16-bit" in v.detail
-        assert v.bottleneck and "FIFO" in v.bottleneck
-        # Hint should reference the bridge FIFO with the source bit depth
-        assert any("Owntone Bridge" in h and "24" in h for h in v.hints)
+        assert v.label == "LOSSLESS"
+        assert "AirPlay" in v.detail and "16-bit" in v.detail
+        assert v.bottleneck is None
+        assert v.hints == []
 
     def test_16bit_source_to_16bit_airplay_sink_is_bit_perfect(self):
         # Same fixture but 16-bit source -> no truncation
@@ -875,7 +877,7 @@ class TestComputeVerdictBitDepth:
         v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
         assert v.label == "BIT-PERFECT"
 
-    def test_airplay1_truncation_is_protocol_ceiling_not_bottleneck(self):
+    def test_airplay1_receiver_treats_truncation_as_protocol_ceiling(self):
         sink = SinkInfo(
             backend="airplay", name="JBL", description="OwnTone AirPlay bridge",
             state="RUNNING", sample_fmt="ALAC 16-bit",
@@ -888,13 +890,14 @@ class TestComputeVerdictBitDepth:
         )
         v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
         assert v.label == "LOSSLESS"
-        assert "AirPlay 1" in v.detail
+        assert "AirPlay" in v.detail
         assert "16-bit" in v.detail
-        # No actionable bottleneck or hint for protocol-defined ceiling
         assert v.bottleneck is None
         assert v.hints == []
 
-    def test_airplay2_truncation_still_flags_fifo_bottleneck(self):
+    def test_airplay2_receiver_also_treats_truncation_as_protocol_ceiling(self):
+        # OwnTone's AP2 encoder caps at 16-bit/44.1 kHz in practice, same as
+        # AP1, so the verdict shouldn't flag a config bottleneck for AP2 either.
         sink = SinkInfo(
             backend="airplay", name="JBL", description="OwnTone AirPlay 2 bridge",
             state="RUNNING", sample_fmt="ALAC 16-bit",
@@ -906,13 +909,11 @@ class TestComputeVerdictBitDepth:
             ],
         )
         v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
-        assert v.label == "LOSSLESS (bit-depth truncated)"
-        assert v.bottleneck and "FIFO" in v.bottleneck
-        assert v.hints
+        assert v.label == "LOSSLESS"
+        assert v.bottleneck is None
+        assert v.hints == []
 
-    def test_mixed_airplay1_and_airplay2_treats_as_v1_ceiling(self):
-        # If any receiver is AP1, OwnTone must downconvert to 16-bit for the
-        # whole selection -- so v1 ceiling dominates the verdict.
+    def test_mixed_airplay1_and_airplay2_treats_as_protocol_ceiling(self):
         sink = SinkInfo(
             backend="airplay", name="2 receivers",
             description="OwnTone bridge (AirPlay, AirPlay 2)",
@@ -928,3 +929,22 @@ class TestComputeVerdictBitDepth:
         v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
         assert v.label == "LOSSLESS"
         assert v.bottleneck is None
+
+    def test_chromecast_truncation_still_flagged_as_bottleneck(self):
+        # Non-AirPlay bridges (e.g. Chromecast) still benefit from bumping
+        # the bridge format; only AirPlay's OwnTone path has the hard 16-bit
+        # ceiling. So Chromecast truncation keeps the actionable bottleneck.
+        sink = SinkInfo(
+            backend="chromecast", name="JBL",
+            description="OwnTone Chromecast bridge",
+            state="RUNNING", sample_fmt="PCM 16-bit",
+            sample_rate=44100, channels=2, bits=16,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+            airplay_outputs=[
+                {"name": "JBL", "type": "Chromecast", "selected": True, "volume": 50},
+            ],
+        )
+        v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
+        assert v.label == "LOSSLESS (bit-depth truncated)"
+        assert v.bottleneck and "bit-depth" in v.bottleneck

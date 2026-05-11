@@ -36,6 +36,27 @@ from mpd import MPDClient as MPDClientBase
 # selected receivers as the sink in the flow report.
 _OWNTONE_API_URL = "http://localhost:3689/api/outputs"
 _BRIDGE_FIFO_NAME = "Owntone Bridge"
+# When the bridge feeds OwnTone via a PipeWire null sink instead of a raw FIFO
+# (the architecture installed by airplay-bridge install.sh), MPD's output is
+# a pulse sink rather than a fifo. The probe identifies the bridge by matching
+# this sink name from `pactl list sinks`.
+_BRIDGE_PULSE_SINK = "owntone-bridge"
+
+# sample_fmt -> bits-per-sample mapping, used by both pulse and FIFO probes.
+_SAMPLE_FMT_BITS: dict[str, int] = {
+    "u8": 8, "s8": 8,
+    "s16le": 16, "s16be": 16, "s16ne": 16,
+    "s24le": 24, "s24be": 24, "s24ne": 24,
+    "s24-32le": 24, "s24-32be": 24, "s24-32ne": 24,
+    "s32le": 32, "s32be": 32, "s32ne": 32,
+    "float32le": 32, "float32be": 32, "float32ne": 32,
+}
+
+
+def _bits_from_sample_fmt(fmt: str | None) -> int | None:
+    if not fmt:
+        return None
+    return _SAMPLE_FMT_BITS.get(fmt.lower())
 
 # Bluetooth A2DP codec ceiling table.
 # Maps lowercase codec key -> (display name, bitrate description, lossy flag).
@@ -492,32 +513,18 @@ def _probe_sink(active_outputs: list[dict[str, Any]]) -> SinkInfo | None:
 # ---------- OwnTone (AirPlay / Chromecast bridge) probe ----------
 
 
-def _probe_owntone_sink(fifo_output: dict[str, Any]) -> SinkInfo:
-    """Resolve the real downstream when MPD's active output is the bridge FIFO.
+def _owntone_selected_outputs() -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Query OwnTone's REST API for selected AirPlay/Chromecast outputs.
 
-    Calls the OwnTone REST API at localhost:3689 and surfaces the selected
-    AirPlay/Chromecast receivers as the sink. Sample format reflects the FIFO
-    parameters from mpd.conf (typically 44100:16:2), which is what OwnTone
-    actually sees -- not MPD's input format.
+    Returns (selected_list, error). On API failure returns (None, error_string);
+    on success with no selections returns ([], None).
     """
-    fifo_name = str(fifo_output.get("outputname") or _BRIDGE_FIFO_NAME)
-    fifo_rate, fifo_bits, fifo_ch = _read_fifo_format(fifo_name)
-
     req = urllib.request.Request(_OWNTONE_API_URL)
     try:
         with urllib.request.urlopen(req, timeout=2) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, ValueError) as e:
-        return SinkInfo(
-            backend="airplay", name=fifo_name,
-            description="OwnTone bridge (API unreachable)",
-            state=None, sample_fmt=None,
-            sample_rate=fifo_rate, channels=fifo_ch, bits=fifo_bits,
-            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
-            bt_bitrate=None, bt_lossy=None,
-            error=f"OwnTone API error: {e}",
-        )
-
+        return None, f"OwnTone API error: {e}"
     outputs = data.get("outputs", []) if isinstance(data, dict) else []
     selected = [
         o for o in outputs
@@ -525,17 +532,15 @@ def _probe_owntone_sink(fifo_output: dict[str, Any]) -> SinkInfo:
         and isinstance(o.get("type"), str)
         and o["type"].startswith(("AirPlay", "Chromecast"))
     ]
-    if not selected:
-        return SinkInfo(
-            backend="airplay", name=fifo_name,
-            description="OwnTone bridge (no receiver selected)",
-            state="idle", sample_fmt=None,
-            sample_rate=fifo_rate, channels=fifo_ch, bits=fifo_bits,
-            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
-            bt_bitrate=None, bt_lossy=None,
-            error="FIFO drains to OwnTone but no AirPlay/Chromecast output is selected",
-        )
+    return selected, None
 
+
+def _build_owntone_sink_info(
+    selected: list[dict[str, Any]],
+    rate: int | None, bits: int | None, channels: int | None,
+    fallback_name: str,
+) -> SinkInfo:
+    """Build a SinkInfo describing the OwnTone fan-out from selected receivers."""
     types = sorted({str(o.get("type", "")) for o in selected})
     backend = "chromecast" if all("Chromecast" in t for t in types) else "airplay"
     receiver_names = [str(o.get("name", "?")) for o in selected]
@@ -548,18 +553,51 @@ def _probe_owntone_sink(fifo_output: dict[str, Any]) -> SinkInfo:
         else "OwnTone bridge (" + ", ".join(types) + ")"
     )
     sample_fmt = None
-    if fifo_bits is not None:
+    if bits is not None:
         codec = "ALAC" if backend == "airplay" else "PCM"
-        sample_fmt = f"{codec} {fifo_bits}-bit"
-
+        sample_fmt = f"{codec} {bits}-bit"
     return SinkInfo(
-        backend=backend, name=name, description=description,
+        backend=backend, name=name or fallback_name, description=description,
         state="RUNNING", sample_fmt=sample_fmt,
-        sample_rate=fifo_rate, channels=fifo_ch, bits=fifo_bits,
+        sample_rate=rate, channels=channels, bits=bits,
         is_bluetooth=False, bt_codec=None, bt_codec_display=None,
         bt_bitrate=None, bt_lossy=None,
         airplay_outputs=selected,
     )
+
+
+def _probe_owntone_sink(fifo_output: dict[str, Any]) -> SinkInfo:
+    """Resolve the real downstream when MPD's active output is the bridge FIFO.
+
+    Calls the OwnTone REST API at localhost:3689 and surfaces the selected
+    AirPlay/Chromecast receivers as the sink. Sample format reflects the FIFO
+    parameters from mpd.conf (typically 44100:16:2), which is what OwnTone
+    actually sees -- not MPD's input format.
+    """
+    fifo_name = str(fifo_output.get("outputname") or _BRIDGE_FIFO_NAME)
+    fifo_rate, fifo_bits, fifo_ch = _read_fifo_format(fifo_name)
+    selected, err = _owntone_selected_outputs()
+    if err is not None:
+        return SinkInfo(
+            backend="airplay", name=fifo_name,
+            description="OwnTone bridge (API unreachable)",
+            state=None, sample_fmt=None,
+            sample_rate=fifo_rate, channels=fifo_ch, bits=fifo_bits,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+            error=err,
+        )
+    if not selected:
+        return SinkInfo(
+            backend="airplay", name=fifo_name,
+            description="OwnTone bridge (no receiver selected)",
+            state="idle", sample_fmt=None,
+            sample_rate=fifo_rate, channels=fifo_ch, bits=fifo_bits,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+            error="FIFO drains to OwnTone but no AirPlay/Chromecast output is selected",
+        )
+    return _build_owntone_sink_info(selected, fifo_rate, fifo_bits, fifo_ch, fifo_name)
 
 
 _MPD_AUDIO_OUTPUT_BLOCK_RE = re.compile(
@@ -660,14 +698,31 @@ def _probe_pulse_sink() -> SinkInfo:
                 bt_lossy = True
             bt_codec = codec_raw
 
+    # When MPD's pulse output targets the OwnTone bridge null sink, the real
+    # downstream is the AirPlay/Chromecast receiver fan-out -- query the
+    # OwnTone API and surface that instead of reporting the null sink itself.
+    if sink_name == _BRIDGE_PULSE_SINK:
+        selected, _err = _owntone_selected_outputs()
+        if selected:
+            return _build_owntone_sink_info(
+                selected,
+                rate=props.get("sample_rate"),
+                bits=_bits_from_sample_fmt(props.get("sample_fmt")),
+                channels=props.get("channels"),
+                fallback_name=sink_name,
+            )
+        # API failure or no selection: fall through to the generic pulse
+        # SinkInfo so the report still says something useful.
+
     return SinkInfo(
         backend="pulse",
-        name=default or None,
+        name=sink_name or default or None,
         description=props.get("description"),
         state=props.get("state"),
         sample_fmt=props.get("sample_fmt"),
         sample_rate=props.get("sample_rate"),
         channels=props.get("channels"),
+        bits=_bits_from_sample_fmt(props.get("sample_fmt")),
         is_bluetooth=is_bt,
         bt_codec=bt_codec,
         bt_codec_display=bt_codec_display,
@@ -878,33 +933,37 @@ def _compute_verdict(
                 ],
             )
         if bits_truncated:
-            # AirPlay 1 (RAOP) caps the wire format at 16-bit/44.1kHz by spec.
-            # If any selected receiver is AP1, OwnTone must encode 16-bit ALAC
-            # regardless of upstream bit depth, so the FIFO matching the wire
-            # at 16-bit isn't a config bottleneck -- it's the protocol ceiling.
-            airplay_has_v1 = bool(
-                sink and sink.airplay_outputs and any(
-                    str(o.get("type", "")) == "AirPlay"
-                    for o in sink.airplay_outputs
+            # OwnTone's AirPlay implementation encodes 16-bit/44.1 kHz ALAC in
+            # practice for both AP1 and AP2 receivers, regardless of upstream
+            # bit depth. So when the sink is the OwnTone bridge, the 16-bit
+            # ceiling is protocol-level (not a config bottleneck) and widening
+            # the bridge format wouldn't help.
+            sink_is_airplay = bool(
+                sink and (
+                    sink.backend == "airplay"
+                    or (sink.airplay_outputs and any(
+                        str(o.get("type", "")).startswith("AirPlay")
+                        for o in sink.airplay_outputs
+                    ))
                 )
             )
-            if airplay_has_v1:
+            if sink_is_airplay:
                 return Verdict(
                     label="LOSSLESS",
                     detail=(
-                        f"AirPlay 1 wire format caps at 16-bit/44.1 kHz; "
-                        f"source's extra bits ({src_bits}-bit) are dropped at "
-                        f"the FIFO before AP1 encoding"
+                        f"AirPlay via OwnTone caps at 16-bit/44.1 kHz in "
+                        f"practice; source's extra bits ({src_bits}-bit) are "
+                        f"dropped at the bridge before AirPlay encoding"
                     ),
                 )
             bottleneck = (
-                "bridge FIFO bit-depth"
+                "bridge bit-depth"
                 if sink and sink.backend in ("airplay", "chromecast")
                 else "sink bit-depth"
             )
             hint = (
-                f'set the "{_BRIDGE_FIFO_NAME}" audio_output format in mpd.conf to '
-                f'"{src_rate}:{src_bits}:2" if the receiver supports it'
+                f"set the bridge sample format to {src_bits}-bit if the "
+                "receiver supports it"
                 if sink and sink.backend in ("airplay", "chromecast")
                 else f"configure the sink for {src_bits}-bit playback"
             )

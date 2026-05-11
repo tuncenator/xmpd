@@ -31,7 +31,9 @@ MPD_CONF="${HOME}/.mpd/mpd.conf"
 I3_CONF="${HOME}/.i3/config"
 SWAY_CONF="${HOME}/.config/sway/config"
 SYSTEMD_UNIT="${HOME}/.config/systemd/user/mpd-owntone-metadata.service"
+PADDER_UNIT="${HOME}/.config/systemd/user/mpd-owntone-padder.service"
 PW_DROPIN="${HOME}/.config/pipewire/pipewire-pulse.conf.d/20-raop-discover.conf"
+PW_NULLSINK="${HOME}/.config/pipewire/pipewire.conf.d/30-owntone-bridge.conf"
 
 # -------- helpers --------
 
@@ -152,10 +154,14 @@ run_checks() {
   fi
   if [[ ! -f "$I3_CONF" && ! -f "$SWAY_CONF" ]]; then miss "no i3 or sway config found"; fi
   if [[ -f "$PW_DROPIN" ]]; then ok "pipewire raop drop-in"; else miss "pipewire raop drop-in"; fi
+  if [[ -f "$PW_NULLSINK" ]]; then ok "pipewire null-sink drop-in"; else miss "pipewire null-sink drop-in"; fi
+  if [[ -f "$PADDER_UNIT" ]]; then ok "padder systemd unit"; else miss "padder systemd unit"; fi
 
   echo; echo "== Runtime =="
   if systemctl is-active --quiet owntone; then ok "owntone.service running"; else miss "owntone.service not running"; fi
   if systemctl --user is-active --quiet mpd-owntone-metadata; then ok "mpd-owntone-metadata running"; else miss "mpd-owntone-metadata not running"; fi
+  if systemctl --user is-active --quiet mpd-owntone-padder; then ok "mpd-owntone-padder running"; else miss "mpd-owntone-padder not running"; fi
+  if pactl list short sinks 2>/dev/null | grep -q '^\S*\s*owntone-bridge\s'; then ok "owntone-bridge null sink loaded"; else miss "owntone-bridge null sink not loaded"; fi
   if command curl --silent --max-time 1 "$OWNTONE_API/outputs" >/dev/null; then
     ok "owntone API reachable"
     local n_ap
@@ -170,7 +176,7 @@ run_checks() {
 
 install_packages() {
   local needed=()
-  for p in owntone-server pipewire-zeroconf jq avahi rofi; do
+  for p in owntone-server pipewire-zeroconf libpulse jq avahi rofi; do
     pkg_installed "$p" || needed+=("$p")
   done
   if (( ${#needed[@]} == 0 )); then
@@ -275,19 +281,24 @@ install_systemd_unit() {
 patch_mpd_conf() {
   info "patching $MPD_CONF (adding Owntone Bridge output)"
   [[ -f "$MPD_CONF" ]] || fatal "$MPD_CONF not found; create your MPD config first"
+  # MPD writes to a PipeWire null sink (owntone-bridge) rather than directly
+  # to the FIFO. The null sink runs on the audio clock and emits silence on
+  # its monitor when idle; parec then pumps the monitor into the FIFO at a
+  # constant rate. This decouples OwnTone's real-time AirPlay session from
+  # MPD's source-side stalls (Tidal proxy EOFs between tracks, network
+  # hiccups). Without this layer, AP2 receivers like JBL Boombox 3 tear
+  # down the RTSP session on the first underrun.
   local block
-  # always_on=yes keeps MPD writing zero-PCM into the FIFO during track
-  # transitions (Tidal proxy briefly EOFs between streams). Without it,
-  # OwnTone's pipe consumer treats the gap as end-of-stream and detaches
-  # the read handle; AirPlay then goes silent until something pokes
-  # /api/player/play (and sometimes not even then).
   block=$(cat <<'EOF'
 audio_output {
-	type      "fifo"
-	name      "Owntone Bridge"
-	path      "/var/lib/owntone-stream/mpd.pcm"
-	format    "44100:16:2"
-	always_on "yes"
+	type        "pulse"
+	name        "Owntone Bridge"
+	sink        "owntone-bridge"
+	format      "44100:16:2"
+	always_on   "yes"
+	# Volume is controlled per-receiver via OwnTone's API; bypass the
+	# PulseAudio mixer so MPD passes audio through at unity gain.
+	mixer_type  "none"
 }
 EOF
   )
@@ -333,6 +344,79 @@ pulse.cmd = [
 EOF
 }
 
+install_pipewire_nullsink() {
+  info "installing pipewire null-sink drop-in -> $PW_NULLSINK"
+  mkdir -p "$(dirname "$PW_NULLSINK")"
+  cat > "$PW_NULLSINK" <<'EOF'
+# Null sink that fronts the OwnTone AirPlay bridge.
+#
+# Why this exists: OwnTone reads audio from a FIFO at real-time rate. MPD's
+# pipe sources (xmpd's Tidal stream proxy) briefly stall during track
+# transitions, leaving the FIFO empty; OwnTone's player.c then logs
+# "Source is not providing sufficient data" and suspends playback, which
+# on AP2 receivers like the JBL Boombox 3 tears down the RTSP session.
+# See owntone-server issues #452, #1343.
+#
+# Solution: put a PipeWire null sink between MPD and the FIFO. The sink
+# runs on its own clock (always-process=true) and emits silence on its
+# monitor whenever the input is idle. A parec systemd user unit
+# (mpd-owntone-padder.service) pumps the monitor into the FIFO at exactly
+# 44100*2*2 bytes/sec, so the FIFO is never empty regardless of upstream.
+
+context.objects = [
+    {
+        factory = adapter
+        args = {
+            factory.name              = support.null-audio-sink
+            node.name                 = "owntone-bridge"
+            node.description          = "OwnTone Bridge Null Sink"
+            media.class               = Audio/Sink
+            audio.format              = S16LE
+            audio.rate                = 44100
+            audio.channels            = 2
+            audio.position            = [ FL FR ]
+            monitor.channel-volumes   = true
+            node.always-process       = true
+            adapter.auto-port-config  = {
+                mode     = dsp
+                monitor  = true
+                position = preserve
+            }
+        }
+    }
+]
+EOF
+  systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null || true
+}
+
+install_padder_unit() {
+  info "installing systemd user unit -> $PADDER_UNIT"
+  mkdir -p "$(dirname "$PADDER_UNIT")"
+  local parec_path
+  parec_path="$(command -v parec || echo /usr/sbin/parec)"
+  cat > "$PADDER_UNIT" <<EOF
+[Unit]
+Description=Pump PipeWire null-sink monitor into OwnTone FIFO at real-time rate
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service pipewire-pulse.service wireplumber.service
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+# parec opens stdout (the FIFO) which blocks until OwnTone has the read
+# end open. systemd restarts on PulseAudio hiccups or owntone restarts.
+ExecStart=/bin/sh -c 'exec $parec_path --device=owntone-bridge.monitor --format=s16le --rate=44100 --channels=2 --latency-msec=100 --no-remix --client-name=mpd-owntone-padder > /var/lib/owntone-stream/mpd.pcm'
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+  systemctl --user daemon-reload
+  systemctl --user enable --now mpd-owntone-padder
+}
+
 make_executable() {
   chmod +x "$SCRIPT_DIR"/mpd_owntone_metadata.py \
            "$SCRIPT_DIR"/vol-wrap \
@@ -358,7 +442,9 @@ install_packages
 bootstrap_owntone_state
 discover_and_configure
 install_pipewire_dropin
+install_pipewire_nullsink
 install_systemd_unit
+install_padder_unit
 patch_mpd_conf
 patch_wm_confs
 
@@ -366,7 +452,7 @@ echo
 info "install complete."
 info "you may need to:"
 info "  - log out/in if you were just added to the owntone group"
-info "  - systemctl --user restart mpd (to pick up the new fifo output)"
-info "  - i3-msg reload (to activate new keybindings)"
+info "  - systemctl --user restart mpd (to pick up the new pulse output)"
+info "  - i3-msg reload / swaymsg reload (to activate new keybindings)"
 info
 info "run '$0 --check' any time to audit state."
