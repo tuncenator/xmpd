@@ -874,3 +874,57 @@ class TestComputeVerdictBitDepth:
         )
         v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
         assert v.label == "BIT-PERFECT"
+
+    def test_airplay1_truncation_is_protocol_ceiling_not_bottleneck(self):
+        sink = SinkInfo(
+            backend="airplay", name="JBL", description="OwnTone AirPlay bridge",
+            state="RUNNING", sample_fmt="ALAC 16-bit",
+            sample_rate=44100, channels=2, bits=16,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+            airplay_outputs=[
+                {"name": "JBL", "type": "AirPlay", "selected": True, "volume": 25},
+            ],
+        )
+        v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
+        assert v.label == "LOSSLESS"
+        assert "AirPlay 1" in v.detail
+        assert "16-bit" in v.detail
+        # No actionable bottleneck or hint for protocol-defined ceiling
+        assert v.bottleneck is None
+        assert v.hints == []
+
+    def test_airplay2_truncation_still_flags_fifo_bottleneck(self):
+        sink = SinkInfo(
+            backend="airplay", name="JBL", description="OwnTone AirPlay 2 bridge",
+            state="RUNNING", sample_fmt="ALAC 16-bit",
+            sample_rate=44100, channels=2, bits=16,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+            airplay_outputs=[
+                {"name": "JBL", "type": "AirPlay 2", "selected": True, "volume": 25},
+            ],
+        )
+        v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
+        assert v.label == "LOSSLESS (bit-depth truncated)"
+        assert v.bottleneck and "FIFO" in v.bottleneck
+        assert v.hints
+
+    def test_mixed_airplay1_and_airplay2_treats_as_v1_ceiling(self):
+        # If any receiver is AP1, OwnTone must downconvert to 16-bit for the
+        # whole selection -- so v1 ceiling dominates the verdict.
+        sink = SinkInfo(
+            backend="airplay", name="2 receivers",
+            description="OwnTone bridge (AirPlay, AirPlay 2)",
+            state="RUNNING", sample_fmt="ALAC 16-bit",
+            sample_rate=44100, channels=2, bits=16,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+            airplay_outputs=[
+                {"name": "Denon", "type": "AirPlay",   "selected": True, "volume": 29},
+                {"name": "JBL",   "type": "AirPlay 2", "selected": True, "volume": 25},
+            ],
+        )
+        v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
+        assert v.label == "LOSSLESS"
+        assert v.bottleneck is None

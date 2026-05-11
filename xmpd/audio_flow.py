@@ -878,8 +878,28 @@ def _compute_verdict(
                 ],
             )
         if bits_truncated:
+            # AirPlay 1 (RAOP) caps the wire format at 16-bit/44.1kHz by spec.
+            # If any selected receiver is AP1, OwnTone must encode 16-bit ALAC
+            # regardless of upstream bit depth, so the FIFO matching the wire
+            # at 16-bit isn't a config bottleneck -- it's the protocol ceiling.
+            airplay_has_v1 = bool(
+                sink and sink.airplay_outputs and any(
+                    str(o.get("type", "")) == "AirPlay"
+                    for o in sink.airplay_outputs
+                )
+            )
+            if airplay_has_v1:
+                return Verdict(
+                    label="LOSSLESS",
+                    detail=(
+                        f"AirPlay 1 wire format caps at 16-bit/44.1 kHz; "
+                        f"source's extra bits ({src_bits}-bit) are dropped at "
+                        f"the FIFO before AP1 encoding"
+                    ),
+                )
             bottleneck = (
-                "bridge FIFO bit-depth" if sink and sink.backend in ("airplay", "chromecast")
+                "bridge FIFO bit-depth"
+                if sink and sink.backend in ("airplay", "chromecast")
                 else "sink bit-depth"
             )
             hint = (
