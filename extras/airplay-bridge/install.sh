@@ -34,6 +34,7 @@ SYSTEMD_UNIT="${HOME}/.config/systemd/user/mpd-owntone-metadata.service"
 PADDER_UNIT="${HOME}/.config/systemd/user/mpd-owntone-padder.service"
 PW_DROPIN="${HOME}/.config/pipewire/pipewire-pulse.conf.d/20-raop-discover.conf"
 PW_NULLSINK="${HOME}/.config/pipewire/pipewire.conf.d/30-owntone-bridge.conf"
+WP_BRIDGE_ROUTE="${HOME}/.config/wireplumber/wireplumber.conf.d/40-owntone-bridge-route.conf"
 
 # -------- helpers --------
 
@@ -155,6 +156,7 @@ run_checks() {
   if [[ ! -f "$I3_CONF" && ! -f "$SWAY_CONF" ]]; then miss "no i3 or sway config found"; fi
   if [[ -f "$PW_DROPIN" ]]; then ok "pipewire raop drop-in"; else miss "pipewire raop drop-in"; fi
   if [[ -f "$PW_NULLSINK" ]]; then ok "pipewire null-sink drop-in"; else miss "pipewire null-sink drop-in"; fi
+  if [[ -f "$WP_BRIDGE_ROUTE" ]]; then ok "wireplumber bridge-route drop-in"; else miss "wireplumber bridge-route drop-in"; fi
   if [[ -f "$PADDER_UNIT" ]]; then ok "padder systemd unit"; else miss "padder systemd unit"; fi
 
   echo; echo "== Runtime =="
@@ -344,6 +346,44 @@ pulse.cmd = [
 EOF
 }
 
+install_wireplumber_bridge_route() {
+  info "installing wireplumber bridge-route drop-in -> $WP_BRIDGE_ROUTE"
+  mkdir -p "$(dirname "$WP_BRIDGE_ROUTE")"
+  # Isolate the "Owntone Bridge" stream from the local "PulseAudio"
+  # output's stream-restore slot. MPD's pulse plugin hardcodes
+  # media.role="Music" on every stream it opens, so both of MPD's pulse
+  # outputs share the same WirePlumber formKey
+  # ("Output/Audio:media.role:Music", from state-stream.lua's formKey).
+  # Whichever stream the user moves last via pavucontrol sets the saved
+  # target for both, which drags the bridge onto local speakers on the
+  # next MPD restart (audible as the same track playing twice).
+  #
+  # pipewire-pulse's pulse.rules can't fix this because its matches only
+  # see client-level properties, and both MPD streams share one client.
+  # WirePlumber's stream.rules run per-stream after node creation, so
+  # they can match media.name and rewrite media.role only for the bridge
+  # stream. The bridge then keys under "Music-Bridge", independent of
+  # the local output.
+  cat > "$WP_BRIDGE_ROUTE" <<'EOF'
+stream.rules = [
+    {
+        matches = [
+            {
+                application.name = "Music Player Daemon"
+                media.name       = "Owntone Bridge"
+            }
+        ]
+        actions = {
+            update-props = {
+                media.role = "Music-Bridge"
+            }
+        }
+    }
+]
+EOF
+  systemctl --user restart wireplumber 2>/dev/null || true
+}
+
 install_pipewire_nullsink() {
   info "installing pipewire null-sink drop-in -> $PW_NULLSINK"
   mkdir -p "$(dirname "$PW_NULLSINK")"
@@ -442,6 +482,7 @@ install_packages
 bootstrap_owntone_state
 discover_and_configure
 install_pipewire_dropin
+install_wireplumber_bridge_route
 install_pipewire_nullsink
 install_systemd_unit
 install_padder_unit
