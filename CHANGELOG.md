@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.4] - 2026-05-12
+
+### Fixed
+
+- `extras/airplay-bridge` installs a WirePlumber drop-in (`~/.config/wireplumber/wireplumber.conf.d/40-owntone-bridge-route.conf`) that rewrites `media.role` to `"Music-Bridge"` only for MPD's `Owntone Bridge` stream. MPD's pulse plugin hardcodes `media.role="Music"` on every stream, so the two pulse outputs added in 2.1.3 (the local `PulseAudio` output and the bridge) shared a single WirePlumber stream-properties key (`Output/Audio:media.role:Music`); whichever stream the user moved last via pavucontrol set the saved target for both, dragging the bridge onto local speakers on the next MPD restart - audible as the same track playing twice in parallel. pipewire-pulse's `pulse.rules` can't distinguish the two streams (its matches see only client-level properties and both share one client), so the rule lives at the WirePlumber layer where `stream.rules` see per-stream properties.
+
 ## [2.1.3] - 2026-05-11
 
 ### Changed
