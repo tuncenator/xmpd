@@ -79,10 +79,10 @@
 
 ### Conductor
 
-- **Total Batches**: TBD
+- **Total Batches**: 6
 - **Current Batch**: 0 (not started)
-- **Pacing**: TBD
-- **Batches Per Session**: TBD
+- **Pacing**: auto-refresh
+- **Batches Per Session**: 3
 - **Execution Plan**: docs/agent/xmpd-history/EXECUTION_PLAN.md
 
 ---
