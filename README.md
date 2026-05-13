@@ -89,6 +89,13 @@ Check current state without making changes:
 ./install.sh --check
 ```
 
+### After pulling new changes
+
+Re-run `./install.sh` after `git pull` to pick up new binaries and
+dependencies. The script is idempotent and only touches what changed. Recent
+additions include `xmpd-history` (fzf history browser) and `xmpd-doctor`
+(healthcheck), which need symlinks created by `install.sh`.
+
 ## Authentication
 
 ### YouTube Music
