@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 2 -- Phase 2 HistoryReporter Wire-Up + Syncer Stub (2026-05-13)
+> Last updated by: Checkpoint 3 -- Phase 3 HistorySyncer Real Impl + Phase 4 Receiver Script (2026-05-13)
 
 ---
 
@@ -35,8 +35,11 @@ Tests live in `tests/`. Phase 1 introduced `tests/conftest.py` with shared fixtu
 |-----------|---------|-------|
 | `xmpd/track_store.py` | SQLite track metadata cache; pattern HistoryStore mirrors. | Single-writer via `threading.Lock`; schema migrations via `PRAGMA user_version` + `_apply_migrations`; `sqlite3.Row` factory; `check_same_thread=False`. |
 | `xmpd/history_store.py` | SQLite-backed local play history store; `(host, local_id)` PK contract; 7 public methods; SCHEMA_VERSION = 1. | Single-writer via `threading.Lock`; schema migrations via `PRAGMA user_version`; `sqlite3.Row` factory; `check_same_thread=False`. Mirror of `track_store.py` pattern. |
-| `xmpd/history_syncer.py` | Bidirectional history sync between this host and WATCHTOWER. Phase 2: stub (log + return). Phase 3: real implementation. | Constructor: `(*, history_store, ssh_target, tailscale_hostname, bidir_batch, pull_batch)`. Methods: `bidir_push() -> None`, `startup_nudge() -> None`. Signatures frozen; Phase 3 only replaces method bodies. |
-| `tests/conftest.py` | Shared pytest fixtures. | Currently: `history_store_temp(tmp_path) -> Iterator[HistoryStore]`. Phase 3 adds `mock_ssh_bidir`. |
+| `xmpd/history_syncer.py` | Bidirectional history sync between this host and WATCHTOWER. Real implementation (Phase 3). | Constructor: `(*, history_store, ssh_target, tailscale_hostname, bidir_batch, pull_batch)`. Public: `bidir_push() -> None`, `startup_nudge() -> None`. Private: `_tailscale_online() -> bool`, `_run_bidir(unsynced_rows, cursor) -> None`. Constants: `PROTOCOL_VERSION=1`, `TAILSCALE_TIMEOUT_SECONDS=5`, `SSH_TIMEOUT_SECONDS=30`, `RECEIVER_STDERR_TRUNCATE=200`, `_WIRE_KEYS` (12-key tuple). |
+| `tests/conftest.py` | Shared pytest fixtures. | `history_store_temp(tmp_path) -> Iterator[HistoryStore]` (Phase 1). `mock_ssh_bidir(monkeypatch) -> Callable[..., MagicMock]` factory (Phase 3). `_UnclosableBytesIO` helper class (Phase 3). |
+| `scripts/xmpd-history-receiver` | WATCHTOWER aggregator side of the bidir sync protocol. Stdlib-only Python 3 (3.11 compatible). | Subcommands: `bidir`, `doctor`, `version`. Aggregator DB at `~/xmpd-history/history.db`. Schema v1: `server_id AUTOINCREMENT`, `(host, local_id) UNIQUE`. Constants: `SCHEMA_VERSION=1`, `PROTOCOL_VERSION=1`, `DEFAULT_DB_PATH`, `PEER_PULL_LIMIT=5000`. Deployed to `WATCHTOWER:~/bin/`. |
+| `tests/test_history_syncer.py` | HistorySyncer tests: 13 tests across precheck, wire format, single-flight, failure paths, nudge. | Uses `history_store_temp` + `mock_ssh_bidir` fixtures from conftest.py. |
+| `tests/test_xmpd_history_receiver.py` | Receiver subprocess tests: 11 tests. | Uses inline `_run_receiver()` helper spawning real subprocess. Never imports receiver module (anti-pattern #3). |
 | `xmpd/history_reporter.py` | Monitors MPD idle, computes elapsed play, calls provider `report_play()` once 30s threshold passes. Now also writes to local history DB and submits `bidir_push` to executor. | Constructor accepts optional keyword-only `history_store`, `history_syncer`, `executor` (all default `None`). `_report_track` appends a history-write block after the provider report, guarded by `try/except`. `_resolve_quality(provider_name, track)` returns per-provider quality label. `PROXY_URL_RE` extracts `(provider, track_id)`. |
 | `xmpd/daemon.py` | `XMPDaemon` constructor wires every subsystem; `run()` starts threads. | Construction sequence includes `HistoryStore`, `HistorySyncer`, `ThreadPoolExecutor(max_workers=1)` when `config['history']['enabled']` is True and `track_store is not None`. Passes all three into `HistoryReporter`. `run()` calls `startup_nudge()` after `_running=True`. `stop()` shuts executor before joining history thread. `ThreadPoolExecutor` and `as_completed` now at module level (was inline). |
 | `xmpd/__main__.py` | Entrypoint (`python -m xmpd`); calls `setup_logging()`, loads config, instantiates daemon, signal handlers. | Logging format defined here; new modules inherit. |
@@ -267,7 +270,7 @@ This regex is reused by the backfill subcommand to parse `played` lines from MPD
 - **External services**:
   - **Tidal** (via `tidalapi`): unchanged. Live tests gated by `XMPD_TIDAL_TEST=1` and the `tidal_integration` marker.
   - **YouTube Music** (via `ytmusicapi`): unchanged.
-  - **WATCHTOWER**: Debian 12 GCP VM, alias `WATCHTOWER` in `~/.ssh/config`, Tailscale-only network path. After the receiver phase deploys it, `~/bin/xmpd-history-receiver` exists and is on the SSH-session PATH. Aggregator DB at `~/xmpd-history/history.db`.
+  - **WATCHTOWER**: Debian 12 GCP VM, alias `WATCHTOWER` in `~/.ssh/config`, Tailscale-only network path. Python 3.11.2, sqlite3 3.40.1. Receiver deployed at `~/bin/xmpd-history-receiver` (Phase 4), on SSH-session PATH via `~/.profile`. Aggregator DB at `~/xmpd-history/history.db` (created on first bidir invocation).
 
 ---
 
