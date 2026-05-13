@@ -149,7 +149,28 @@ Neither phase summary contains any "deferred to deploy-verify" entries. All crit
 
 ## Code Review Results
 
-> Pending code review.
+- **Result**: REVIEW PASSED WITH NOTES (after one fix round)
+- **Reviewer**: spark-code-reviewer (claude-opus-4-6)
+- **First-pass verdict**: REVIEW FAILED -- 1 critical, 1 important issue
+- **Second-pass verdict**: REVIEW PASSED WITH NOTES -- 3 minor non-blocking notes after fixes applied
+- **Diff range (final)**: `50ce6bb..9622ef0`
+
+### First-Pass Issues (resolved by spark-fix commit 9622ef0)
+
+| Severity | Location | Issue | Resolution |
+|----------|----------|-------|------------|
+| Critical | `bin/xmpd-doctor` line 17 | `bump_yellow() { [ "$EXIT_CODE" -lt 2 ] && EXIT_CODE=2; ... }` allowed red (1) to be downgraded to yellow (2) because `1 -lt 2` is true. Violates the sticky-red invariant. Latent bug -- no test exercised this path. | Changed to `[ "$EXIT_CODE" -eq 0 ]`. Added `test_sticky_red_not_downgraded_to_yellow` regression test that triggers bump_red (schema mismatch) then bump_yellow (offline peer) and asserts exit 1. |
+| Important | `bin/xmpctl` line 492 | `format_played_at` used `__import__("datetime").datetime.fromisoformat(...)` while sibling `cmd_history_json` used a normal `from datetime import ...`. Inconsistent style; `__import__` discouraged for readability. | Replaced with function-local `from datetime import datetime`. |
+
+### Second-Pass Notes (non-blocking, no fix required)
+
+| Severity | Location | Note |
+|----------|----------|------|
+| Minor | git history (Phase 7) | `bin/xmpd-doctor` impl committed in `fa57c26` before tests in `232d12b` (separate commits within Phase 7). Not ideal test-first ordering, but tests are thorough (10 scenarios) and the gap is one commit. Historical -- not rewriting commits to fix. |
+| Minor | `tests/test_xmpd_doctor.py` line 105 | `TAILSCALE_PEER_MISSING_STUB` defined but unused. Dead test fixture. |
+| Minor | Phase 7 Functional QA check 1 (live) | Live invocation on local host exits yellow because local DB is missing (daemon runs on ARCHON, not this host). Documented in Phase 7 summary; stub-based `test_all_green` covers the green path. Informational only. |
+
+All key invariants verified: daemon disabled-feature short-circuit returns the documented error before arg parsing; `--since` SPEC translation happens client-side (regex `^(\d+)([dhm])$`); fzf wrapper uses deferred `\$(cat ${MODE_FILE})` expansion so each reload re-reads the file; sticky-red invariant in doctor; `set -uo pipefail` (no `-e`) so partial failures render rather than abort; all SSH calls use `-o BatchMode=yes`; mypy clean; install.sh symlink block has both lines in alphabetical order. Daemon dispatcher routes `history-json` to `_cmd_history_json` adjacent to `search-json`. Mock discipline acceptable: tests stub at the IPC boundary (`send_command`) and use PATH-stubbed binaries for shell scripts; assertion shapes match the Phase 5 Evidence-Captured `get_plays` row samples and Phase 4 receiver doctor JSON shape (`tailscale_peers`/`hostname`/`online`).
 
 ---
 
@@ -157,11 +178,14 @@ Neither phase summary contains any "deferred to deploy-verify" entries. All crit
 
 | Attempt | Type | Target | Description | Result |
 |---------|------|--------|-------------|--------|
-| 1 | inline | install.sh | Phase 5 omitted `ln -sf bin/xmpd-history` from install.sh symlink block. Added one line in alphabetical position. | Success |
+| 1 | inline (checkpoint) | install.sh | Phase 5 omitted `ln -sf bin/xmpd-history` from install.sh symlink block. Added one line in alphabetical position. | Success |
+| 2 | spark-fix (post-review) | bin/xmpd-doctor + bin/xmpctl + tests/test_xmpd_doctor.py | Critical: changed bump_yellow guard from `-lt 2` to `-eq 0` to honor sticky-red. Important: replaced `__import__("datetime")` with normal `from datetime import datetime`. Added regression test `test_sticky_red_not_downgraded_to_yellow`. Commit 9622ef0. | Success |
 
 ### Fix Details
 
-Phase 5's deliverable list does not explicitly mention `install.sh`, but the batch verification criterion requires both `xmpd-history` and `xmpd-doctor` symlinks. Phase 7 correctly added `xmpd-doctor`. The checkpoint added the missing `xmpd-history` line. Single-line change, localized.
+**Fix 1 (commit ba412b3, inline during checkpoint)**: Phase 5's deliverable list does not explicitly mention `install.sh`, but the batch verification criterion requires both `xmpd-history` and `xmpd-doctor` symlinks. Phase 7 correctly added `xmpd-doctor`. The checkpoint added the missing `xmpd-history` line.
+
+**Fix 2 (commit 9622ef0, spark-fix after first review failure)**: One critical (sticky-red invariant) and one important (`__import__` style) fix from the code review. Critical fix is a one-character bash change plus a regression test (`SSH_SCHEMA_MISMATCH_WITH_OFFLINE_PEER_STUB` + `test_sticky_red_not_downgraded_to_yellow` in `tests/test_xmpd_doctor.py`). Style fix is a one-line Python import replacement. All 19 doctor tests + 5 daemon history-json tests + 3 xmpd-history tests + 8 xmpctl history-json tests pass after the fix. Mypy clean, ruff clean, bash -n clean.
 
 ---
 
