@@ -13,6 +13,7 @@ import signal
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from typing import Any
 from xmpd.config import get_config_dir, load_config
 from xmpd.exceptions import MPDConnectionError
 from xmpd.history_reporter import HistoryReporter
+from xmpd.history_store import HistoryStore
+from xmpd.history_syncer import HistorySyncer
 from xmpd.mpd_client import MPDClient
 from xmpd.providers import build_registry
 from xmpd.providers.base import Provider
@@ -204,22 +207,51 @@ class XMPDaemon:
         self._liked_ids_cache_time: float = 0.0
         self._liked_ids_cache_ttl: float = 300.0  # 5 minutes
 
-        # History reporting
+        # History store / syncer / executor (new in xmpd-history feature)
+        self.history_store: HistoryStore | None = None
+        self.history_syncer: HistorySyncer | None = None
+        self._history_executor: ThreadPoolExecutor | None = None
+        history_cfg = self.config.get("history", {})
+        if history_cfg.get("enabled", False) and self.track_store is not None:
+            self.history_store = HistoryStore(history_cfg["db_path"])
+            watchtower_cfg = history_cfg["watchtower"]
+            self.history_syncer = HistorySyncer(
+                history_store=self.history_store,
+                ssh_target=watchtower_cfg["ssh_target"],
+                tailscale_hostname=watchtower_cfg["tailscale_hostname"],
+                bidir_batch=watchtower_cfg["bidir_batch"],
+                pull_batch=watchtower_cfg["pull_batch"],
+            )
+            self._history_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="hist-sync",
+            )
+            logger.info(
+                "History store enabled: db=%s, ssh_target=%s",
+                history_cfg["db_path"],
+                watchtower_cfg["ssh_target"],
+            )
+        else:
+            logger.info("History store disabled")
+
+        # History reporting (existing block -- now passes the new collaborators)
         self._history_reporter: HistoryReporter | None = None
         self._history_thread: threading.Thread | None = None
         self._history_shutdown = threading.Event()
-        history_config = self.config.get("history_reporting", {})
-        if history_config.get("enabled", False) and self.track_store is not None:
+        history_reporting_cfg = self.config.get("history_reporting", {})
+        if history_reporting_cfg.get("enabled", False) and self.track_store is not None:
             self._history_reporter = HistoryReporter(
                 mpd_socket_path=self.config["mpd_socket_path"],
                 provider_registry=self.provider_registry,
                 track_store=self.track_store,
                 proxy_config=self.proxy_config or {},
-                min_play_seconds=history_config.get("min_play_seconds", 30),
+                min_play_seconds=history_reporting_cfg.get("min_play_seconds", 30),
+                history_store=self.history_store,
+                history_syncer=self.history_syncer,
+                executor=self._history_executor,
             )
             logger.info(
                 "History reporting enabled (min_play_seconds=%d)",
-                history_config.get("min_play_seconds", 30),
+                history_reporting_cfg.get("min_play_seconds", 30),
             )
         else:
             logger.info("History reporting disabled")
@@ -270,6 +302,13 @@ class XMPDaemon:
             self._history_thread.start()
             logger.info("History reporting thread started")
 
+        # Trigger startup nudge so any rows queued while offline get drained early.
+        if self.history_syncer is not None:
+            try:
+                self.history_syncer.startup_nudge()
+            except Exception as e:
+                logger.warning("history startup_nudge failed: %s", e)
+
         logger.info("xmpd daemon started successfully")
 
         # Perform initial sync immediately
@@ -303,6 +342,14 @@ class XMPDaemon:
 
         logger.info("Stopping xmpd daemon...")
         self._running = False
+
+        # Shut down the history sync executor before joining the reporter thread.
+        if self._history_executor is not None:
+            try:
+                self._history_executor.shutdown(wait=False, cancel_futures=True)
+                logger.info("history sync executor shutdown")
+            except Exception as e:
+                logger.warning("history executor shutdown failed: %s", e)
 
         # Signal history reporter to stop
         if self._history_thread is not None:
@@ -1152,8 +1199,6 @@ class XMPDaemon:
                     },
                 ))
             return pname, hits
-
-        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         raw_hits: list[tuple[str, str, dict[str, Any]]] = []
         with ThreadPoolExecutor(max_workers=len(auth_targets) + 1) as pool:
