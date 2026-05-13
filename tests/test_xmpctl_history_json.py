@@ -219,3 +219,146 @@ class TestHistoryJsonDaemonError:
 
         err = capsys.readouterr().err
         assert "boom" in err
+
+
+# ---------------------------------------------------------------------------
+# ANSI helper (mirrors the module-level _ANSI_RE in bin/xmpctl)
+# ---------------------------------------------------------------------------
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(s: str) -> str:
+    return _ANSI_RE.sub("", s)
+
+
+# ---------------------------------------------------------------------------
+# Finding 1: fallback display for missing/placeholder metadata
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryJsonFallbackDisplay:
+    """Test 9: placeholder title/artist replaced with track_id fallback."""
+
+    def test_unknown_title_artist_shows_track_id(self, capsys: pytest.CaptureFixture[str]) -> None:
+        row = {
+            **_SAMPLE_TIME_ROW,
+            "title": "Unknown Title",
+            "artist": "Unknown Artist",
+            "track_id": "testvideoid",
+            "provider": "yt",
+        }
+
+        def fake_send(cmd: str) -> dict[str, Any]:
+            return {"success": True, "rows": [row]}
+
+        with patch.object(_xmpctl, "send_command", side_effect=fake_send):
+            _xmpctl.cmd_history_json(["--format", "fzf"])
+
+        out = _strip_ansi(capsys.readouterr().out)
+        assert "Unknown Title" not in out
+        assert "Unknown Artist" not in out
+        assert "yt:testvideoid" in out
+
+    def test_only_title_missing_shows_track_id_for_title(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        row = {
+            **_SAMPLE_TIME_ROW,
+            "title": "Unknown Title",
+            "artist": "Real Artist",
+            "track_id": "vid42",
+            "provider": "yt",
+        }
+
+        def fake_send(cmd: str) -> dict[str, Any]:
+            return {"success": True, "rows": [row]}
+
+        with patch.object(_xmpctl, "send_command", side_effect=fake_send):
+            _xmpctl.cmd_history_json(["--format", "fzf"])
+
+        out = _strip_ansi(capsys.readouterr().out)
+        assert "Unknown Title" not in out
+        assert "Real Artist" in out
+        assert "yt:vid42" in out
+
+    def test_null_title_and_artist_shows_track_id(self, capsys: pytest.CaptureFixture[str]) -> None:
+        row = {
+            **_SAMPLE_TIME_ROW,
+            "title": None,
+            "artist": None,
+            "track_id": "nulltrack",
+            "provider": "tidal",
+        }
+
+        def fake_send(cmd: str) -> dict[str, Any]:
+            return {"success": True, "rows": [row]}
+
+        with patch.object(_xmpctl, "send_command", side_effect=fake_send):
+            _xmpctl.cmd_history_json(["--format", "fzf"])
+
+        out = _strip_ansi(capsys.readouterr().out)
+        assert "tidal:nulltrack" in out
+
+
+# ---------------------------------------------------------------------------
+# Finding 2: host column alignment across rows of different widths
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryJsonHostAlignment:
+    """Test 10: host label starts at the same column regardless of title length."""
+
+    def test_host_column_aligned_time_mode(self, capsys: pytest.CaptureFixture[str]) -> None:
+        rows = [
+            {**_SAMPLE_TIME_ROW, "title": "A", "host": "HOST1"},
+            {
+                **_SAMPLE_TIME_ROW,
+                "title": "A Much Longer Title That Takes More Space",
+                "host": "HOST1",
+            },
+            {**_SAMPLE_TIME_ROW, "title": "Mid Length", "host": "HOST1"},
+        ]
+
+        def fake_send(cmd: str) -> dict[str, Any]:
+            return {"success": True, "rows": rows}
+
+        with patch.object(_xmpctl, "send_command", side_effect=fake_send):
+            _xmpctl.cmd_history_json(["--format", "fzf"])
+
+        out = capsys.readouterr().out.strip()
+        host_positions: list[int] = []
+        for line in out.split("\n"):
+            parts = line.split("\t", 2)
+            visible_part = _strip_ansi(parts[2])
+            pos = visible_part.index("HOST1")
+            host_positions.append(pos)
+
+        # All host labels should start at the same column
+        assert len(set(host_positions)) == 1, f"Host positions differ across rows: {host_positions}"
+
+    def test_host_column_aligned_count_mode(self, capsys: pytest.CaptureFixture[str]) -> None:
+        rows = [
+            {**_SAMPLE_COUNT_ROW, "title": "Short", "host": "SRV"},
+            {
+                **_SAMPLE_COUNT_ROW,
+                "title": "A Longer Song Title Here",
+                "host": "SRV",
+            },
+        ]
+
+        def fake_send(cmd: str) -> dict[str, Any]:
+            return {"success": True, "rows": rows}
+
+        with patch.object(_xmpctl, "send_command", side_effect=fake_send):
+            _xmpctl.cmd_history_json(["--mode", "count", "--format", "fzf"])
+
+        out = capsys.readouterr().out.strip()
+        host_positions: list[int] = []
+        for line in out.split("\n"):
+            parts = line.split("\t", 2)
+            visible_part = _strip_ansi(parts[2])
+            pos = visible_part.index("SRV")
+            host_positions.append(pos)
+
+        assert len(set(host_positions)) == 1, f"Host positions differ across rows: {host_positions}"
