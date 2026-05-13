@@ -1008,3 +1008,116 @@ class TestHistoryWiring:
         daemon.stop()
 
         executor_mock.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
+
+
+# ---------------------------------------------------------------------------
+# TestCmdHistoryJson - Phase 5
+# ---------------------------------------------------------------------------
+
+
+class TestCmdHistoryJson:
+    """Tests for _cmd_history_json IPC handler."""
+
+    def test_cmd_history_json_disabled_returns_error(self, tmp_path):
+        """When history_store is None, handler returns an error dict."""
+        daemon = _make_daemon(tmp_path)
+        assert daemon.history_store is None  # default _make_daemon has no history
+        response = daemon._cmd_history_json([])
+        assert response == {"success": False, "error": "history not enabled"}
+
+    def test_cmd_history_json_returns_rows(self, tmp_path):
+        """With seeded HistoryStore, returns rows ordered by played_at DESC."""
+        from xmpd.history_store import HistoryStore
+
+        db_path = str(tmp_path / "test_history.db")
+        store = HistoryStore(db_path)
+        store.add_play(
+            provider="yt", track_id="a1", played_at="2026-05-13T10:00:00+03:00",
+            title="First", artist="A", album=None,
+            duration_seconds=180, art_url=None, quality="320k", play_seconds=120,
+        )
+        store.add_play(
+            provider="tidal", track_id="b2", played_at="2026-05-13T12:00:00+03:00",
+            title="Second", artist="B", album=None,
+            duration_seconds=240, art_url=None, quality="HiFi", play_seconds=200,
+        )
+        store.add_play(
+            provider="yt", track_id="c3", played_at="2026-05-13T14:00:00+03:00",
+            title="Third", artist="C", album=None,
+            duration_seconds=300, art_url=None, quality="HiRes", play_seconds=250,
+        )
+
+        daemon = _make_daemon(tmp_path)
+        daemon.history_store = store
+
+        response = daemon._cmd_history_json(
+            ["--mode", "time", "--since", "all", "--limit", "10"]
+        )
+        assert response["success"] is True
+        rows = response["rows"]
+        assert len(rows) == 3
+        # Verify descending played_at order
+        played_ats = [r["played_at"] for r in rows]
+        assert played_ats == sorted(played_ats, reverse=True)
+
+        store.close()
+
+    def test_cmd_history_json_invalid_since_returns_error(self, tmp_path):
+        """Invalid --since value produces an error response."""
+        from xmpd.history_store import HistoryStore
+
+        db_path = str(tmp_path / "test_history.db")
+        store = HistoryStore(db_path)
+        daemon = _make_daemon(tmp_path)
+        daemon.history_store = store
+
+        response = daemon._cmd_history_json(["--since", "garbage"])
+        assert response["success"] is False
+        assert "invalid since" in response["error"]
+
+        store.close()
+
+    def test_cmd_history_json_invalid_mode_returns_error(self, tmp_path):
+        """Invalid --mode value produces an error response."""
+        from xmpd.history_store import HistoryStore
+
+        db_path = str(tmp_path / "test_history.db")
+        store = HistoryStore(db_path)
+        daemon = _make_daemon(tmp_path)
+        daemon.history_store = store
+
+        response = daemon._cmd_history_json(["--mode", "invalid"])
+        assert response["success"] is False
+        assert "mode must be time or count" in response["error"]
+
+        store.close()
+
+    def test_cmd_history_json_count_mode(self, tmp_path):
+        """Count mode returns aggregated rows with play_count."""
+        from xmpd.history_store import HistoryStore
+
+        db_path = str(tmp_path / "test_history.db")
+        store = HistoryStore(db_path)
+        store.add_play(
+            provider="yt", track_id="a1", played_at="2026-05-13T10:00:00+03:00",
+            title="Repeat", artist="A", album=None,
+            duration_seconds=180, art_url=None, quality="320k", play_seconds=120,
+        )
+        store.add_play(
+            provider="yt", track_id="a1", played_at="2026-05-13T12:00:00+03:00",
+            title="Repeat", artist="A", album=None,
+            duration_seconds=180, art_url=None, quality="320k", play_seconds=120,
+        )
+        daemon = _make_daemon(tmp_path)
+        daemon.history_store = store
+
+        response = daemon._cmd_history_json(
+            ["--mode", "count", "--since", "all", "--limit", "10"]
+        )
+        assert response["success"] is True
+        rows = response["rows"]
+        assert len(rows) == 1
+        assert rows[0]["play_count"] == 2
+        assert "last_played_at" in rows[0]
+
+        store.close()

@@ -11,6 +11,7 @@ import logging
 import re
 import signal
 import socket
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -686,6 +687,9 @@ class XMPDaemon:
             elif cmd == "search-json":
                 # search-json [--provider yt|all] [--limit N] QUERY
                 response = self._cmd_search_json(parts[1:])
+            elif cmd == "history-json":
+                # history-json [--mode time|count] [--since ISO|all] [--limit N]
+                response = self._cmd_history_json(parts[1:])
             elif cmd == "play":
                 provider, track_id = self._parse_play_queue_args(args)
                 response = self._cmd_play(provider, track_id)
@@ -1246,6 +1250,72 @@ class XMPDaemon:
             results.append(entry)
         logger.info("search-json: returning %d results for %r", len(results), query)
         return {"success": True, "results": results}
+
+    def _cmd_history_json(self, args: list[str]) -> dict[str, Any]:
+        """Handle 'history-json' command - return local history rows.
+
+        Syntax: history-json [--mode time|count] [--since ISO|all] [--limit N]
+
+        Args:
+            args: Remaining command tokens after 'history-json'.
+
+        Returns:
+            Response dict with 'success' and 'rows' (list of row dicts).
+            Each row dict carries the columns in the local plays table
+            plus, in count mode, 'play_count' and 'last_played_at'.
+        """
+        if self.history_store is None:
+            return {"success": False, "error": "history not enabled"}
+
+        mode = "time"
+        since_str = "all"
+        limit = 5000
+        i = 0
+        while i < len(args):
+            if args[i] == "--mode" and i + 1 < len(args):
+                mode = args[i + 1]
+                i += 2
+            elif args[i] == "--since" and i + 1 < len(args):
+                since_str = args[i + 1]
+                i += 2
+            elif args[i] == "--limit" and i + 1 < len(args):
+                try:
+                    limit = int(args[i + 1])
+                except ValueError:
+                    pass
+                i += 2
+            else:
+                i += 1
+
+        if mode not in ("time", "count"):
+            return {"success": False, "error": "mode must be time or count"}
+        assert mode in ("time", "count")  # narrowing for mypy
+
+        since: datetime | None = None
+        if since_str != "all":
+            try:
+                since = datetime.fromisoformat(since_str)
+            except ValueError:
+                return {"success": False, "error": f"invalid since: {since_str}"}
+
+        try:
+            rows = self.history_store.get_plays(
+                mode=mode,  # type: ignore[arg-type]
+                since=since,
+                limit=limit,
+            )
+        except sqlite3.Error as e:
+            logger.exception("history-json: SQLite error")
+            return {"success": False, "error": f"history-json: {e}"}
+
+        logger.info(
+            "history-json: mode=%s since=%s limit=%d -> %d rows",
+            mode,
+            since_str,
+            limit,
+            len(rows),
+        )
+        return {"success": True, "rows": rows}
 
     def _ensure_mpd(self) -> None:
         """Reconnect to MPD if the connection was lost."""
