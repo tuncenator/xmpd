@@ -80,7 +80,7 @@
 ### Conductor
 
 - **Total Batches**: 6
-- **Current Batch**: 0 (not started)
+- **Current Batch**: 2
 - **Pacing**: auto-refresh
 - **Batches Per Session**: 3
 - **Execution Plan**: docs/agent/xmpd-history/EXECUTION_PLAN.md
@@ -88,16 +88,16 @@
 ---
 
 **Last Updated:** 2026-05-13
-**Current Phase:** 1 of 8
-**Phase Name:** HistoryStore Foundation + Config
-**Progress:** 0% (0/8 phases complete)
+**Current Phase:** 2 of 8
+**Phase Name:** HistoryReporter Wire-Up + Syncer Stub
+**Progress:** 13% (1/8 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[--------] 0% (0/8)
+[#-------] 13% (1/8)
 ```
 
 ---
@@ -106,8 +106,8 @@
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 1 | HistoryStore Foundation + Config | `[Current]` |
-| 2 | HistoryReporter Wire-Up + Syncer Stub | `[Pending]` |
+| 1 | HistoryStore Foundation + Config | `[Complete]` |
+| 2 | HistoryReporter Wire-Up + Syncer Stub | `[Current]` |
 | 3 | HistorySyncer Real Implementation | `[Pending]` |
 | 4 | Receiver Script + WATCHTOWER Deploy | `[Pending]` |
 | 5 | xmpctl history-json + bin/xmpd-history | `[Pending]` |
@@ -119,14 +119,14 @@
 
 ## Instructions for Agents
 
-1. Read `phase_plans/PHASE_01.md` for detailed requirements for Phase 1
-2. This is the first phase -- no previous summaries to read
+1. Read `phase_plans/PHASE_02.md` for detailed requirements for Phase 2
+2. Read the 2 most recent phase summaries (PHASE_01_SUMMARY.md)
 3. Complete the phase following the build-verify-commit cycle
-4. Create `summaries/PHASE_01_SUMMARY.md`
+4. Create `summaries/PHASE_02_SUMMARY.md`
 5. Update this file:
-   - Mark Phase 1 as `[Complete]`
-   - Set Phase 2 as `[Current]`
-   - Update "Current Phase" to "2 of TBD"
+   - Mark Phase 2 as `[Complete]`
+   - Set Phase 3 as `[Current]`
+   - Update "Current Phase" to "3 of 8"
    - Update "Progress" percentage and count
    - Update progress bar (each `#` = completed phase, each `-` = remaining phase)
 
