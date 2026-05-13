@@ -105,7 +105,22 @@ No helpers needed repair. Phase 2 reported no helper issues and no unlisted help
 
 ## Code Review Results
 
-> Pending. Code review runs after checkpoint passes.
+- **Result**: REVIEW PASSED WITH NOTES
+- **Reviewer**: spark-code-reviewer (claude-opus-4-6)
+- **Diff range**: `cb53ec9..54234ca`
+
+All key invariants verified: constructor backward-compat (keyword-only + None defaults); independent `history.enabled` / `history_reporting.enabled` gates; frozen HistorySyncer signature; `TYPE_CHECKING` import to avoid circular; `_resolve_quality` minimal; `stop()` shuts executor before joining history thread; `run()` calls `startup_nudge` after `_running=True`; `(track or {}).get(...)` handles orphan tracks; `datetime.now(UTC).astimezone().isoformat()` round-trips; `%s`-style logging; history block never re-raises. `add_play` kwarg mapping matches `HistoryStore.add_play` signature. Security clean. Format-only commit verified as trailing-comma adjustments only.
+
+### Issues
+
+| Severity | Location | Issue |
+|----------|----------|-------|
+| Important (non-blocking) | `tests/test_daemon.py::test_daemon_run_calls_startup_nudge` | Test reproduces the nudge call manually rather than exercising `daemon.run()` itself. Pragmatic trade-off (full `run()` blocks on while-loop), but means a future re-ordering of `run()` could silently break the integration without this test failing. |
+| Minor | Commit order | Tests committed after implementation due to project's `lint-on-write` PostToolUse hook that blocks partial edits with unused imports. Comprehensive coverage; not a substantive concern. |
+| Minor | `CODEBASE_CONTEXT.md` | Forward reference "Phase 3 adds `mock_ssh_bidir`" under conftest.py -- accurate per plan; minor doc-hygiene risk if Phase 3 changes approach. |
+| Minor | `tests/test_daemon.py` | `_base_patches` helper defined at module level but unused by any test. Dead code, not harmful. |
+
+These are non-blocking and can be addressed opportunistically in a later phase.
 
 ---
 
