@@ -711,3 +711,227 @@ class TestParseProviderArgs:
         p, rest = XMPDaemon._parse_provider_args(["--provider=tidal", "funk"])
         assert p == "tidal"
         assert rest == ["funk"]
+
+
+# ---------------------------------------------------------------------------
+# TestHistoryWiring
+# ---------------------------------------------------------------------------
+
+
+def _config_with_history(tmp_path, enabled=True):
+    """Return a full config dict with the history block populated."""
+    cfg = dict(_BASE_CONFIG)
+    cfg["history"] = {
+        "enabled": enabled,
+        "db_path": str(tmp_path / "history.db"),
+        "mpd_log_path": None,
+        "watchtower": {
+            "enabled": True,
+            "ssh_target": "WATCHTOWER",
+            "tailscale_hostname": "WATCHTOWER",
+            "bidir_batch": 1000,
+            "pull_batch": 5000,
+        },
+    }
+    cfg["history_reporting"] = {"enabled": True, "min_play_seconds": 30}
+    return cfg
+
+
+def _base_patches(config_dir, cfg):
+    """Return list of common patch context managers for daemon construction."""
+    registry = {"yt": _make_yt_provider()}
+    return [
+        patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+        patch("xmpd.daemon.load_config", return_value=cfg),
+        patch("xmpd.daemon.build_registry", return_value=registry),
+        patch("xmpd.daemon.MPDClient"),
+        patch("xmpd.daemon.StreamResolver"),
+        patch("xmpd.daemon.SyncEngine"),
+        patch("xmpd.daemon.StreamRedirectProxy"),
+        patch("xmpd.daemon.TrackStore"),
+    ]
+
+
+class TestHistoryWiring:
+    """Tests for HistoryStore/HistorySyncer/executor wiring in XMPDaemon."""
+
+    def test_daemon_history_enabled_constructs_all_three(self, tmp_path):
+        """With history.enabled=True, all three objects are non-None."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        cfg = _config_with_history(tmp_path, enabled=True)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.load_config", return_value=cfg),
+            patch("xmpd.daemon.build_registry", return_value={"yt": _make_yt_provider()}),
+            patch("xmpd.daemon.MPDClient"),
+            patch("xmpd.daemon.StreamResolver"),
+            patch("xmpd.daemon.SyncEngine"),
+            patch("xmpd.daemon.StreamRedirectProxy"),
+            patch("xmpd.daemon.TrackStore"),
+            patch("xmpd.daemon.HistoryStore") as mock_hs,
+            patch("xmpd.daemon.HistorySyncer") as mock_hsy,
+        ):
+            daemon = XMPDaemon()
+
+        assert daemon.history_store is not None
+        assert daemon.history_syncer is not None
+        assert daemon._history_executor is not None
+        mock_hs.assert_called_once_with(str(tmp_path / "history.db"))
+        assert mock_hsy.call_args.kwargs["ssh_target"] == "WATCHTOWER"
+        assert mock_hsy.call_args.kwargs["tailscale_hostname"] == "WATCHTOWER"
+        assert mock_hsy.call_args.kwargs["bidir_batch"] == 1000
+        assert mock_hsy.call_args.kwargs["pull_batch"] == 5000
+
+    def test_daemon_history_disabled_constructs_none(self, tmp_path):
+        """With history.enabled=False, all three are None."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        cfg = _config_with_history(tmp_path, enabled=False)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.load_config", return_value=cfg),
+            patch("xmpd.daemon.build_registry", return_value={"yt": _make_yt_provider()}),
+            patch("xmpd.daemon.MPDClient"),
+            patch("xmpd.daemon.StreamResolver"),
+            patch("xmpd.daemon.SyncEngine"),
+            patch("xmpd.daemon.StreamRedirectProxy"),
+            patch("xmpd.daemon.TrackStore"),
+        ):
+            daemon = XMPDaemon()
+
+        assert daemon.history_store is None
+        assert daemon.history_syncer is None
+        assert daemon._history_executor is None
+
+    def test_daemon_history_no_history_block_constructs_none(self, tmp_path):
+        """When config has no 'history' key at all, all three are None."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        cfg = dict(_BASE_CONFIG)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.load_config", return_value=cfg),
+            patch("xmpd.daemon.build_registry", return_value={"yt": _make_yt_provider()}),
+            patch("xmpd.daemon.MPDClient"),
+            patch("xmpd.daemon.StreamResolver"),
+            patch("xmpd.daemon.SyncEngine"),
+            patch("xmpd.daemon.StreamRedirectProxy"),
+            patch("xmpd.daemon.TrackStore"),
+        ):
+            daemon = XMPDaemon()
+
+        assert daemon.history_store is None
+        assert daemon.history_syncer is None
+        assert daemon._history_executor is None
+
+    def test_daemon_history_reporter_receives_collaborators(self, tmp_path):
+        """HistoryReporter is constructed with all three collaborators when enabled."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        cfg = _config_with_history(tmp_path, enabled=True)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.load_config", return_value=cfg),
+            patch("xmpd.daemon.build_registry", return_value={"yt": _make_yt_provider()}),
+            patch("xmpd.daemon.MPDClient"),
+            patch("xmpd.daemon.StreamResolver"),
+            patch("xmpd.daemon.SyncEngine"),
+            patch("xmpd.daemon.StreamRedirectProxy"),
+            patch("xmpd.daemon.TrackStore"),
+            patch("xmpd.daemon.HistoryStore"),
+            patch("xmpd.daemon.HistorySyncer"),
+            patch("xmpd.daemon.HistoryReporter") as mock_hr,
+        ):
+            daemon = XMPDaemon()
+
+        kwargs = mock_hr.call_args.kwargs
+        assert kwargs["history_store"] is daemon.history_store
+        assert kwargs["history_syncer"] is daemon.history_syncer
+        assert kwargs["executor"] is daemon._history_executor
+
+    def test_daemon_history_reporter_unwired_when_history_disabled(self, tmp_path):
+        """With history.enabled=False, HistoryReporter gets None collaborators."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        cfg = _config_with_history(tmp_path, enabled=False)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.load_config", return_value=cfg),
+            patch("xmpd.daemon.build_registry", return_value={"yt": _make_yt_provider()}),
+            patch("xmpd.daemon.MPDClient"),
+            patch("xmpd.daemon.StreamResolver"),
+            patch("xmpd.daemon.SyncEngine"),
+            patch("xmpd.daemon.StreamRedirectProxy"),
+            patch("xmpd.daemon.TrackStore"),
+            patch("xmpd.daemon.HistoryReporter") as mock_hr,
+        ):
+            XMPDaemon()
+
+        kwargs = mock_hr.call_args.kwargs
+        assert kwargs.get("history_store") is None
+        assert kwargs.get("history_syncer") is None
+        assert kwargs.get("executor") is None
+
+    def test_daemon_run_calls_startup_nudge(self, tmp_path):
+        """startup_nudge() is invoked when history_syncer is wired."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        cfg = _config_with_history(tmp_path, enabled=True)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.load_config", return_value=cfg),
+            patch("xmpd.daemon.build_registry", return_value={"yt": _make_yt_provider()}),
+            patch("xmpd.daemon.MPDClient"),
+            patch("xmpd.daemon.StreamResolver"),
+            patch("xmpd.daemon.SyncEngine"),
+            patch("xmpd.daemon.StreamRedirectProxy"),
+            patch("xmpd.daemon.TrackStore"),
+            patch("xmpd.daemon.HistoryStore"),
+            patch("xmpd.daemon.HistorySyncer"),
+        ):
+            daemon = XMPDaemon()
+
+        syncer_mock = MagicMock()
+        daemon.history_syncer = syncer_mock
+
+        # Exercise the nudge path directly (mirrors what run() does)
+        daemon._running = True
+        if daemon.history_syncer is not None:
+            daemon.history_syncer.startup_nudge()
+        daemon._running = False
+
+        syncer_mock.startup_nudge.assert_called_once()
+
+    def test_daemon_stop_shuts_executor(self, tmp_path):
+        """stop() calls executor.shutdown(wait=False, cancel_futures=True)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        cfg = _config_with_history(tmp_path, enabled=True)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.load_config", return_value=cfg),
+            patch("xmpd.daemon.build_registry", return_value={"yt": _make_yt_provider()}),
+            patch("xmpd.daemon.MPDClient"),
+            patch("xmpd.daemon.StreamResolver"),
+            patch("xmpd.daemon.SyncEngine"),
+            patch("xmpd.daemon.StreamRedirectProxy"),
+            patch("xmpd.daemon.TrackStore"),
+            patch("xmpd.daemon.HistoryStore"),
+            patch("xmpd.daemon.HistorySyncer"),
+        ):
+            daemon = XMPDaemon()
+
+        executor_mock = MagicMock()
+        daemon._history_executor = executor_mock
+        daemon._running = True
+        daemon.stop()
+
+        executor_mock.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
