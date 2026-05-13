@@ -625,6 +625,48 @@ def cmd_history_json(args: list[str]) -> None:
             print(f"{provider}\t{track_id}\t{cell}  {visible}  last {last}{host_suffix}")
 
 
+def cmd_history_backfill(args: list[str]) -> None:
+    """Run one-shot MPD log backfill into local history DB.
+
+    Usage: history-backfill [--log PATH] [--dry-run]
+
+    Args:
+        args: Arguments after 'history-backfill' from sys.argv.
+    """
+    log_path: str | None = None
+    dry_run = False
+    i = 0
+    while i < len(args):
+        if args[i] == "--log" and i + 1 < len(args):
+            log_path = args[i + 1]
+            i += 2
+        elif args[i] == "--dry-run":
+            dry_run = True
+            i += 1
+        else:
+            i += 1
+
+    cmd_parts = ["history-backfill"]
+    if log_path:
+        cmd_parts += ["--log", log_path]
+    if dry_run:
+        cmd_parts.append("--dry-run")
+
+    result = send_command(" ".join(cmd_parts))
+    if not result.get("success"):
+        error = result.get("error", "Unknown error")
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    inserted = result.get("inserted", 0)
+    skipped = result.get("skipped", 0)
+    orphans = result.get("orphans", 0)
+    if dry_run:
+        print(f"would-insert={inserted} would-skip={skipped} orphans={orphans}")
+    else:
+        print(f"inserted={inserted} skipped={skipped} orphans={orphans}")
+
+
 def cmd_play(provider: str, track_id: str) -> None:
     """Play a track immediately by clearing queue and starting playback.
 
@@ -1051,6 +1093,7 @@ def show_help() -> None:
                                   --since SPEC       Time window: 30d, 7d, 1h, all
                                   --limit N          Max results (default: 5000)
                                   --format fzf|json  Output format (default: fzf)
+  xmpctl history-backfill [--log PATH] [--dry-run]   Import MPD log into local history
   xmpctl radio [--apply]         Generate radio from current track (provider inferred)
                                   --provider <name>  Force provider
                                   --track-id <id>    Seed track ID (default: current track)
@@ -1144,6 +1187,8 @@ def main() -> NoReturn:
         cmd_search_json(args)
     elif command == "history-json":
         cmd_history_json(args)
+    elif command == "history-backfill":
+        cmd_history_backfill(args)
     elif command == "like":
         cmd_like()
     elif command == "dislike":
