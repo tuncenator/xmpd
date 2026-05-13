@@ -514,3 +514,41 @@ def test_ssh_commands_use_user_config(tmp_path: Path) -> None:
         # Match ssh command invocations (not variable assignments or comments)
         if re.search(r"\bssh\b\s+-", stripped):
             assert "-F" in stripped, f"Line {i}: ssh invocation missing -F flag: {stripped.strip()}"
+
+
+# SSH stub that mimics publickey auth failure: exits 255 with the canonical
+# "Permission denied (publickey)" on stderr for the connectivity probe,
+# matching real OpenSSH behaviour when BatchMode=yes and no valid key is offered.
+SSH_PUBLICKEY_DENIED_STUB = textwrap.dedent("""\
+    #!/usr/bin/env bash
+    remote_cmd="${@: -1}"
+    case "$remote_cmd" in
+      "true")
+        echo "user@watchtower: Permission denied (publickey)." >&2
+        exit 255
+        ;;
+    esac
+    exit 1
+""")
+
+
+def test_ssh_publickey_denied_shows_remediation(tmp_path: Path) -> None:
+    """SSH publickey auth failure emits a remediation hint pointing to README."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_stub(bin_dir, "tailscale", TAILSCALE_ONLINE_STUB)
+    _write_stub(bin_dir, "ssh", SSH_PUBLICKEY_DENIED_STUB)
+    _seed_db(tmp_path, total_rows=3)
+
+    result = _run_doctor(bin_dir, tmp_path)
+
+    assert result.returncode == 1, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    out = result.stdout
+
+    # Core failure rendered
+    assert "SSH WATCHTOWER:" in out
+    assert "FAIL" in out
+
+    # Remediation hint present
+    assert "publickey auth rejected" in out
+    assert "Setup: secure WATCHTOWER auth" in out

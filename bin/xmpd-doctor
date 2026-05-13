@@ -158,16 +158,18 @@ print('')
 }
 
 # time_ssh_probe -- echoes round-trip ms for `ssh -o ConnectTimeout=3 WATCHTOWER true`,
-# or "FAIL" on non-zero exit. Uses `date +%s%N` for millisecond resolution.
+# or "FAIL:<stderr>" on non-zero exit. Uses `date +%s%N` for millisecond resolution.
+# Caller splits on first ":" to separate status from stderr payload.
 time_ssh_probe() {
-    local start_ns end_ns ms
+    local start_ns end_ns ms ssh_err
     start_ns="$(date +%s%N)"
-    if ssh -F "$SSH_CONFIG" -o ConnectTimeout=3 -o BatchMode=yes "$WATCHTOWER_HOST" true >/dev/null 2>&1; then
+    ssh_err="$(ssh -F "$SSH_CONFIG" -o ConnectTimeout=3 -o BatchMode=yes "$WATCHTOWER_HOST" true 2>&1 >/dev/null)" || true
+    if [ -z "$ssh_err" ]; then
         end_ns="$(date +%s%N)"
         ms=$(( (end_ns - start_ns) / 1000000 ))
         printf '%s' "$ms"
     else
-        printf 'FAIL'
+        printf 'FAIL:%s' "$ssh_err"
     fi
 }
 
@@ -289,16 +291,26 @@ section_local() {
     fi
 
     # --- 1c. SSH WATCHTOWER (timed) ---
-    local ssh_ms
-    ssh_ms="$(time_ssh_probe)"
+    local ssh_result ssh_ms ssh_err
+    ssh_result="$(time_ssh_probe)"
+    ssh_ms="${ssh_result%%:*}"           # everything before first ":"
+    ssh_err="${ssh_result#*:}"           # everything after first ":"
+    # When successful, ssh_result is just the ms number (no colon).
+    [ "$ssh_ms" = "$ssh_result" ] && ssh_err=""
     if [ "$ssh_ms" = "FAIL" ]; then
         print_kv "SSH WATCHTOWER" "FAIL"
+        # Detect publickey auth failure and emit remediation hint.
+        if printf '%s' "$ssh_err" | grep -qi "Permission denied (publickey)"; then
+            print_kv "SSH diagnosis" "publickey auth rejected"
+            printf '    -> See README "Setup: secure WATCHTOWER auth" for the dedicated-key setup.\n'
+        fi
         bump_red
         print_kv "Receiver installed" "SKIPPED (ssh failed)"
         section_local_db
         section_local_last_bidir
         return
     fi
+    ssh_ms="${ssh_result}"
     print_kv "SSH WATCHTOWER" "OK (${ssh_ms}ms)"
     WATCHTOWER_REACHABLE=1
 
