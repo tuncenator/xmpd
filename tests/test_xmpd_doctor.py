@@ -512,7 +512,5 @@ def test_ssh_commands_use_user_config(tmp_path: Path) -> None:
         if stripped.startswith("#"):
             continue
         # Match ssh command invocations (not variable assignments or comments)
-        if re.search(r'\bssh\b\s+-', stripped):
-            assert "-F" in stripped, (
-                f"Line {i}: ssh invocation missing -F flag: {stripped.strip()}"
-            )
+        if re.search(r"\bssh\b\s+-", stripped):
+            assert "-F" in stripped, f"Line {i}: ssh invocation missing -F flag: {stripped.strip()}"

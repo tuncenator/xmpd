@@ -181,9 +181,7 @@ class TestXmpdHistoryCleanExit:
 class TestFzfStdinNotDevNull:
     """Wrapper must not feed /dev/null to fzf stdin."""
 
-    def test_wrapper_does_not_redirect_fzf_stdin_from_devnull(
-        self, tmp_path: Path
-    ) -> None:
+    def test_wrapper_does_not_redirect_fzf_stdin_from_devnull(self, tmp_path: Path) -> None:
         """Read bin/xmpd-history and verify the fzf invocation does not
         include '< /dev/null'. The fix uses a process substitution that
         keeps the fd open until fzf exits."""

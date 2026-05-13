@@ -630,6 +630,4 @@ class TestSSHConfigBypass:
         assert "-F" in cmd, "SSH command must include -F to specify user config"
         f_idx = cmd.index("-F")
         config_path = cmd[f_idx + 1]
-        assert config_path.endswith(".ssh/config"), (
-            f"Expected .ssh/config path, got {config_path}"
-        )
+        assert config_path.endswith(".ssh/config"), f"Expected .ssh/config path, got {config_path}"
