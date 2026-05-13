@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""xmpd-history receiver: WATCHTOWER aggregator side of the bidir protocol.
+
+Stdlib-only. Deployed to WATCHTOWER:~/bin/xmpd-history-receiver via scp.
+Subcommands: bidir, doctor, version.
+
+Schema/protocol versions are bumped together when the wire format changes.
+A client whose --protocol arg does not match PROTOCOL_VERSION here is
+rejected with exit code 2 (no auto-migration).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import socket
+import sqlite3
+import subprocess
+import sys
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+
+SCHEMA_VERSION: int = 1
+PROTOCOL_VERSION: int = 1
+DEFAULT_DB_PATH: str = "~/xmpd-history/history.db"
+PEER_PULL_LIMIT: int = 5000
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def open_db(db_path: str) -> sqlite3.Connection:
+    expanded = Path(db_path).expanduser()
+    expanded.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(expanded))
+    conn.row_factory = sqlite3.Row
+    _apply_migrations(conn)
+    return conn
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    cur = conn.execute("PRAGMA user_version")
+    version = cur.fetchone()[0]
+    if version == 0:
+        _create_schema_v1(conn)
+    elif version > SCHEMA_VERSION:
+        print(
+            f"schema_too_new: db={version} receiver={SCHEMA_VERSION}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+def _create_schema_v1(conn: sqlite3.Connection) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("""
+            CREATE TABLE plays (
+                server_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                host TEXT NOT NULL,
+                local_id INTEGER NOT NULL,
+                played_at TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                track_id TEXT NOT NULL,
+                title TEXT,
+                artist TEXT,
+                album TEXT,
+                duration_seconds INTEGER,
+                art_url TEXT,
+                quality TEXT,
+                play_seconds INTEGER,
+                received_at TEXT NOT NULL,
+                UNIQUE (host, local_id)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX idx_plays_server_id ON plays(server_id)"
+        )
+        conn.execute(
+            "CREATE INDEX idx_plays_host ON plays(host)"
+        )
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+_REQUIRED_FIELDS = ("host", "local_id", "played_at", "provider", "track_id")
+
+
+def cmd_bidir(args: argparse.Namespace) -> int:
+    if args.protocol != PROTOCOL_VERSION:
+        print(
+            f"protocol_mismatch: client={args.protocol}"
+            f" receiver={PROTOCOL_VERSION}",
+            file=sys.stderr,
+        )
+        return 2
+
+    conn = open_db(args.db)
+
+    # Check schema version after open (migration may have run)
+    db_ver = conn.execute("PRAGMA user_version").fetchone()[0]
+    if db_ver > SCHEMA_VERSION:
+        print(
+            f"schema_too_new: db={db_ver} receiver={SCHEMA_VERSION}",
+            file=sys.stderr,
+        )
+        conn.close()
+        return 2
+
+    # Parse NDJSON from stdin
+    parsed_rows: list[dict] = []
+    for lineno, raw_line in enumerate(sys.stdin, start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, ValueError) as exc:
+            print(
+                f"bad_row line={lineno} error={exc}",
+                file=sys.stderr,
+            )
+            conn.close()
+            return 1
+
+        for field in _REQUIRED_FIELDS:
+            if field not in row:
+                print(
+                    f"bad_row line={lineno}"
+                    f" error=missing required field: {field}",
+                    file=sys.stderr,
+                )
+                conn.close()
+                return 1
+
+        parsed_rows.append(row)
+
+    received_at = _now_iso()
+
+    # Single transaction for all inserts
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for row in parsed_rows:
+            conn.execute(
+                """
+                INSERT INTO plays (
+                    host, local_id, played_at, provider, track_id,
+                    title, artist, album, duration_seconds, art_url,
+                    quality, play_seconds, received_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (host, local_id) DO NOTHING
+                """,
+                (
+                    row["host"],
+                    row["local_id"],
+                    row["played_at"],
+                    row["provider"],
+                    row["track_id"],
+                    row.get("title"),
+                    row.get("artist"),
+                    row.get("album"),
+                    row.get("duration_seconds"),
+                    row.get("art_url"),
+                    row.get("quality"),
+                    row.get("play_seconds"),
+                    received_at,
+                ),
+            )
+        conn.execute("COMMIT")
+    except Exception as exc:
+        conn.execute("ROLLBACK")
+        print(f"insert_failed: {exc}", file=sys.stderr)
+        conn.close()
+        return 1
+
+    # Pull peer rows: server_id > since AND host != caller
+    cursor = conn.execute(
+        "SELECT * FROM plays"
+        " WHERE server_id > ? AND host != ?"
+        " ORDER BY server_id ASC"
+        " LIMIT ?",
+        (args.since, args.as_, PEER_PULL_LIMIT),
+    )
+    for row in cursor:
+        sys.stdout.write(
+            json.dumps(dict(row), separators=(",", ":")) + "\n"
+        )
+    sys.stdout.flush()
+
+    conn.close()
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    conn = open_db(args.db)
+
+    # Host stats
+    hosts_cursor = conn.execute(
+        "SELECT host, COUNT(*) AS row_count,"
+        " MAX(played_at) AS latest_played_at"
+        " FROM plays GROUP BY host ORDER BY host"
+    )
+    hosts = [
+        {
+            "host": r["host"],
+            "row_count": r["row_count"],
+            "latest_played_at": r["latest_played_at"],
+        }
+        for r in hosts_cursor
+    ]
+
+    # Tailscale peers
+    tailscale_peers: list[dict] = []
+    tailscale_error: str | None = None
+    try:
+        ts_result = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if ts_result.returncode != 0:
+            tailscale_error = f"exit_{ts_result.returncode}"
+        else:
+            ts_data = json.loads(ts_result.stdout)
+            peer_map = ts_data.get("Peer", {})
+            for peer_info in peer_map.values():
+                tailscale_peers.append({
+                    "hostname": peer_info.get("HostName"),
+                    "online": peer_info.get("Online", False),
+                })
+    except FileNotFoundError:
+        tailscale_error = "not_installed"
+    except subprocess.TimeoutExpired:
+        tailscale_error = "timeout"
+
+    payload: dict = {
+        "schema_version": SCHEMA_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
+        "db_path": str(Path(args.db).expanduser()),
+        "hosts": hosts,
+        "tailscale_peers": tailscale_peers,
+    }
+    if tailscale_error is not None:
+        payload["tailscale_error"] = tailscale_error
+
+    print(json.dumps(payload, indent=2))
+    conn.close()
+    return 0
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    print(f"schema={SCHEMA_VERSION}")
+    print(f"protocol={PROTOCOL_VERSION}")
+    return 0
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="xmpd-history-receiver")
+    sub = p.add_subparsers(dest="subcmd", required=True)
+
+    p_bidir = sub.add_parser("bidir")
+    p_bidir.add_argument("--as", dest="as_", required=True)
+    p_bidir.add_argument("--since", type=int, required=True)
+    p_bidir.add_argument(
+        "--protocol", type=int, default=PROTOCOL_VERSION,
+    )
+    p_bidir.add_argument("--db", default=DEFAULT_DB_PATH)
+
+    p_doctor = sub.add_parser("doctor")
+    p_doctor.add_argument("--db", default=DEFAULT_DB_PATH)
+
+    sub.add_parser("version")
+
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv if argv is not None else sys.argv[1:])
+    try:
+        if args.subcmd == "bidir":
+            return cmd_bidir(args)
+        elif args.subcmd == "doctor":
+            return cmd_doctor(args)
+        elif args.subcmd == "version":
+            return cmd_version(args)
+        else:
+            print(f"unknown subcmd: {args.subcmd}", file=sys.stderr)
+            return 1
+    except SystemExit:
+        raise
+    except Exception as exc:
+        msg = f"error: {exc}"
+        if os.environ.get("XMPD_HISTORY_RECEIVER_DEBUG") == "1":
+            traceback.print_exc(file=sys.stderr)
+        print(msg, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
