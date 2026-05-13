@@ -106,7 +106,21 @@ No helpers needed repair. Phase 1 reported no helper issues.
 
 ## Code Review Results
 
-> Pending -- code review has not yet occurred for this checkpoint.
+- **Result**: REVIEW PASSED WITH NOTES
+- **Reviewer**: spark-code-reviewer (claude-opus-4-6)
+- **Diff range**: `72a4a4a..f2dae51`
+
+All key invariants checked and satisfied: `(host, local_id)` PK column order; single-writer SQLite lock discipline; `BEGIN IMMEDIATE` + rollback on schema migration; provider-agnostic store; `socket.gethostname().upper()` cached on `self._host`; no second `sqlite3.connect` in production code; bool-as-int trap rejected in validator; `since` rejects naive datetimes; `add_play` counter+insert atomicity verified; `insert_remote_rows` idempotency via `ON CONFLICT DO NOTHING`. Security clean (parameterized queries; no secrets). Style/lint/types clean for new code. Test-first compliance, mock discipline, FQA coverage all satisfied.
+
+### Minor issues (cosmetic, non-blocking)
+
+| Severity | Location | Issue |
+|----------|----------|-------|
+| Minor | `xmpd/history_store.py` line 377 (docstring) | Docstring references `datetime.now(timezone.utc)` but code uses `datetime.now(UTC)` alias. Code correct; docstring stale. |
+| Minor | `tests/test_config.py` | No dedicated rejection test for `pull_batch`; covered indirectly by shared validator codepath with `bidir_batch`. |
+| Minor | `tests/test_config.py` | No dedicated rejection test for `watchtower.enabled` non-bool; covered indirectly by top-level `history.enabled` test exercising the same `isinstance(x, bool)` pattern. |
+
+These do not block the checkpoint and can be addressed opportunistically in a later phase if relevant code is touched.
 
 ---
 
