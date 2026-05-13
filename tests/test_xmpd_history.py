@@ -58,17 +58,18 @@ class TestXmpdHistoryInitialReload:
         # fzf stub: extract the reload command from --bind start:reload(...)
         # and log it, then exit. This captures what fzf would execute.
         _make_stub(
-            tmp_path, "fzf",
+            tmp_path,
+            "fzf",
             f'for arg in "$@"; do\n'
             f'  case "$arg" in\n'
-            f'    start:reload\\(*)\n'
+            f"    start:reload\\(*)\n"
             f'      CMD="${{arg#start:reload(}}"\n'
             f'      CMD="${{CMD%%)}}"\n'
             f'      echo "$CMD" >> "{reload_file}"\n'
-            f'      ;;\n'
-            f'  esac\n'
-            f'done\n'
-            f'exit 1',
+            f"      ;;\n"
+            f"  esac\n"
+            f"done\n"
+            f"exit 1",
         )
 
         sock_path, sock = _make_socket(tmp_path)
@@ -83,9 +84,7 @@ class TestXmpdHistoryInitialReload:
                 timeout=10,
             )
             # Wrapper exits 0 (fzf exit 1 -> || exit 0)
-            assert result.returncode == 0, (
-                f"exit={result.returncode} stderr={result.stderr}"
-            )
+            assert result.returncode == 0, f"exit={result.returncode} stderr={result.stderr}"
 
             assert reload_file.exists(), "fzf stub never captured reload cmd"
             content = reload_file.read_text().strip()
@@ -102,9 +101,7 @@ class TestXmpdHistoryInitialReload:
 class TestXmpdHistoryModeToggle:
     """ctrl-t toggle flips the mode file and the reload reads it."""
 
-    def test_xmpd_history_ctrl_t_toggles_to_count(
-        self, tmp_path: Path
-    ) -> None:
+    def test_xmpd_history_ctrl_t_toggles_to_count(self, tmp_path: Path) -> None:
         reload_file = tmp_path / "reload_cmd.log"
         mode_file = tmp_path / "mode-file"
 
@@ -112,26 +109,27 @@ class TestXmpdHistoryModeToggle:
         # toggle command and the reload(...) command. Execute the toggle
         # (flips mode file time->count), then eval+log the reload.
         _make_stub(
-            tmp_path, "fzf",
+            tmp_path,
+            "fzf",
             f'RELOAD_CMD=""\n'
             f'for arg in "$@"; do\n'
             f'  case "$arg" in\n'
-            f'    ctrl-t:*)\n'
-            f'      # Extract toggle: between execute-silent( and )+reload(\n'
+            f"    ctrl-t:*)\n"
+            f"      # Extract toggle: between execute-silent( and )+reload(\n"
             f'      BODY="${{arg#ctrl-t:execute-silent(}}"\n'
             f'      TOGGLE="${{BODY%%)+reload(*}}"\n'
             f'      eval "$TOGGLE" 2>/dev/null || true\n'
-            f'      # Extract reload: after +reload( until final )\n'
+            f"      # Extract reload: after +reload( until final )\n"
             f'      AFTER="${{BODY#*)+reload(}}"\n'
             f'      RELOAD_CMD="${{AFTER%%)}}"\n'
-            f'      ;;\n'
-            f'  esac\n'
-            f'done\n'
+            f"      ;;\n"
+            f"  esac\n"
+            f"done\n"
             f'if [ -n "$RELOAD_CMD" ]; then\n'
             f'  EXPANDED=$(eval echo "$RELOAD_CMD" 2>/dev/null || true)\n'
             f'  echo "$EXPANDED" >> "{reload_file}"\n'
-            f'fi\n'
-            f'exit 1',
+            f"fi\n"
+            f"exit 1",
         )
 
         sock_path, sock = _make_socket(tmp_path)
@@ -146,9 +144,7 @@ class TestXmpdHistoryModeToggle:
                 text=True,
                 timeout=10,
             )
-            assert result.returncode == 0, (
-                f"exit={result.returncode} stderr={result.stderr}"
-            )
+            assert result.returncode == 0, f"exit={result.returncode} stderr={result.stderr}"
 
             assert reload_file.exists(), "fzf stub never captured reload cmd"
             content = reload_file.read_text().strip()
@@ -160,9 +156,7 @@ class TestXmpdHistoryModeToggle:
 class TestXmpdHistoryCleanExit:
     """Wrapper exits cleanly on empty input."""
 
-    def test_xmpd_history_clean_exit_on_empty_input(
-        self, tmp_path: Path
-    ) -> None:
+    def test_xmpd_history_clean_exit_on_empty_input(self, tmp_path: Path) -> None:
         _make_stub(tmp_path, "fzf", "exit 130")  # fzf exits 130 on Esc/abort
 
         sock_path, sock = _make_socket(tmp_path)

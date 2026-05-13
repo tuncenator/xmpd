@@ -1032,27 +1032,46 @@ class TestCmdHistoryJson:
         db_path = str(tmp_path / "test_history.db")
         store = HistoryStore(db_path)
         store.add_play(
-            provider="yt", track_id="a1", played_at="2026-05-13T10:00:00+03:00",
-            title="First", artist="A", album=None,
-            duration_seconds=180, art_url=None, quality="320k", play_seconds=120,
+            provider="yt",
+            track_id="a1",
+            played_at="2026-05-13T10:00:00+03:00",
+            title="First",
+            artist="A",
+            album=None,
+            duration_seconds=180,
+            art_url=None,
+            quality="320k",
+            play_seconds=120,
         )
         store.add_play(
-            provider="tidal", track_id="b2", played_at="2026-05-13T12:00:00+03:00",
-            title="Second", artist="B", album=None,
-            duration_seconds=240, art_url=None, quality="HiFi", play_seconds=200,
+            provider="tidal",
+            track_id="b2",
+            played_at="2026-05-13T12:00:00+03:00",
+            title="Second",
+            artist="B",
+            album=None,
+            duration_seconds=240,
+            art_url=None,
+            quality="HiFi",
+            play_seconds=200,
         )
         store.add_play(
-            provider="yt", track_id="c3", played_at="2026-05-13T14:00:00+03:00",
-            title="Third", artist="C", album=None,
-            duration_seconds=300, art_url=None, quality="HiRes", play_seconds=250,
+            provider="yt",
+            track_id="c3",
+            played_at="2026-05-13T14:00:00+03:00",
+            title="Third",
+            artist="C",
+            album=None,
+            duration_seconds=300,
+            art_url=None,
+            quality="HiRes",
+            play_seconds=250,
         )
 
         daemon = _make_daemon(tmp_path)
         daemon.history_store = store
 
-        response = daemon._cmd_history_json(
-            ["--mode", "time", "--since", "all", "--limit", "10"]
-        )
+        response = daemon._cmd_history_json(["--mode", "time", "--since", "all", "--limit", "10"])
         assert response["success"] is True
         rows = response["rows"]
         assert len(rows) == 3
@@ -1099,21 +1118,33 @@ class TestCmdHistoryJson:
         db_path = str(tmp_path / "test_history.db")
         store = HistoryStore(db_path)
         store.add_play(
-            provider="yt", track_id="a1", played_at="2026-05-13T10:00:00+03:00",
-            title="Repeat", artist="A", album=None,
-            duration_seconds=180, art_url=None, quality="320k", play_seconds=120,
+            provider="yt",
+            track_id="a1",
+            played_at="2026-05-13T10:00:00+03:00",
+            title="Repeat",
+            artist="A",
+            album=None,
+            duration_seconds=180,
+            art_url=None,
+            quality="320k",
+            play_seconds=120,
         )
         store.add_play(
-            provider="yt", track_id="a1", played_at="2026-05-13T12:00:00+03:00",
-            title="Repeat", artist="A", album=None,
-            duration_seconds=180, art_url=None, quality="320k", play_seconds=120,
+            provider="yt",
+            track_id="a1",
+            played_at="2026-05-13T12:00:00+03:00",
+            title="Repeat",
+            artist="A",
+            album=None,
+            duration_seconds=180,
+            art_url=None,
+            quality="320k",
+            play_seconds=120,
         )
         daemon = _make_daemon(tmp_path)
         daemon.history_store = store
 
-        response = daemon._cmd_history_json(
-            ["--mode", "count", "--since", "all", "--limit", "10"]
-        )
+        response = daemon._cmd_history_json(["--mode", "count", "--since", "all", "--limit", "10"])
         assert response["success"] is True
         rows = response["rows"]
         assert len(rows) == 1

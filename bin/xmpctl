@@ -357,7 +357,7 @@ def parse_provider_flag(args: list[str]) -> tuple[str | None, list[str]]:
 
 # ANSI true color escapes for fzf output (consistent with bin/xmpd-status)
 ANSI_TIDAL = "\033[38;2;115;218;202m"  # #73daca teal
-ANSI_YT = "\033[38;2;247;118;142m"     # #f7768e pink
+ANSI_YT = "\033[38;2;247;118;142m"  # #f7768e pink
 ANSI_RESET = "\033[0m"
 ANSI_BOLD = "\033[1m"
 ANSI_DIM = "\033[2m"
@@ -406,10 +406,7 @@ def format_track_fzf(track: dict[str, Any]) -> str:
     liked_str = " [+1]" if liked is True else ""
 
     # Build visible line: [TD] CD [+1] Artist - Title (3:59)
-    visible = (
-        f"{color}{tag}{badge}{liked_str}"
-        f" {artist} - {title} ({duration}){ANSI_RESET}"
-    )
+    visible = f"{color}{tag}{badge}{liked_str} {artist} - {title} ({duration}){ANSI_RESET}"
 
     return f"{provider}\t{track_id}\t{visible}"
 
@@ -578,9 +575,12 @@ def cmd_history_json(args: list[str]) -> None:
     # Build daemon command
     cmd_parts = [
         "history-json",
-        "--mode", mode,
-        "--since", since_str,
-        "--limit", str(limit),
+        "--mode",
+        mode,
+        "--since",
+        since_str,
+        "--limit",
+        str(limit),
     ]
     command = " ".join(cmd_parts)
     result = send_command(command)
@@ -620,10 +620,7 @@ def cmd_history_json(args: list[str]) -> None:
         else:
             cell = f"x{row.get('play_count', 0)}"
             last = format_played_at(row.get("last_played_at", ""))
-            print(
-                f"{provider}\t{track_id}\t{cell}  {visible}"
-                f"  last {last}{host_suffix}"
-            )
+            print(f"{provider}\t{track_id}\t{cell}  {visible}  last {last}{host_suffix}")
 
 
 def cmd_play(provider: str, track_id: str) -> None:
@@ -736,9 +733,7 @@ def cmd_radio(
 
                 # Load radio playlist from music directory
                 # XSPF playlists are in music dir, not playlist dir
-                subprocess.run(
-                    mpc_cmd + ["load", radio_xspf], check=True, capture_output=True
-                )
+                subprocess.run(mpc_cmd + ["load", radio_xspf], check=True, capture_output=True)
 
                 # Start playback
                 subprocess.run(mpc_cmd + ["play"], check=True, capture_output=True)
@@ -935,10 +930,7 @@ def cmd_auth_tidal() -> None:
             f"  1. Edit ~/.config/xmpd/config.yaml and set "
             f"{colorize('tidal.enabled: true', 'blue')}"
         )
-        print(
-            f"  2. Restart the daemon: "
-            f"{colorize('systemctl --user restart xmpd', 'blue')}"
-        )
+        print(f"  2. Restart the daemon: {colorize('systemctl --user restart xmpd', 'blue')}")
     except TidalAuthRequired as e:
         cross = "ERROR" if not has_unicode_support() else "✗"
         print(colorize(f"{cross} Tidal authentication failed: {e}", "red"), file=sys.stderr)
@@ -996,7 +988,8 @@ def cmd_auth(provider: str, manual: bool = False) -> None:
 
                 print(
                     colorize(
-                        "OK browser.json updated from Firefox cookies.", "green",
+                        "OK browser.json updated from Firefox cookies.",
+                        "green",
                     )
                 )
                 print("Daemon will pick up new credentials automatically.")
@@ -1140,9 +1133,7 @@ def main() -> NoReturn:
             track_id = track_id.strip() or None
         # If --track-id was explicitly passed but resolved to empty, that is an
         # error -- do not silently fall back to the currently playing track.
-        track_id_flag_given = any(
-            a in ("--track-id",) or a.startswith("--track-id=") for a in args
-        )
+        track_id_flag_given = any(a in ("--track-id",) or a.startswith("--track-id=") for a in args)
         if track_id_flag_given and track_id is None:
             print("Error: --track-id was given but resolved to an empty value", file=sys.stderr)
             sys.exit(1)
