@@ -23,9 +23,7 @@ def aggregator_db(tmp_path: Path) -> Path:
     return tmp_path / "agg.db"
 
 
-def _run_receiver(
-    args: list[str], stdin_data: bytes = b""
-) -> subprocess.CompletedProcess[bytes]:
+def _run_receiver(args: list[str], stdin_data: bytes = b"") -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         [sys.executable, str(RECEIVER), *args],
         input=stdin_data,
@@ -108,9 +106,7 @@ def test_bidir_one_row_inserted(aggregator_db: Path) -> None:
     assert result.stdout == b""
 
     conn = sqlite3.connect(str(aggregator_db))
-    rows = conn.execute(
-        "SELECT host, local_id, title, received_at FROM plays"
-    ).fetchall()
+    rows = conn.execute("SELECT host, local_id, title, received_at FROM plays").fetchall()
     assert len(rows) == 1
     assert rows[0][0] == "STORMTREE"
     assert rows[0][1] == 1
@@ -157,9 +153,7 @@ def test_bidir_multi_host_pull_filter(aggregator_db: Path) -> None:
         _make_row(host="STORMTREE", local_id=1),
         _make_row(host="STORMTREE", local_id=2),
     ]
-    stdin_st = b"".join(
-        (json.dumps(r) + "\n").encode() for r in rows_st
-    )
+    stdin_st = b"".join((json.dumps(r) + "\n").encode() for r in rows_st)
     r1 = _run_receiver(
         ["bidir", "--as", "STORMTREE", "--since", "0", "--db", db],
         stdin_data=stdin_st,
@@ -195,7 +189,9 @@ def test_bidir_since_cursor(aggregator_db: Path) -> None:
 
     # Seed VICAR local_id=1
     vicar_row = _make_row(
-        host="VICAR", local_id=1, track_id="uuid-vicar",
+        host="VICAR",
+        local_id=1,
+        track_id="uuid-vicar",
     )
     r2 = _run_receiver(
         ["bidir", "--as", "VICAR", "--since", "0", "--db", db],
@@ -205,7 +201,9 @@ def test_bidir_since_cursor(aggregator_db: Path) -> None:
 
     # Seed ARCHON local_id=1
     archon_row = _make_row(
-        host="ARCHON", local_id=1, track_id="uuid-archon",
+        host="ARCHON",
+        local_id=1,
+        track_id="uuid-archon",
     )
     r3 = _run_receiver(
         ["bidir", "--as", "ARCHON", "--since", "0", "--db", db],
@@ -215,9 +213,7 @@ def test_bidir_since_cursor(aggregator_db: Path) -> None:
 
     # Get VICAR's server_id via raw sqlite
     conn = sqlite3.connect(db)
-    vicar_sid = conn.execute(
-        "SELECT server_id FROM plays WHERE host='VICAR'"
-    ).fetchone()[0]
+    vicar_sid = conn.execute("SELECT server_id FROM plays WHERE host='VICAR'").fetchone()[0]
     conn.close()
 
     # bidir as ARCHON --since <vicar_sid>: only rows with
@@ -249,8 +245,17 @@ def test_bidir_since_cursor(aggregator_db: Path) -> None:
 # 8. protocol mismatch
 def test_bidir_protocol_mismatch(aggregator_db: Path) -> None:
     result = _run_receiver(
-        ["bidir", "--as", "STORMTREE", "--since", "0", "--protocol", "99",
-         "--db", str(aggregator_db)],
+        [
+            "bidir",
+            "--as",
+            "STORMTREE",
+            "--since",
+            "0",
+            "--protocol",
+            "99",
+            "--db",
+            str(aggregator_db),
+        ],
     )
     assert result.returncode == 2
     assert b"protocol_mismatch" in result.stderr
