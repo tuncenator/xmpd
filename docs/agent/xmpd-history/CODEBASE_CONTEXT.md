@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 3 -- Phase 3 HistorySyncer Real Impl + Phase 4 Receiver Script (2026-05-13)
+> Last updated by: Phase 7 -- bin/xmpd-doctor healthcheck (2026-05-13)
 
 ---
 
@@ -50,6 +50,8 @@ Tests live in `tests/`. Phase 1 introduced `tests/conftest.py` with shared fixtu
 | `xmpd/mpd_client.py` | `MPDClient` thin wrapper over python-mpd2 (connect, currentsong, status, playlist ops). | Not modified by this feature. |
 | `bin/xmpctl` | CLI client. Subcommand dispatch via top-level `if`/`elif` blocks; Unix socket IPC; `format_track_fzf` for ANSI rendering; `colorize` helpers. | New `history-json` subcommand is added here, mirroring `cmd_search_json`. New `history-backfill` subcommand also lives here. |
 | `bin/xmpd-search` | Two-mode (Search / Browse) fzf wrapper. Mode toggle via temp file; `transform:` bindings; `--expect` for multi-select keys; `reload(...)` calling `xmpctl search-json`. | The reference UX for `bin/xmpd-history` (single mode, plus `ctrl-t` to toggle time<->count). Bind syntax and reload pattern are identical. |
+| `bin/xmpd-doctor` | Multi-host healthcheck bash script. Read-only diagnostic; no daemon dependency. Reads local `~/.config/xmpd/history.db` via sqlite3 CLI; SSHes to WATCHTOWER for receiver version + doctor JSON. | Shebang `#!/usr/bin/env bash`, `set -uo pipefail` (no `-e`). Three sections: Local, Cluster (via WATCHTOWER), Per-host row state. Exit codes: 0 green, 2 yellow, 1 red (sticky). `WATCHTOWER_REACHABLE` flag set after timed SSH probe; guards section_cluster. jq fallback via `python3 -c` (detected by actual invocation, not `command -v`). Parses `tailscale_peers` (hostname/online) from receiver doctor JSON. |
+| `tests/test_xmpd_doctor.py` | Pytest harness for `bin/xmpd-doctor`. 10 tests (9 scenarios + 1 parametrized). | PATH-stub strategy: `_write_stub`, `_seed_db`, `_run_doctor` helpers. Stubs for tailscale, ssh, sqlite3, jq. Uses real sqlite3 subprocess to seed test DBs (never imports the bash script). |
 | `bin/xmpd-status`, `bin/xmpd-status-preview` | Waybar status line + preview. | Not touched by this feature. |
 | `tests/test_track_store_migration.py` | Reference test pattern: schema versioning, fresh DB vs `_seed_v0_db` migration. | Pattern HistoryStore tests should follow: pytest + `tmp_path`, raw `sqlite3` for assertions about migration outcomes. |
 | `tests/test_history_reporter.py` | HistoryReporter tests: MPD idle loop, elapsed time, report dispatch, history write block (8 tests in `TestHistoryWriteBlock`). | `_make_reporter_with_history(tmp_path, registry)` helper creates a reporter with real `HistoryStore`, `MagicMock(spec=HistorySyncer)`, real `ThreadPoolExecutor`. Tests SELECT rows via raw `sqlite3` (anti-pattern #1 guard). |
