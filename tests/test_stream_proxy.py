@@ -1096,13 +1096,13 @@ async def test_dash_stream_does_not_hold_resolution_slot(
 
             # A second track request should succeed (not 503)
             track_store.add_track(
-                "tidal", "99999999",
+                "tidal", "420578915",
                 stream_url="https://cdn.tidal.com/direct.flac",
                 title="Track 2",
                 artist="Artist",
             )
             resp2 = await client.get(
-                "/proxy/tidal/99999999", allow_redirects=False
+                "/proxy/tidal/420578915", allow_redirects=False
             )
             assert resp2.status == 307, (
                 f"Expected 307 redirect, got {resp2.status} "

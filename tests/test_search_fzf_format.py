@@ -262,7 +262,7 @@ class TestEdgeCases:
         line = format_track_fzf(
             _make_track(
                 provider="tidal",
-                track_id="99999999",
+                track_id="420578915",
                 title="Creep",
                 artist="Radiohead",
                 duration="3:59",
@@ -272,7 +272,7 @@ class TestEdgeCases:
         )
         parts = line.split("\t")
         assert parts[0] == "tidal"
-        assert parts[1] == "99999999"
+        assert parts[1] == "420578915"
         visible = parts[2]
         assert TIDAL_COLOR in visible
         assert "[TD]" in visible

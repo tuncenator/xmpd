@@ -93,7 +93,7 @@ class TestFieldExtraction:
         assert provider == "yt"
 
     def test_tidal_provider_extracted(self):
-        line = format_track_fzf(_make_track(provider="tidal", track_id="99999999"))
+        line = format_track_fzf(_make_track(provider="tidal", track_id="420578915"))
         provider, track_id, _ = _extract_fields(line)
         assert provider == "tidal"
 
@@ -103,9 +103,9 @@ class TestFieldExtraction:
         assert track_id == "testvideoid"
 
     def test_track_id_tidal_format(self):
-        line = format_track_fzf(_make_track(provider="tidal", track_id="99999999"))
+        line = format_track_fzf(_make_track(provider="tidal", track_id="420578915"))
         _, track_id, _ = _extract_fields(line)
-        assert track_id == "99999999"
+        assert track_id == "420578915"
 
     def test_visible_field_not_used_for_action(self):
         """Visible field (field 3) is display-only; actions use fields 1 and 2."""
@@ -226,7 +226,7 @@ class TestXmpctlQueueCommand:
 
     def test_queue_with_args_attempts_daemon(self):
         result = subprocess.run(
-            [str(XMPCTL), "queue", "tidal", "99999999"],
+            [str(XMPCTL), "queue", "tidal", "420578915"],
             capture_output=True,
             text=True,
         )
@@ -243,7 +243,7 @@ class TestXmpctlRadioTrackId:
     """xmpctl radio --track-id parses correctly and sends to daemon."""
 
     def test_radio_with_track_id_attempts_daemon(self):
-        """radio --provider tidal --track-id 99999999 reaches daemon.
+        """radio --provider tidal --track-id 420578915 reaches daemon.
 
         ``--apply`` is intentionally omitted: this test only verifies flag
         parsing and daemon dispatch. Including ``--apply`` clears the user's
@@ -251,7 +251,7 @@ class TestXmpctlRadioTrackId:
         which restarts playback every time the suite runs.
         """
         result = subprocess.run(
-            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id", "99999999"],
+            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id", "420578915"],
             capture_output=True,
             text=True,
         )
@@ -273,9 +273,9 @@ class TestXmpctlRadioTrackId:
             )), f"Unexpected stderr: {result.stderr!r}"
 
     def test_radio_track_id_equals_syntax(self):
-        """radio --track-id=99999999 syntax also accepted."""
+        """radio --track-id=420578915 syntax also accepted."""
         result = subprocess.run(
-            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id=99999999"],
+            [str(XMPCTL), "radio", "--provider", "tidal", "--track-id=420578915"],
             capture_output=True,
             text=True,
         )
