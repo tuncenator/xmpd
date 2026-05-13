@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Setup -- xmpd-history feature initialization (2026-05-13)
+> Last updated by: Checkpoint 1 -- Phase 1 HistoryStore Foundation + Config (2026-05-13)
 
 ---
 
@@ -25,7 +25,7 @@ A Unix-socket IPC server runs in its own thread (`xmpd/daemon.py`), accepting ne
 
 Logging is plain stdlib `logging` with module-level loggers. Root logger configured in `xmpd/__main__.py` with the format `[asctime] [levelname] [name] msg`; the systemd unit captures stdout to journald.
 
-Tests live in `tests/`. No `tests/conftest.py` exists -- fixtures are inlined per test file, leaning on pytest's built-in `tmp_path`, `monkeypatch`, and `unittest.mock.MagicMock`.
+Tests live in `tests/`. Phase 1 introduced `tests/conftest.py` with shared fixtures (currently `history_store_temp`; Phase 3 will add `mock_ssh_bidir`). Older tests still inline their fixtures using pytest's built-in `tmp_path`, `monkeypatch`, and `unittest.mock.MagicMock`.
 
 ---
 
@@ -34,6 +34,8 @@ Tests live in `tests/`. No `tests/conftest.py` exists -- fixtures are inlined pe
 | File Path | Purpose | Notes |
 |-----------|---------|-------|
 | `xmpd/track_store.py` | SQLite track metadata cache; pattern HistoryStore mirrors. | Single-writer via `threading.Lock`; schema migrations via `PRAGMA user_version` + `_apply_migrations`; `sqlite3.Row` factory; `check_same_thread=False`. |
+| `xmpd/history_store.py` | SQLite-backed local play history store; `(host, local_id)` PK contract; 7 public methods; SCHEMA_VERSION = 1. | Single-writer via `threading.Lock`; schema migrations via `PRAGMA user_version`; `sqlite3.Row` factory; `check_same_thread=False`. Mirror of `track_store.py` pattern. |
+| `tests/conftest.py` | Shared pytest fixtures. | Currently: `history_store_temp(tmp_path) -> Iterator[HistoryStore]`. Phase 3 adds `mock_ssh_bidir`. |
 | `xmpd/history_reporter.py` | Monitors MPD idle, computes elapsed play, calls provider `report_play()` once 30s threshold passes. | The extension point. `_report_track(url, duration_seconds)` is where HistoryStore + HistorySyncer hook in after the existing provider report. `PROXY_URL_RE` extracts `(provider, track_id)` from the proxy URL. |
 | `xmpd/daemon.py` | `XMPDaemon` constructor wires every subsystem; `run()` starts threads. | Lines ~75-227 are the construction sequence; new HistoryStore/HistorySyncer wire here. `_history_thread` already exists when `history_reporting.enabled = true`. |
 | `xmpd/__main__.py` | Entrypoint (`python -m xmpd`); calls `setup_logging()`, loads config, instantiates daemon, signal handlers. | Logging format defined here; new modules inherit. |
@@ -69,6 +71,23 @@ class TrackStore:
 ```
 
 Construction flow: open connection (`check_same_thread=False`, `row_factory=sqlite3.Row`), run `_apply_migrations`, instantiate `threading.Lock` for writes. Writes use `with self._lock: with self.conn: ...` (auto-commit on success, rollback on exception). Schema versioning: `PRAGMA user_version`; bump `SCHEMA_VERSION` and add an `_migrate_vN_to_vN+1` function.
+
+### `xmpd/history_store.py::HistoryStore` (the write/read side of local history)
+
+Constructor: `HistoryStore(db_path: str) -> None`
+Construction flow: expanduser + mkdir, `sqlite3.connect(check_same_thread=False)`,
+`row_factory = sqlite3.Row`, `_apply_migrations`, `threading.Lock`, `socket.gethostname().upper()`.
+Public API:
+- `add_play(*, provider, track_id, played_at, title, artist, album, duration_seconds, art_url, quality, play_seconds) -> int`
+- `get_plays(*, mode: Literal["time","count"], since: datetime|None, limit: int) -> list[dict]`
+- `unsynced_rows(limit=1000) -> list[dict]`
+- `mark_synced(local_ids: list[int]) -> None`
+- `insert_remote_rows(rows: list[dict]) -> int`
+- `get_sync_state(key: str) -> str|None`
+- `set_sync_state(key: str, value: str) -> None`
+- `close() -> None`, `__enter__/__exit__` context manager.
+
+Schema v1 tables: `plays` (PK `(host, local_id)`) and `sync_state` (PK `key`). Indexes: `idx_plays_played_at` (DESC), `idx_plays_provider_track`, `idx_plays_unsynced` (partial, `WHERE synced_at IS NULL`). Full DDL in `_create_schema_v1`.
 
 ### `xmpd/history_reporter.py::HistoryReporter._report_track`
 
@@ -155,7 +174,7 @@ The wrapper's structure:
 - **ISO 8601 with offset**: `datetime.now(timezone.utc).astimezone().isoformat()` -> `2026-05-12T19:39:28+03:00`. Parse with `datetime.fromisoformat()` (Python 3.11+ accepts the offset form).
 - **Naming**: snake_case modules and functions, PascalCase classes, SCREAMING_SNAKE for module-level regex constants.
 - **Error handling**: catch specific exception types (`sqlite3.Error`, `subprocess.CalledProcessError`, `json.JSONDecodeError`, `OSError`); log with `exc_info=True` at WARNING/ERROR; raise `XMPDError` subclasses for caller-handled cases.
-- **pytest layout**: tests in `tests/test_<module>.py`; no `conftest.py`; use `tmp_path`, `monkeypatch`, `unittest.mock.MagicMock` / `patch`. Note: there is a stray `MagicMock/` directory in repo root which is gitignored; do NOT add to it.
+- **pytest layout**: tests in `tests/test_<module>.py`; `tests/conftest.py` has shared fixtures (Phase 1: `history_store_temp`). Use `tmp_path`, `monkeypatch`, `unittest.mock.MagicMock` / `patch`. Note: there is a stray `MagicMock/` directory in repo root which is gitignored; do NOT add to it.
 - **Type discipline**: mypy `disallow_untyped_defs = true`. Every new function (public or private) needs annotations.
 
 ### End-to-end flow (existing Tidal play -> history feature extension)
