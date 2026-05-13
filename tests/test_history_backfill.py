@@ -222,9 +222,12 @@ class TestRunBackfill:
             str(FIXTURE_LOG),
             dry_run=False,
         )
-        assert result["inserted"] == 17
+        # The fixture contains one failed-decode exception for tidal/391401491
+        # at the same timestamp as its played line, so that play is filtered.
+        assert result["inserted"] == 16
         assert result["skipped"] == 0
         assert result["orphans"] == 6
+        assert result["skipped_failed_decode"] == 1
 
         # Verify via raw SQL (anti-pattern #1 prevention)
         conn = sqlite3.connect(str(tmp_path / "history.db"))
@@ -234,7 +237,7 @@ class TestRunBackfill:
         ).fetchall()
         conn.close()
 
-        assert len(rows) == 17
+        assert len(rows) == 16
         # Orphan rows have NULL title
         null_title_count = sum(1 for r in rows if r[4] is None)
         assert null_title_count == 6
@@ -271,7 +274,7 @@ class TestRunBackfill:
     def test_run_backfill_idempotent_on_rerun(
         self, history_store_temp: HistoryStore, tmp_path: Path
     ) -> None:
-        """Second run: inserted=0, skipped=17, orphans=6; row count unchanged."""
+        """Second run: inserted=0, skipped=16, orphans=6; row count unchanged."""
         track_store = _make_track_store()
 
         first = run_backfill(
@@ -280,7 +283,7 @@ class TestRunBackfill:
             str(FIXTURE_LOG),
             dry_run=False,
         )
-        assert first["inserted"] == 17
+        assert first["inserted"] == 16
 
         second = run_backfill(
             history_store_temp,
@@ -289,14 +292,15 @@ class TestRunBackfill:
             dry_run=False,
         )
         assert second["inserted"] == 0
-        assert second["skipped"] == 17
+        assert second["skipped"] == 16
         assert second["orphans"] == 6
+        assert second["skipped_failed_decode"] == 1
 
         # Row count must be unchanged
         conn = sqlite3.connect(str(tmp_path / "history.db"))
         count = conn.execute("SELECT COUNT(*) FROM plays").fetchone()[0]
         conn.close()
-        assert count == 17
+        assert count == 16
 
     def test_run_backfill_dry_run_writes_nothing(
         self, history_store_temp: HistoryStore, tmp_path: Path
@@ -316,9 +320,10 @@ class TestRunBackfill:
 
         mtime_after = os.path.getmtime(str(db_path))
 
-        assert result["inserted"] == 17
+        assert result["inserted"] == 16
         assert result["skipped"] == 0
         assert result["orphans"] == 6
+        assert result["skipped_failed_decode"] == 1
         # DB file must not have been modified
         assert mtime_after == mtime_before
 
@@ -341,7 +346,7 @@ class TestRunBackfill:
             str(empty_log),
             dry_run=False,
         )
-        assert result == {"inserted": 0, "skipped": 0, "orphans": 0}
+        assert result == {"inserted": 0, "skipped": 0, "orphans": 0, "skipped_failed_decode": 0}
 
     def test_run_backfill_track_store_none_treats_all_as_orphans(
         self, history_store_temp: HistoryStore, tmp_path: Path
@@ -353,13 +358,164 @@ class TestRunBackfill:
             str(FIXTURE_LOG),
             dry_run=False,
         )
-        assert result["inserted"] == 17
-        assert result["orphans"] == 17
+        assert result["inserted"] == 16
+        assert result["orphans"] == 16
+        assert result["skipped_failed_decode"] == 1
 
         conn = sqlite3.connect(str(tmp_path / "history.db"))
         null_count = conn.execute("SELECT COUNT(*) FROM plays WHERE title IS NULL").fetchone()[0]
         conn.close()
-        assert null_count == 17
+        assert null_count == 16
+
+
+# ---------------------------------------------------------------------------
+# 3b. Failed-decode filtering tests
+# ---------------------------------------------------------------------------
+
+FIXTURE_LOG_FAILED_DECODE = Path(__file__).parent / "fixtures" / "sample_mpd_log_failed_decode"
+
+
+class TestFailedDecodeRegex:
+    """Tests for FAILED_DECODE_RE regex."""
+
+    def test_matches_502_exception(self) -> None:
+        from xmpd.history_backfill import FAILED_DECODE_RE
+
+        line = (
+            "2026-05-13T05:47:14 exception: Failed to decode"
+            ' "http://localhost:6602/proxy/yt/testvideoid";'
+            " got HTTP status 502"
+        )
+        m = FAILED_DECODE_RE.match(line)
+        assert m is not None
+        assert m.group("ts") == "2026-05-13T05:47:14"
+        assert m.group("provider") == "yt"
+        assert m.group("track_id") == "testvideoid"
+
+    def test_matches_404_exception(self) -> None:
+        from xmpd.history_backfill import FAILED_DECODE_RE
+
+        line = (
+            "2026-05-13T05:49:00 exception: Failed to decode"
+            ' "http://localhost:6602/proxy/yt/badid2";'
+            " got HTTP status 404"
+        )
+        m = FAILED_DECODE_RE.match(line)
+        assert m is not None
+        assert m.group("provider") == "yt"
+        assert m.group("track_id") == "badid2"
+
+    def test_matches_tidal_exception(self) -> None:
+        from xmpd.history_backfill import FAILED_DECODE_RE
+
+        line = '2026-05-07T17:51:23 exception: Failed to decode "http://localhost:6602/proxy/tidal/391401491"'
+        m = FAILED_DECODE_RE.match(line)
+        assert m is not None
+        assert m.group("provider") == "tidal"
+        assert m.group("track_id") == "391401491"
+
+    def test_no_match_for_played_line(self) -> None:
+        from xmpd.history_backfill import FAILED_DECODE_RE
+
+        line = '2026-05-07T17:51:23 player: played "http://localhost:6602/proxy/tidal/391401491"'
+        assert FAILED_DECODE_RE.match(line) is None
+
+    def test_no_match_for_non_proxy_url(self) -> None:
+        from xmpd.history_backfill import FAILED_DECODE_RE
+
+        line = '2026-05-13T05:47:14 exception: Failed to decode "http://example.com/audio.mp3"'
+        assert FAILED_DECODE_RE.match(line) is None
+
+
+class TestFailedDecodeFiltering:
+    """Tests for phantom-play filtering in run_backfill.
+
+    Uses a dedicated fixture (sample_mpd_log_failed_decode) containing:
+    - A real successful play
+    - Failed-decode + played at the SAME timestamp (dominant pattern)
+    - Failed-decode at T, played at T+1s (within 2s grace)
+    - Failed-decode at T, played at T+5s (outside grace, legitimate)
+    - A pure played without preceding failed-decode
+    """
+
+    def test_failed_decode_same_timestamp_skipped(
+        self, history_store_temp: HistoryStore, tmp_path: Path
+    ) -> None:
+        """Plays at the same timestamp as a failed-decode are skipped."""
+        result = run_backfill(
+            history_store_temp,
+            None,
+            str(FIXTURE_LOG_FAILED_DECODE),
+            dry_run=False,
+        )
+        # 4 legitimate plays inserted, 3 phantom plays skipped
+        assert result["inserted"] == 4
+        assert result["skipped"] == 0
+        assert result["skipped_failed_decode"] == 3
+
+    def test_failed_decode_within_grace_skipped(
+        self, history_store_temp: HistoryStore, tmp_path: Path
+    ) -> None:
+        """Play 1 second after failed-decode (within 2s grace) is skipped."""
+        run_backfill(
+            history_store_temp,
+            None,
+            str(FIXTURE_LOG_FAILED_DECODE),
+            dry_run=False,
+        )
+        # yt/badid2 played at T+1s after exception -> still phantom
+        conn = sqlite3.connect(str(tmp_path / "history.db"))
+        badid2_rows = conn.execute("SELECT * FROM plays WHERE track_id = 'badid2'").fetchall()
+        conn.close()
+        assert len(badid2_rows) == 0
+
+    def test_failed_decode_outside_grace_not_skipped(
+        self, history_store_temp: HistoryStore, tmp_path: Path
+    ) -> None:
+        """Play 5 seconds after failed-decode (outside 2s grace) is imported."""
+        run_backfill(
+            history_store_temp,
+            None,
+            str(FIXTURE_LOG_FAILED_DECODE),
+            dry_run=False,
+        )
+        conn = sqlite3.connect(str(tmp_path / "history.db"))
+        laterok_rows = conn.execute("SELECT * FROM plays WHERE track_id = 'laterok'").fetchall()
+        conn.close()
+        assert len(laterok_rows) == 1
+
+    def test_pure_play_without_exception_imported(
+        self, history_store_temp: HistoryStore, tmp_path: Path
+    ) -> None:
+        """Play with no preceding failed-decode is imported normally."""
+        run_backfill(
+            history_store_temp,
+            None,
+            str(FIXTURE_LOG_FAILED_DECODE),
+            dry_run=False,
+        )
+        conn = sqlite3.connect(str(tmp_path / "history.db"))
+        puregood_rows = conn.execute("SELECT * FROM plays WHERE track_id = 'puregood'").fetchall()
+        conn.close()
+        assert len(puregood_rows) == 1
+
+    def test_failed_decode_dry_run_counts(
+        self, history_store_temp: HistoryStore, tmp_path: Path
+    ) -> None:
+        """Dry run reports correct skipped_failed_decode count without writing."""
+        result = run_backfill(
+            history_store_temp,
+            None,
+            str(FIXTURE_LOG_FAILED_DECODE),
+            dry_run=True,
+        )
+        assert result["inserted"] == 4
+        assert result["skipped_failed_decode"] == 3
+
+        conn = sqlite3.connect(str(tmp_path / "history.db"))
+        count = conn.execute("SELECT COUNT(*) FROM plays").fetchone()[0]
+        conn.close()
+        assert count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +561,7 @@ class TestAutodetectLogPath:
 
 class TestXmpctlCmdHistoryBackfill:
     def test_cmd_history_backfill_prints_inserted_line(self, capsys: pytest.CaptureFixture) -> None:
-        """cmd_history_backfill prints 'inserted=N skipped=M orphans=K' on success."""
+        """cmd_history_backfill prints 'inserted=N skipped=M orphans=K failed_decode_skipped=F'."""
         import importlib.machinery
         import importlib.util
         import sys
@@ -424,6 +580,7 @@ class TestXmpctlCmdHistoryBackfill:
             "inserted": 5,
             "skipped": 0,
             "orphans": 1,
+            "skipped_failed_decode": 2,
             "dry_run": False,
             "log_path": "/tmp/x",
         }
@@ -431,12 +588,12 @@ class TestXmpctlCmdHistoryBackfill:
             mod.cmd_history_backfill([])
 
         captured = capsys.readouterr()
-        assert "inserted=5 skipped=0 orphans=1" in captured.out
+        assert "inserted=5 skipped=0 orphans=1 failed_decode_skipped=2" in captured.out
 
     def test_cmd_history_backfill_dry_run_prints_would_insert(
         self, capsys: pytest.CaptureFixture
     ) -> None:
-        """dry-run response prints would-insert=N would-skip=M orphans=K."""
+        """dry-run response prints would-insert=N would-skip=M orphans=K failed_decode_skipped=F."""
         import importlib.machinery
         import importlib.util
         import sys
@@ -452,9 +609,10 @@ class TestXmpctlCmdHistoryBackfill:
 
         fake_response = {
             "success": True,
-            "inserted": 17,
+            "inserted": 16,
             "skipped": 0,
             "orphans": 6,
+            "skipped_failed_decode": 1,
             "dry_run": True,
             "log_path": "/tmp/x",
         }
@@ -462,4 +620,4 @@ class TestXmpctlCmdHistoryBackfill:
             mod.cmd_history_backfill(["--dry-run"])
 
         captured = capsys.readouterr()
-        assert "would-insert=17 would-skip=0 orphans=6" in captured.out
+        assert "would-insert=16 would-skip=0 orphans=6 failed_decode_skipped=1" in captured.out

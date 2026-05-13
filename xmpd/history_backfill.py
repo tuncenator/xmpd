@@ -5,10 +5,14 @@ the corresponding play events into the local HistoryStore.  Already-present
 rows (from previous backfill or live play reporting) are silently skipped so
 the operation is idempotent.
 
+Plays that immediately follow a ``Failed to decode`` exception for the same
+URL (within a 2-second grace window) are treated as phantom plays and
+excluded from import.
+
 Public API::
 
     result = run_backfill(history_store, track_store, log_path, dry_run=False)
-    # result == {"inserted": N, "skipped": M, "orphans": K}
+    # result == {"inserted": N, "skipped": M, "orphans": K, "skipped_failed_decode": F}
 """
 
 from __future__ import annotations
@@ -37,6 +41,18 @@ logger = logging.getLogger(__name__)
 LOG_LINE_RE = re.compile(
     r'^(?P<ts>\S+(?:\s+\S+(?:\s+\S+)?)?)\s+player:\s+played\s+"http://[^/]+/proxy/(?P<provider>\w+)/(?P<track_id>[^"]+)"\s*$'
 )
+
+# Matches an MPD "Failed to decode" exception line for a proxy URL.
+# Extracts timestamp, provider, and track_id so we can correlate with
+# subsequent ``player: played`` lines for the same track.
+FAILED_DECODE_RE = re.compile(
+    r'^(?P<ts>\S+(?:\s+\S+(?:\s+\S+)?)?)\s+exception:\s+Failed to decode\s+"http://[^/]+/proxy/(?P<provider>\w+)/(?P<track_id>[^"]+)"'
+)
+
+# Maximum seconds between a failed-decode exception and a subsequent
+# ``player: played`` event for the same URL to still be considered a
+# phantom play (and thus skipped).
+FAILED_DECODE_GRACE_SECONDS = 2
 
 # Detects ISO 8601 timestamps like 2026-05-07T17:51:23
 ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
@@ -138,7 +154,8 @@ def run_backfill(
         dry_run: If True, parse and count but do not write to the DB.
 
     Returns:
-        Dict with keys ``inserted``, ``skipped``, ``orphans``.
+        Dict with keys ``inserted``, ``skipped``, ``orphans``,
+        ``skipped_failed_decode``.
     """
     import os
 
@@ -159,7 +176,24 @@ def run_backfill(
     except OSError:
         raise  # let daemon layer catch and format the error
 
-    # Parse matching lines into (played_at, provider, track_id) tuples.
+    # --- First pass: collect failed-decode timestamps per (provider, track_id) ---
+    failed_decode_times: dict[tuple[str, str], list[datetime]] = {}
+    for line in lines:
+        line_stripped = line.rstrip("\n")
+        fd = FAILED_DECODE_RE.match(line_stripped)
+        if not fd:
+            continue
+        ts_str = fd.group("ts")
+        fd_provider = fd.group("provider")
+        fd_track_id = fd.group("track_id")
+        try:
+            iso = _parse_played_at(ts_str, log_mtime)
+            dt = datetime.fromisoformat(iso)
+        except ValueError:
+            continue
+        failed_decode_times.setdefault((fd_provider, fd_track_id), []).append(dt)
+
+    # Parse matching played lines into (played_at, provider, track_id) tuples.
     matches: list[tuple[str, str, str]] = []
     for line in lines:
         line = line.rstrip("\n")
@@ -180,8 +214,27 @@ def run_backfill(
     inserted = 0
     skipped = 0
     orphans = 0
+    skipped_failed_decode = 0
 
     for played_at, provider, track_id in matches:
+        # Check if this play is a phantom from a failed decode.
+        fd_times = failed_decode_times.get((provider, track_id))
+        if fd_times:
+            play_dt = datetime.fromisoformat(played_at)
+            is_phantom = any(
+                0 <= (play_dt - fd_dt).total_seconds() <= FAILED_DECODE_GRACE_SECONDS
+                for fd_dt in fd_times
+            )
+            if is_phantom:
+                skipped_failed_decode += 1
+                logger.debug(
+                    "backfill: skipping failed-decode phantom %s/%s at %s",
+                    provider,
+                    track_id,
+                    played_at,
+                )
+                continue
+
         # Metadata lookup (done for all rows to compute orphan count accurately)
         track = track_store.get_track(provider, track_id) if track_store is not None else None
         is_orphan = track is None
@@ -229,11 +282,17 @@ def run_backfill(
         seen.add(key)
 
     logger.info(
-        "backfill: %s inserted=%d skipped=%d orphans=%d log=%s",
+        "backfill: %s inserted=%d skipped=%d orphans=%d skipped_failed_decode=%d log=%s",
         "(dry-run)" if dry_run else "done",
         inserted,
         skipped,
         orphans,
+        skipped_failed_decode,
         log_path,
     )
-    return {"inserted": inserted, "skipped": skipped, "orphans": orphans}
+    return {
+        "inserted": inserted,
+        "skipped": skipped,
+        "orphans": orphans,
+        "skipped_failed_decode": skipped_failed_decode,
+    }

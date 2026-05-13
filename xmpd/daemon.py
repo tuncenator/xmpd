@@ -1388,10 +1388,12 @@ class XMPDaemon:
                 logger.warning("history-backfill: failed to submit bidir push: %s", exc)
 
         logger.info(
-            "history-backfill: inserted=%d skipped=%d orphans=%d dry_run=%s log=%s",
+            "history-backfill: inserted=%d skipped=%d orphans=%d"
+            " skipped_failed_decode=%d dry_run=%s log=%s",
             result["inserted"],
             result["skipped"],
             result["orphans"],
+            result["skipped_failed_decode"],
             dry_run,
             log_path,
         )
@@ -1400,6 +1402,7 @@ class XMPDaemon:
             "inserted": result["inserted"],
             "skipped": result["skipped"],
             "orphans": result["orphans"],
+            "skipped_failed_decode": result["skipped_failed_decode"],
             "dry_run": dry_run,
             "log_path": log_path,
         }

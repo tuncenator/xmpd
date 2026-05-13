@@ -693,10 +693,17 @@ def cmd_history_backfill(args: list[str]) -> None:
     inserted = result.get("inserted", 0)
     skipped = result.get("skipped", 0)
     orphans = result.get("orphans", 0)
+    failed_decode_skipped = result.get("skipped_failed_decode", 0)
     if dry_run:
-        print(f"would-insert={inserted} would-skip={skipped} orphans={orphans}")
+        print(
+            f"would-insert={inserted} would-skip={skipped}"
+            f" orphans={orphans} failed_decode_skipped={failed_decode_skipped}"
+        )
     else:
-        print(f"inserted={inserted} skipped={skipped} orphans={orphans}")
+        print(
+            f"inserted={inserted} skipped={skipped}"
+            f" orphans={orphans} failed_decode_skipped={failed_decode_skipped}"
+        )
 
 
 def cmd_play(provider: str, track_id: str) -> None:
