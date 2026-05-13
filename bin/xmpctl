@@ -357,7 +357,7 @@ def parse_provider_flag(args: list[str]) -> tuple[str | None, list[str]]:
 
 # ANSI true color escapes for fzf output (consistent with bin/xmpd-status)
 ANSI_TIDAL = "\033[38;2;115;218;202m"  # #73daca teal
-ANSI_YT = "\033[38;2;247;118;142m"     # #f7768e pink
+ANSI_YT = "\033[38;2;247;118;142m"  # #f7768e pink
 ANSI_RESET = "\033[0m"
 ANSI_BOLD = "\033[1m"
 ANSI_DIM = "\033[2m"
@@ -406,10 +406,7 @@ def format_track_fzf(track: dict[str, Any]) -> str:
     liked_str = " [+1]" if liked is True else ""
 
     # Build visible line: [TD] CD [+1] Artist - Title (3:59)
-    visible = (
-        f"{color}{tag}{badge}{liked_str}"
-        f" {artist} - {title} ({duration}){ANSI_RESET}"
-    )
+    visible = f"{color}{tag}{badge}{liked_str} {artist} - {title} ({duration}){ANSI_RESET}"
 
     return f"{provider}\t{track_id}\t{visible}"
 
@@ -480,6 +477,150 @@ def cmd_search_json(args: list[str]) -> None:
     else:
         for track in tracks:
             print(json.dumps(track))
+
+
+def format_played_at(iso_str: str) -> str:
+    """Format an ISO 8601 timestamp as a short date-time string.
+
+    Args:
+        iso_str: ISO 8601 datetime string (e.g. '2026-05-12T19:39:28+03:00').
+
+    Returns:
+        Short string like 'May-12 19:39'.
+    """
+    try:
+        dt = __import__("datetime").datetime.fromisoformat(iso_str)
+        return dt.strftime("%b-%d %H:%M")
+    except (ValueError, TypeError):
+        return iso_str or "?"
+
+
+def format_duration_seconds(seconds: int) -> str:
+    """Format raw seconds as m:ss duration string.
+
+    Args:
+        seconds: Duration in seconds.
+
+    Returns:
+        String like '3:00'.
+    """
+    m, s = divmod(seconds, 60)
+    return f"{m}:{s:02d}"
+
+
+def cmd_history_json(args: list[str]) -> None:
+    """Output history rows as NDJSON or fzf-formatted lines.
+
+    Usage: history-json [--mode time|count] [--since SPEC] [--limit N]
+                        [--format fzf|json]
+
+    Args:
+        args: Arguments after 'history-json' from sys.argv.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    mode = "time"
+    since_spec = "30d"
+    limit = 5000
+    output_format = "fzf"
+
+    i = 0
+    while i < len(args):
+        if args[i] == "--mode" and i + 1 < len(args):
+            mode = args[i + 1]
+            i += 2
+        elif args[i] == "--since" and i + 1 < len(args):
+            since_spec = args[i + 1]
+            i += 2
+        elif args[i] == "--limit" and i + 1 < len(args):
+            try:
+                limit = int(args[i + 1])
+            except ValueError:
+                print(f"Error: invalid --limit: {args[i + 1]}", file=sys.stderr)
+                sys.exit(1)
+            i += 2
+        elif args[i] == "--format" and i + 1 < len(args):
+            output_format = args[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    if mode not in ("time", "count"):
+        print(f"Error: invalid --mode: {mode}", file=sys.stderr)
+        sys.exit(1)
+
+    if output_format not in ("fzf", "json"):
+        print(f"Error: invalid --format: {output_format}", file=sys.stderr)
+        sys.exit(1)
+
+    # Translate since_spec to ISO string or literal "all"
+    if since_spec == "all":
+        since_str = "all"
+    else:
+        spec_match = re.match(r"^(\d+)([dhm])$", since_spec)
+        if not spec_match:
+            print(f"Error: invalid --since: {since_spec}", file=sys.stderr)
+            sys.exit(1)
+        n = int(spec_match.group(1))
+        unit = spec_match.group(2)
+        if unit == "d":
+            delta = timedelta(days=n)
+        elif unit == "h":
+            delta = timedelta(hours=n)
+        else:
+            delta = timedelta(minutes=n)
+        since_dt = datetime.now(UTC).astimezone() - delta
+        since_str = since_dt.isoformat()
+
+    # Build daemon command
+    cmd_parts = [
+        "history-json",
+        "--mode",
+        mode,
+        "--since",
+        since_str,
+        "--limit",
+        str(limit),
+    ]
+    command = " ".join(cmd_parts)
+    result = send_command(command)
+
+    if not result.get("success"):
+        error = result.get("error", "Unknown error")
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    rows = result.get("rows", [])
+
+    if output_format == "json":
+        for row in rows:
+            print(json.dumps(row))
+        return
+
+    # fzf format
+    for row in rows:
+        track = {
+            "provider": row["provider"],
+            "track_id": row["track_id"],
+            "title": row.get("title") or "Unknown",
+            "artist": row.get("artist") or "Unknown Artist",
+            "duration": format_duration_seconds(row.get("duration_seconds") or 0),
+            "quality": row.get("quality"),
+            "liked": False,
+        }
+        base_line = format_track_fzf(track)
+        provider, track_id, visible = base_line.split("\t", 2)
+
+        host = row.get("host") or "?"
+        host_suffix = f"        {ANSI_DIM}{host}{ANSI_RESET}"
+
+        if mode == "time":
+            cell = format_played_at(row.get("played_at", ""))
+            print(f"{provider}\t{track_id}\t{cell}  {visible}{host_suffix}")
+        else:
+            cell = f"x{row.get('play_count', 0)}"
+            last = format_played_at(row.get("last_played_at", ""))
+            print(f"{provider}\t{track_id}\t{cell}  {visible}  last {last}{host_suffix}")
 
 
 def cmd_play(provider: str, track_id: str) -> None:
@@ -592,9 +733,7 @@ def cmd_radio(
 
                 # Load radio playlist from music directory
                 # XSPF playlists are in music dir, not playlist dir
-                subprocess.run(
-                    mpc_cmd + ["load", radio_xspf], check=True, capture_output=True
-                )
+                subprocess.run(mpc_cmd + ["load", radio_xspf], check=True, capture_output=True)
 
                 # Start playback
                 subprocess.run(mpc_cmd + ["play"], check=True, capture_output=True)
@@ -791,10 +930,7 @@ def cmd_auth_tidal() -> None:
             f"  1. Edit ~/.config/xmpd/config.yaml and set "
             f"{colorize('tidal.enabled: true', 'blue')}"
         )
-        print(
-            f"  2. Restart the daemon: "
-            f"{colorize('systemctl --user restart xmpd', 'blue')}"
-        )
+        print(f"  2. Restart the daemon: {colorize('systemctl --user restart xmpd', 'blue')}")
     except TidalAuthRequired as e:
         cross = "ERROR" if not has_unicode_support() else "✗"
         print(colorize(f"{cross} Tidal authentication failed: {e}", "red"), file=sys.stderr)
@@ -852,7 +988,8 @@ def cmd_auth(provider: str, manual: bool = False) -> None:
 
                 print(
                     colorize(
-                        "OK browser.json updated from Firefox cookies.", "green",
+                        "OK browser.json updated from Firefox cookies.",
+                        "green",
                     )
                 )
                 print("Daemon will pick up new credentials automatically.")
@@ -907,6 +1044,11 @@ def show_help() -> None:
                                   --provider yt|all  Restrict provider (default: all)
                                   --limit N          Max results (default: 25)
                                   --format fzf       ANSI-colored tab-separated fzf lines
+  xmpctl history-json            Query local play history (for fzf integration)
+                                  --mode time|count  Display mode (default: time)
+                                  --since SPEC       Time window: 30d, 7d, 1h, all
+                                  --limit N          Max results (default: 5000)
+                                  --format fzf|json  Output format (default: fzf)
   xmpctl radio [--apply]         Generate radio from current track (provider inferred)
                                   --provider <name>  Force provider
                                   --track-id <id>    Seed track ID (default: current track)
@@ -991,15 +1133,15 @@ def main() -> NoReturn:
             track_id = track_id.strip() or None
         # If --track-id was explicitly passed but resolved to empty, that is an
         # error -- do not silently fall back to the currently playing track.
-        track_id_flag_given = any(
-            a in ("--track-id",) or a.startswith("--track-id=") for a in args
-        )
+        track_id_flag_given = any(a in ("--track-id",) or a.startswith("--track-id=") for a in args)
         if track_id_flag_given and track_id is None:
             print("Error: --track-id was given but resolved to an empty value", file=sys.stderr)
             sys.exit(1)
         cmd_radio(apply=apply, provider=provider, track_id=track_id)
     elif command == "search-json":
         cmd_search_json(args)
+    elif command == "history-json":
+        cmd_history_json(args)
     elif command == "like":
         cmd_like()
     elif command == "dislike":
