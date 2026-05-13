@@ -4,18 +4,30 @@
 #
 # Install on WATCHTOWER at ~/bin/xmpd-history-receiver-restricted (chmod 755).
 # Reference from authorized_keys via:
-#   command="$HOME/bin/xmpd-history-receiver-restricted",restrict <pubkey> xmpd-history service
+#   command="/home/<user>/bin/xmpd-history-receiver-restricted",restrict <pubkey> xmpd-history service
+#
+# Accepted invocation forms (via SSH_ORIGINAL_COMMAND):
+#   xmpd-history-receiver version
+#   ~/bin/xmpd-history-receiver version
+#   /home/user/bin/xmpd-history-receiver doctor
+# The leading path component, if any, is stripped before matching. The receiver
+# is always exec'd via its absolute path ($HOME/bin/xmpd-history-receiver).
 
-set -e
+set -ef
 
 CMD="${SSH_ORIGINAL_COMMAND:-}"
+
+# Normalize: strip any leading path so "~/bin/xmpd-history-receiver version"
+# and "/home/u/bin/xmpd-history-receiver version" both become
+# "xmpd-history-receiver version".
+CMD="${CMD##*/}"
 
 case "$CMD" in
     "xmpd-history-receiver bidir --as "*) ;;
     "xmpd-history-receiver doctor"|"xmpd-history-receiver doctor "*) ;;
     "xmpd-history-receiver version"|"xmpd-history-receiver version "*) ;;
     *)
-        echo "xmpd-history-receiver-restricted: refused: $CMD" >&2
+        echo "xmpd-history-receiver-restricted: refused: ${SSH_ORIGINAL_COMMAND:-}" >&2
         exit 1
         ;;
 esac
