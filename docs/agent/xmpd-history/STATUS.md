@@ -80,7 +80,7 @@
 ### Conductor
 
 - **Total Batches**: 6
-- **Current Batch**: 2
+- **Current Batch**: 3
 - **Pacing**: auto-refresh
 - **Batches Per Session**: 3
 - **Execution Plan**: docs/agent/xmpd-history/EXECUTION_PLAN.md
@@ -88,16 +88,16 @@
 ---
 
 **Last Updated:** 2026-05-13
-**Current Phase:** 2 of 8
-**Phase Name:** HistoryReporter Wire-Up + Syncer Stub
-**Progress:** 13% (1/8 phases complete)
+**Current Phase:** 3 of 8
+**Phase Name:** HistorySyncer Real Implementation
+**Progress:** 25% (2/8 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[#-------] 13% (1/8)
+[##------] 25% (2/8)
 ```
 
 ---
@@ -107,9 +107,9 @@
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | HistoryStore Foundation + Config | `[Complete]` |
-| 2 | HistoryReporter Wire-Up + Syncer Stub | `[Current]` |
-| 3 | HistorySyncer Real Implementation | `[Pending]` |
-| 4 | Receiver Script + WATCHTOWER Deploy | `[Pending]` |
+| 2 | HistoryReporter Wire-Up + Syncer Stub | `[Complete]` |
+| 3 | HistorySyncer Real Implementation | `[Current]` |
+| 4 | Receiver Script + WATCHTOWER Deploy | `[Current]` |
 | 5 | xmpctl history-json + bin/xmpd-history | `[Pending]` |
 | 6 | xmpctl history-backfill | `[Pending]` |
 | 7 | bin/xmpd-doctor | `[Pending]` |
