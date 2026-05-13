@@ -222,8 +222,10 @@ and `version` subcommands. Everything else is rejected.
 Append to `~/.ssh/authorized_keys`:
 
 ```
-command="$HOME/bin/xmpd-history-receiver-restricted",restrict <contents of ~/.ssh/xmpd-history.pub> xmpd-history service
+command="/home/<user>/bin/xmpd-history-receiver-restricted",restrict <contents of ~/.ssh/xmpd-history.pub> xmpd-history service
 ```
+
+Replace `<user>` with the actual WATCHTOWER username.
 
 `restrict` is OpenSSH shorthand for
 `no-pty,no-X11-forwarding,no-agent-forwarding,no-port-forwarding,no-user-rc`
