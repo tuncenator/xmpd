@@ -104,7 +104,22 @@ No helpers needed repair. Neither phase reported helper issues. No unlisted help
 
 ## Code Review Results
 
-> Pending. Code review runs after checkpoint passes.
+- **Result**: REVIEW PASSED WITH NOTES
+- **Reviewer**: spark-code-reviewer (claude-opus-4-6)
+- **Diff range**: `e6664a9..bbae309`
+
+All key invariants verified: frozen HistorySyncer `__init__` signature; single-flight lock; Tailscale precheck 5 failure modes; defensive `Peer: null` in syncer; NDJSON framing + `stdin.close()`; failure isolation (no state changes on rc != 0); success-only state updates (`mark_synced` + `insert_remote_rows` + cursor advance only when increasing); self-host from row's own field; defensive parse skip for rows missing `server_id`; BrokenPipeError/OSError on stdin write fall through. Receiver: stdlib-only (no xmpd.* import); stdout=wire; ON CONFLICT (host, local_id) DO NOTHING idempotency; `--as` -> `dest='as_'`; `_now_iso()` with offset; exit code trichotomy 0/1/2; `received_at` once per push; tailscale_peers graceful degradation. Wire format consistency: Phase 3's 12 push keys map exactly to Phase 4's INSERT column list; receiver emits 14 keys on pull (12 + server_id + received_at); syncer parser requires server_id and skips rows missing it. No file overlap between Phase 3 and Phase 4. Security clean. Format-only commit verified as trailing-comma adjustments only.
+
+### Issues (4 minor, non-blocking)
+
+| Severity | Location | Issue |
+|----------|----------|-------|
+| Minor | `scripts/xmpd-history-receiver` line 232 (cmd_doctor) | Missing `Peer: null` defensive guard (`ts_data.get("Peer", {})` would be None if Tailscale returns null). Syncer has the `... or {}` guard; receiver doesn't. The outer try/except catches the AttributeError and surfaces as `tailscale_error`, so low-probability blast radius, but inconsistent with syncer's pattern. |
+| Minor | `scripts/xmpd-history-receiver` line 17 | Unused `import socket`. Dead import; no functional impact. |
+| Minor | `tests/test_history_syncer.py` line 405 | Inline `import time` inside `test_bidir_coalesces_concurrent_calls` instead of top-level import. Cosmetic. |
+| Minor | `scripts/xmpd-history-receiver` line 35 | `open_db` is the only public-named (no `_` prefix) helper alongside `_apply_migrations`, `_create_schema_v1`, `_now_iso`, `_parse_args`. Inconsistent naming, but receiver is never imported as a module. |
+
+These are non-blocking and can be addressed opportunistically in a later phase.
 
 ---
 
