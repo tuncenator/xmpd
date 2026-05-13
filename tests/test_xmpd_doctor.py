@@ -495,3 +495,24 @@ def test_sticky_red_not_downgraded_to_yellow(tmp_path: Path) -> None:
     assert "FAIL (schema mismatch: receiver=v2, expected v1)" in result.stdout
     # Offline peer rendered
     assert "STORMTREE" in result.stdout
+
+
+# regression for Loop E failure: SSH to WATCHTOWER fails inside systemd service
+# because OpenSSH 10.2 rejects bad-permissions system config includes. The doctor
+# script must pass -F ~/.ssh/config to every ssh invocation.
+def test_ssh_commands_use_user_config(tmp_path: Path) -> None:
+    """All ssh invocations in xmpd-doctor must include -F to bypass system config."""
+    import re
+
+    script = DOCTOR_SCRIPT.read_text()
+    # Find all ssh invocations (not in comments)
+    lines = script.split("\n")
+    for i, line in enumerate(lines, 1):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        # Match ssh command invocations (not variable assignments or comments)
+        if re.search(r'\bssh\b\s+-', stripped):
+            assert "-F" in stripped, (
+                f"Line {i}: ssh invocation missing -F flag: {stripped.strip()}"
+            )
