@@ -160,11 +160,14 @@ print('')
 # time_ssh_probe -- echoes round-trip ms for `ssh -o ConnectTimeout=3 WATCHTOWER true`,
 # or "FAIL:<stderr>" on non-zero exit. Uses `date +%s%N` for millisecond resolution.
 # Caller splits on first ":" to separate status from stderr payload.
+# Success/failure is determined by the ssh exit code, not stderr content (stderr may
+# contain harmless warnings like "Permanently added host to known hosts" on success).
 time_ssh_probe() {
-    local start_ns end_ns ms ssh_err
+    local start_ns end_ns ms ssh_err ssh_rc
     start_ns="$(date +%s%N)"
-    ssh_err="$(ssh -F "$SSH_CONFIG" -o ConnectTimeout=3 -o BatchMode=yes "$WATCHTOWER_HOST" true 2>&1 >/dev/null)" || true
-    if [ -z "$ssh_err" ]; then
+    ssh_err="$(ssh -F "$SSH_CONFIG" -o ConnectTimeout=3 -o BatchMode=yes "$WATCHTOWER_HOST" true 2>&1 >/dev/null)"
+    ssh_rc=$?
+    if [ "$ssh_rc" -eq 0 ]; then
         end_ns="$(date +%s%N)"
         ms=$(( (end_ns - start_ns) / 1000000 ))
         printf '%s' "$ms"
@@ -310,7 +313,6 @@ section_local() {
         section_local_last_bidir
         return
     fi
-    ssh_ms="${ssh_result}"
     print_kv "SSH WATCHTOWER" "OK (${ssh_ms}ms)"
     WATCHTOWER_REACHABLE=1
 

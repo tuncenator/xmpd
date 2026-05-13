@@ -552,3 +552,65 @@ def test_ssh_publickey_denied_shows_remediation(tmp_path: Path) -> None:
     # Remediation hint present
     assert "publickey auth rejected" in out
     assert "Setup: secure WATCHTOWER auth" in out
+
+
+# SSH stub that succeeds (exit 0) but writes a warning to stderr, e.g. the
+# "Permanently added host to known hosts" message. The probe must treat this
+# as success (exit-code gating), not failure (stderr-emptiness gating).
+SSH_SUCCESS_WITH_STDERR_WARNING_STUB = textwrap.dedent("""\
+    #!/usr/bin/env bash
+    remote_cmd="${@: -1}"
+    case "$remote_cmd" in
+      "true")
+        echo "Warning: Permanently added 'watchtower' (ED25519) to the list of known hosts." >&2
+        exit 0
+        ;;
+      *"xmpd-history-receiver version"*)
+        printf 'schema=1\\nprotocol=1\\n'
+        exit 0
+        ;;
+      *"xmpd-history-receiver doctor"*)
+        cat <<'JSON'
+    {
+      "schema_version": 1,
+      "protocol_version": 1,
+      "hosts": [
+        {"host": "ARCHON", "row_count": 100, "latest_played_at": "2026-05-13T18:42:11+03:00"}
+      ],
+      "tailscale_peers": [
+        {"hostname": "ARCHON", "online": true}
+      ]
+    }
+    JSON
+        exit 0
+        ;;
+    esac
+    exit 1
+""")
+
+
+def test_ssh_success_with_stderr_warning_not_false_positive(tmp_path: Path) -> None:
+    """SSH succeeds with a stderr warning: probe must report OK, not FAIL.
+
+    Regression test for the exit-code-based gating. Before the fix,
+    time_ssh_probe() used stderr-emptiness as the success indicator, which
+    caused false positives when ssh wrote harmless warnings to stderr.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_stub(bin_dir, "tailscale", TAILSCALE_ONLINE_STUB)
+    _write_stub(bin_dir, "ssh", SSH_SUCCESS_WITH_STDERR_WARNING_STUB)
+    _seed_db(tmp_path, total_rows=3)
+
+    result = _run_doctor(bin_dir, tmp_path)
+
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    out = result.stdout
+
+    # SSH probe should report success despite stderr warning
+    assert "SSH WATCHTOWER:" in out
+    assert "OK (" in out
+    # Must NOT contain FAIL for the SSH line
+    lines = [line for line in out.splitlines() if "SSH WATCHTOWER:" in line]
+    assert len(lines) == 1
+    assert "FAIL" not in lines[0]
