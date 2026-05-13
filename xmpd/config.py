@@ -69,6 +69,19 @@ _DEFAULTS: dict[str, Any] = {
         "tag": "+1",
         "alignment": "right",
     },
+    # History (multi-host listening history; xmpd-history feature)
+    "history": {
+        "enabled": False,
+        "db_path": str(Path.home() / ".config" / "xmpd" / "history.db"),
+        "mpd_log_path": None,
+        "watchtower": {
+            "enabled": True,
+            "ssh_target": "WATCHTOWER",
+            "tailscale_hostname": "WATCHTOWER",
+            "bidir_batch": 1000,
+            "pull_batch": 5000,
+        },
+    },
 }
 
 _VALID_QUALITY_CEILINGS = ("LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS")
@@ -157,6 +170,8 @@ def load_config() -> dict[str, Any]:
     defaults["playlist_prefix"] = dict(_DEFAULTS["playlist_prefix"])
     defaults["history_reporting"] = dict(_DEFAULTS["history_reporting"])
     defaults["like_indicator"] = dict(_DEFAULTS["like_indicator"])
+    defaults["history"] = dict(_DEFAULTS["history"])
+    defaults["history"]["watchtower"] = dict(_DEFAULTS["history"]["watchtower"])
 
     if config_file.exists():
         logger.info(f"Loading config from: {config_file}")
@@ -426,8 +441,47 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         if "alignment" in li:
             if li["alignment"] not in ("left", "right"):
                 raise ValueError(
-                    f"like_indicator.alignment must be 'left' or 'right', "
-                    f"got: {li['alignment']!r}"
+                    f"like_indicator.alignment must be 'left' or 'right', got: {li['alignment']!r}"
                 )
+
+    # Validate history section
+    if "history" in config:
+        hist = config["history"]
+        if not isinstance(hist, dict):
+            raise ValueError(f"history must be a mapping, got: {type(hist)}")
+        if "enabled" in hist and not isinstance(hist["enabled"], bool):
+            raise ValueError(f"history.enabled must be a boolean, got: {type(hist['enabled'])}")
+        if "db_path" in hist:
+            if not isinstance(hist["db_path"], str):
+                raise ValueError(f"history.db_path must be a string, got: {type(hist['db_path'])}")
+            hist["db_path"] = str(Path(hist["db_path"]).expanduser())
+        if "mpd_log_path" in hist and hist["mpd_log_path"] is not None:
+            if not isinstance(hist["mpd_log_path"], str):
+                raise ValueError(
+                    f"history.mpd_log_path must be null or a string, "
+                    f"got: {type(hist['mpd_log_path'])}"
+                )
+            hist["mpd_log_path"] = str(Path(hist["mpd_log_path"]).expanduser())
+        wt = hist.get("watchtower", {})
+        if not isinstance(wt, dict):
+            raise ValueError(f"history.watchtower must be a mapping, got: {type(wt)}")
+        if "enabled" in wt and not isinstance(wt["enabled"], bool):
+            raise ValueError(
+                f"history.watchtower.enabled must be a boolean, got: {type(wt['enabled'])}"
+            )
+        for str_field in ("ssh_target", "tailscale_hostname"):
+            if str_field in wt:
+                if not isinstance(wt[str_field], str) or not wt[str_field]:
+                    raise ValueError(
+                        f"history.watchtower.{str_field} must be a non-empty string, "
+                        f"got: {wt[str_field]!r}"
+                    )
+        for int_field in ("bidir_batch", "pull_batch"):
+            if int_field in wt:
+                v = wt[int_field]
+                if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+                    raise ValueError(
+                        f"history.watchtower.{int_field} must be a positive integer, got: {v!r}"
+                    )
 
     return config
