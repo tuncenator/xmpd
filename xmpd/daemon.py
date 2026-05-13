@@ -8,6 +8,7 @@ rating dispatch, and an HTTP stream-redirect proxy.
 import asyncio
 import json
 import logging
+import os
 import re
 import signal
 import socket
@@ -34,6 +35,9 @@ from xmpd.sync_engine import SyncEngine
 from xmpd.track_store import TrackStore
 
 logger = logging.getLogger(__name__)
+
+# Candidate paths for MPD configuration files (used by _autodetect_mpd_log_path).
+_MPDCONF_CANDIDATES = ["~/.mpdconf", "~/.mpd/mpd.conf", "/etc/mpd.conf"]
 
 
 def _build_yt_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -690,6 +694,9 @@ class XMPDaemon:
             elif cmd == "history-json":
                 # history-json [--mode time|count] [--since ISO|all] [--limit N]
                 response = self._cmd_history_json(parts[1:])
+            elif cmd == "history-backfill":
+                # history-backfill [--log PATH] [--dry-run]
+                response = self._cmd_history_backfill(parts[1:])
             elif cmd == "play":
                 provider, track_id = self._parse_play_queue_args(args)
                 response = self._cmd_play(provider, track_id)
@@ -1316,6 +1323,108 @@ class XMPDaemon:
             len(rows),
         )
         return {"success": True, "rows": rows}
+
+    def _cmd_history_backfill(self, args: list[str]) -> dict[str, Any]:
+        """Handle 'history-backfill' IPC command.
+
+        Parses ``--log PATH`` and ``--dry-run`` from args, resolves the MPD log
+        path (explicit -> config -> autodetect), calls run_backfill, and if rows
+        were inserted triggers one bidir push.
+
+        Args:
+            args: Remaining command tokens after 'history-backfill'.
+
+        Returns:
+            Response dict with 'success', 'inserted', 'skipped', 'orphans',
+            'dry_run', and 'log_path'; or 'success'=False and 'error' on failure.
+        """
+        from xmpd.history_backfill import run_backfill as _run_backfill
+
+        if not self.history_store:
+            return {"success": False, "error": "history.enabled is false"}
+
+        log_path: str | None = None
+        dry_run = False
+        i = 0
+        while i < len(args):
+            if args[i] == "--log" and i + 1 < len(args):
+                log_path = args[i + 1]
+                i += 2
+            elif args[i] == "--dry-run":
+                dry_run = True
+                i += 1
+            else:
+                i += 1
+
+        # Resolution chain: explicit -> config -> autodetect
+        if not log_path:
+            log_path = (self.config.get("history") or {}).get("mpd_log_path")
+        if not log_path:
+            log_path = self._autodetect_mpd_log_path()
+        if not log_path:
+            return {"success": False, "error": "could not locate MPD log file"}
+
+        log_path = os.path.expanduser(log_path)
+        if not os.path.isfile(log_path):
+            return {"success": False, "error": f"log file not found: {log_path}"}
+
+        try:
+            result = _run_backfill(
+                self.history_store,
+                self.track_store,
+                log_path,
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            logger.error("history-backfill failed: %s", exc, exc_info=True)
+            return {"success": False, "error": str(exc)}
+
+        # Trigger one bidir push if anything was inserted and not a dry-run
+        if not dry_run and result["inserted"] > 0 and self.history_syncer is not None:
+            try:
+                if self._history_executor is not None:
+                    self._history_executor.submit(self.history_syncer.bidir_push)
+            except Exception as exc:
+                logger.warning("history-backfill: failed to submit bidir push: %s", exc)
+
+        logger.info(
+            "history-backfill: inserted=%d skipped=%d orphans=%d dry_run=%s log=%s",
+            result["inserted"],
+            result["skipped"],
+            result["orphans"],
+            dry_run,
+            log_path,
+        )
+        return {
+            "success": True,
+            "inserted": result["inserted"],
+            "skipped": result["skipped"],
+            "orphans": result["orphans"],
+            "dry_run": dry_run,
+            "log_path": log_path,
+        }
+
+    def _autodetect_mpd_log_path(self) -> str | None:
+        """Walk candidate mpd.conf paths and extract the log_file directive.
+
+        Returns:
+            Expanded absolute path to the MPD log file, or None if not found.
+        """
+        from xmpd.history_backfill import MPDCONF_LOG_FILE_RE
+
+        for candidate in _MPDCONF_CANDIDATES:
+            conf_path = os.path.expanduser(candidate)
+            if not os.path.isfile(conf_path):
+                continue
+            try:
+                with open(conf_path, encoding="utf-8", errors="replace") as fh:
+                    content = fh.read()
+            except OSError:
+                continue
+            m = MPDCONF_LOG_FILE_RE.search(content)
+            if m:
+                return os.path.expanduser(m.group(1))
+        return None
 
     def _ensure_mpd(self) -> None:
         """Reconnect to MPD if the connection was lost."""
