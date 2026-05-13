@@ -71,7 +71,7 @@ FZF_OUTPUT=$(
         --multi \
         --delimiter=$'\t' \
         --with-nth=3.. \
-        --tab-stop=8 \
+        --tabstop=8 \
         --bind "start:reload(${RELOAD_CMD})" \
         --bind "ctrl-t:${TOGGLE_TRANSFORM}" \
         --bind "ctrl-q:execute-silent([ -n {2} ] && ${XMPCTL} queue {1} {2})" \

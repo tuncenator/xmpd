@@ -195,3 +195,17 @@ class TestFzfStdinNotDevNull:
             "fzf 0.70.0 exits immediately when stdin is /dev/null even with "
             "start:reload binding"
         )
+
+
+# regression for Loop C failure: fzf 0.70.0 rejects --tab-stop (hyphenated);
+# the correct flag is --tabstop (no hyphen). The wrapper must use --tabstop.
+class TestFzfTabstopFlag:
+    """Wrapper must use --tabstop not --tab-stop."""
+
+    def test_wrapper_uses_tabstop_without_hyphen(self, tmp_path: Path) -> None:
+        """fzf 0.70.0 rejects --tab-stop as unknown option."""
+        script = Path(_XMPD_HISTORY).read_text()
+        assert "--tab-stop" not in script, (
+            "bin/xmpd-history uses --tab-stop which is rejected by fzf 0.70.0; "
+            "use --tabstop instead"
+        )
