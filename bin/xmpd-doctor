@@ -1,0 +1,409 @@
+#!/usr/bin/env bash
+# xmpd-doctor -- multi-host healthcheck for xmpd-history.
+# Reports local Tailscale + ssh + receiver + DB state, cluster state via WATCHTOWER,
+# and per-host row counts. Exit 0 (green), 2 (yellow), 1 (red).
+
+set -uo pipefail
+IFS=$'\n\t'
+
+# --- Constants ---
+WATCHTOWER_HOST="${WATCHTOWER_HOST:-WATCHTOWER}"        # ssh alias / tailscale hostname
+LOCAL_DB="${HOME}/.config/xmpd/history.db"
+LABEL_WIDTH=28                                           # column width for "Label:           Value"
+ROW_LAG_THRESHOLD_DAYS=7                                 # latest_played_at older than this -> yellow
+
+# --- Exit-code tracking. 0 = green, 2 = yellow, 1 = red. Red is sticky. ---
+EXIT_CODE=0
+bump_yellow() { [ "$EXIT_CODE" -lt 2 ] && EXIT_CODE=2; return 0; }
+bump_red()    { EXIT_CODE=1; return 0; }                 # red wins; never downgraded
+
+# Set to 1 once section_local confirms SSH to WATCHTOWER succeeded.
+WATCHTOWER_REACHABLE=0
+
+# --- jq fallback detection ---
+# Test by actually invoking jq (not just checking presence) so a broken jq stub
+# in tests correctly triggers the python3 fallback path.
+if printf '{}' | jq empty >/dev/null 2>&1; then
+    JQ_FALLBACK=0
+else
+    JQ_FALLBACK=1
+fi
+
+# --- Render helpers ---
+print_kv() {
+    # Print "Label:" left-padded to LABEL_WIDTH, then value.
+    local label="$1"
+    local value="$2"
+    printf '  %-*s%s\n' "$LABEL_WIDTH" "${label}:" "$value"
+}
+
+print_section() {
+    printf '\n%s\n' "$1"
+}
+
+# --- JSON helpers ---
+
+# parse_json_field <jq_expression> <json_string>
+# Reads a single string/number/boolean field from the JSON string.
+# Falls back to python3 -c when jq is unavailable.
+parse_json_field() {
+    local expr="$1"
+    local json="$2"
+    if [ "$JQ_FALLBACK" -eq 0 ]; then
+        printf '%s' "$json" | jq -r "$expr"
+    else
+        # Convert the jq expression to a python access path. We deliberately keep
+        # the jq surface narrow to two patterns we use:
+        #   .field
+        #   .field // empty
+        # For anything fancier we always go through jq (and bail to FAIL if jq missing).
+        printf '%s' "$json" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+expr = '''$expr'''
+# strip trailing '// empty' if present
+if '//' in expr:
+    expr = expr.split('//')[0].strip()
+# Walk a simple .a.b.c path
+keys = [k for k in expr.lstrip('.').split('.') if k]
+val = data
+for k in keys:
+    if isinstance(val, dict):
+        val = val.get(k)
+    else:
+        val = None
+        break
+if val is None:
+    print('')
+elif isinstance(val, bool):
+    print('true' if val else 'false')
+else:
+    print(val)
+"
+    fi
+}
+
+# parse_json_array <json_string> <jq_expression> -- prints one TSV line per element.
+# Used for .hosts[] and .tailscale_peers[] iteration.
+# The real receiver doctor JSON uses:
+#   .hosts[]:            host, row_count, latest_played_at
+#   .tailscale_peers[]:  hostname, online
+parse_json_array() {
+    local json="$1"
+    local expr="$2"
+    if [ "$JQ_FALLBACK" -eq 0 ]; then
+        printf '%s' "$json" | jq -r "$expr"
+    else
+        # Python fallback: callers pass a fixed expression; we hard-code the two we use.
+        # Pattern A (.hosts[]): print "host\trow_count\tlatest_played_at"
+        # Pattern B (.tailscale_peers[]): print "hostname\tonline"
+        printf '%s' "$json" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+expr = '''$expr'''
+if 'hosts' in expr:
+    for r in data.get('hosts', []):
+        host = r.get('host', '')
+        rc = r.get('row_count', 0)
+        ts = r.get('latest_played_at') or ''
+        print(f'{host}\t{rc}\t{ts}')
+elif 'tailscale_peers' in expr:
+    for r in data.get('tailscale_peers', []):
+        hostname = r.get('hostname', '')
+        online = 'true' if r.get('online') else 'false'
+        print(f'{hostname}\t{online}')
+"
+    fi
+}
+
+validate_json() {
+    local json="$1"
+    if [ "$JQ_FALLBACK" -eq 0 ]; then
+        printf '%s' "$json" | jq empty >/dev/null 2>&1
+    else
+        printf '%s' "$json" | python3 -c "import json,sys; json.load(sys.stdin)" >/dev/null 2>&1
+    fi
+}
+
+# tailscale_peer_online <json_string> <hostname> -- prints "true" / "false" / "" (not found).
+# Walks .Peer dict; matches HostName case-insensitively.
+tailscale_peer_online() {
+    local json="$1"
+    local target="$2"
+    if [ "$JQ_FALLBACK" -eq 0 ]; then
+        printf '%s' "$json" | jq -r --arg t "$target" '
+            .Peer
+            | to_entries
+            | map(.value)
+            | map(select((.HostName // "") | ascii_upcase == ($t | ascii_upcase)))
+            | first
+            | (if . then (.Online | tostring) else "" end)
+        '
+    else
+        printf '%s' "$json" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+target = '''$target'''.upper()
+peers = (data.get('Peer') or {}).values()
+for p in peers:
+    if (p.get('HostName') or '').upper() == target:
+        print('true' if p.get('Online') else 'false')
+        sys.exit(0)
+print('')
+"
+    fi
+}
+
+# time_ssh_probe -- echoes round-trip ms for `ssh -o ConnectTimeout=3 WATCHTOWER true`,
+# or "FAIL" on non-zero exit. Uses `date +%s%N` for millisecond resolution.
+time_ssh_probe() {
+    local start_ns end_ns ms
+    start_ns="$(date +%s%N)"
+    if ssh -o ConnectTimeout=3 -o BatchMode=yes "$WATCHTOWER_HOST" true >/dev/null 2>&1; then
+        end_ns="$(date +%s%N)"
+        ms=$(( (end_ns - start_ns) / 1000000 ))
+        printf '%s' "$ms"
+    else
+        printf 'FAIL'
+    fi
+}
+
+# section_local_receiver -- runs `ssh WATCHTOWER ~/bin/xmpd-history-receiver version`
+# and parses `schema=N\nprotocol=N\n`. Renders OK / FAIL / mismatch.
+section_local_receiver() {
+    local out rc=0
+    out="$(ssh -o ConnectTimeout=3 -o BatchMode=yes "$WATCHTOWER_HOST" \
+              "~/bin/xmpd-history-receiver version" 2>/dev/null)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        if [ "$rc" -eq 127 ]; then
+            print_kv "Receiver installed" "FAIL (command not found)"
+        else
+            print_kv "Receiver installed" "FAIL (rc=${rc})"
+        fi
+        bump_red
+        return
+    fi
+    local schema
+    schema="$(printf '%s\n' "$out" | sed -n 's/^schema=//p' | head -n1)"
+    if [ -z "$schema" ]; then
+        print_kv "Receiver installed" "FAIL (could not parse schema=N)"
+        bump_red
+        return
+    fi
+    if [ "$schema" != "1" ]; then
+        # We expect schema v1 in this feature. Anything else is a mismatch.
+        print_kv "Receiver installed" "FAIL (schema mismatch: receiver=v${schema}, expected v1)"
+        bump_red
+        return
+    fi
+    print_kv "Receiver installed" "OK (schema v${schema})"
+}
+
+# section_local_db -- check ~/.config/xmpd/history.db, count rows + unsynced.
+section_local_db() {
+    if [ ! -f "$LOCAL_DB" ]; then
+        print_kv "Local history DB" "FAIL (missing at ${LOCAL_DB})"
+        bump_red
+        return
+    fi
+    local out
+    out="$(sqlite3 "$LOCAL_DB" \
+        "SELECT count(*), sum(case when synced_at is null then 1 else 0 end) FROM plays;" \
+        2>/dev/null)"
+    if [ -z "$out" ]; then
+        print_kv "Local history DB" "FAIL (sqlite3 query returned nothing)"
+        bump_red
+        return
+    fi
+    local total unsynced
+    total="$(printf '%s' "$out" | cut -d'|' -f1)"
+    unsynced="$(printf '%s' "$out" | cut -d'|' -f2)"
+    # sqlite3 returns empty for sum() on empty table; coerce to 0.
+    [ -z "$unsynced" ] && unsynced=0
+    print_kv "Local history DB" "OK (${total} rows, ${unsynced} unsynced)"
+}
+
+# section_local_last_bidir -- max(synced_at) from local DB, or "none yet".
+section_local_last_bidir() {
+    if [ ! -f "$LOCAL_DB" ]; then
+        print_kv "Last successful bidir" "n/a (DB missing)"
+        return
+    fi
+    local out
+    out="$(sqlite3 "$LOCAL_DB" \
+        "SELECT max(synced_at) FROM plays WHERE synced_at IS NOT NULL;" 2>/dev/null)"
+    if [ -z "$out" ]; then
+        print_kv "Last successful bidir" "none yet"
+    else
+        print_kv "Last successful bidir" "$out"
+    fi
+}
+
+section_local() {
+    print_section "Local"
+
+    # --- 1a. Tailscale daemon ---
+    local ts_json=""
+    local ts_rc=0
+    ts_json="$(tailscale status --json 2>/dev/null)" || ts_rc=$?
+    if [ "$ts_rc" -ne 0 ] || [ -z "$ts_json" ]; then
+        print_kv "Tailscale daemon" "DOWN"
+        bump_red
+        # Skip dependent probes
+        print_kv "WATCHTOWER peer online" "SKIPPED (tailscale down)"
+        print_kv "SSH WATCHTOWER" "SKIPPED (tailscale down)"
+        print_kv "Receiver installed" "SKIPPED (tailscale down)"
+        section_local_db
+        section_local_last_bidir
+        return
+    fi
+    print_kv "Tailscale daemon" "UP"
+
+    # --- 1b. WATCHTOWER peer online? ---
+    # We need to walk Peer map and find one whose HostName matches WATCHTOWER_HOST
+    # (case-insensitive). Online is a bool.
+    local peer_online
+    peer_online="$(tailscale_peer_online "$ts_json" "$WATCHTOWER_HOST")"
+    if [ "$peer_online" = "true" ]; then
+        print_kv "WATCHTOWER peer online" "YES"
+    elif [ "$peer_online" = "false" ]; then
+        print_kv "WATCHTOWER peer online" "NO"
+        bump_yellow
+        print_kv "SSH WATCHTOWER" "SKIPPED (peer offline)"
+        print_kv "Receiver installed" "SKIPPED (peer offline)"
+        section_local_db
+        section_local_last_bidir
+        return
+    else
+        # Peer not in map at all
+        print_kv "WATCHTOWER peer online" "NO (not in tailscale peer list)"
+        bump_red
+        print_kv "SSH WATCHTOWER" "SKIPPED (peer not registered)"
+        print_kv "Receiver installed" "SKIPPED (peer not registered)"
+        section_local_db
+        section_local_last_bidir
+        return
+    fi
+
+    # --- 1c. SSH WATCHTOWER (timed) ---
+    local ssh_ms
+    ssh_ms="$(time_ssh_probe)"
+    if [ "$ssh_ms" = "FAIL" ]; then
+        print_kv "SSH WATCHTOWER" "FAIL"
+        bump_red
+        print_kv "Receiver installed" "SKIPPED (ssh failed)"
+        section_local_db
+        section_local_last_bidir
+        return
+    fi
+    print_kv "SSH WATCHTOWER" "OK (${ssh_ms}ms)"
+    WATCHTOWER_REACHABLE=1
+
+    # --- 1d. Receiver installed + schema match ---
+    section_local_receiver
+
+    # --- 1e + 1f. Local DB + last bidir ---
+    section_local_db
+    section_local_last_bidir
+}
+
+# Holds the receiver doctor JSON for reuse by Section 3.
+DOCTOR_JSON=""
+
+section_cluster() {
+    print_section "Cluster (via WATCHTOWER)"
+
+    # If section_local already determined we cannot reach WATCHTOWER, skip remote calls.
+    if [ "$WATCHTOWER_REACHABLE" -eq 0 ]; then
+        print_kv "Registered hosts" "SKIPPED (WATCHTOWER unreachable)"
+        print_kv "WATCHTOWER tailscale view" "SKIPPED"
+        return
+    fi
+
+    local rc=0
+    DOCTOR_JSON="$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$WATCHTOWER_HOST" \
+                       "~/bin/xmpd-history-receiver doctor" 2>/dev/null)" || rc=$?
+    if [ "$rc" -ne 0 ] || [ -z "$DOCTOR_JSON" ]; then
+        print_kv "Registered hosts" "FAIL (receiver doctor exited rc=${rc})"
+        bump_red
+        return
+    fi
+
+    # Validate JSON parseable
+    if ! validate_json "$DOCTOR_JSON"; then
+        print_kv "Registered hosts" "FAIL (malformed JSON from receiver)"
+        bump_red
+        DOCTOR_JSON=""
+        return
+    fi
+
+    # 2a. Registered hosts: comma-joined list of .hosts[].host.
+    local host_list
+    host_list="$(parse_json_array "$DOCTOR_JSON" '.hosts[] | "\(.host)\t\(.row_count)\t\(.latest_played_at // "")"' \
+                 | cut -f1 | paste -sd', ')"
+    [ -z "$host_list" ] && host_list="(none)"
+    print_kv "Registered hosts" "$host_list"
+
+    # 2b. WATCHTOWER tailscale view: per-host UP/DOWN.
+    # Real receiver uses tailscale_peers with hostname/online fields.
+    local view_lines view_rendered
+    view_lines="$(parse_json_array "$DOCTOR_JSON" '.tailscale_peers[] | "\(.hostname)\t\(.online)"')"
+    view_rendered="$(printf '%s\n' "$view_lines" | awk -F'\t' '
+        NF >= 2 { printf "%s%s %s", (NR>1 ? ", " : ""), $1, ($2 == "true" ? "UP" : "DOWN") }
+    ')"
+    [ -z "$view_rendered" ] && view_rendered="(empty)"
+    print_kv "WATCHTOWER tailscale view" "$view_rendered"
+
+    # 2c. WATCHTOWER -> per-host SSH probe summary.
+    # For each host in tailscale_peers, OK if online=true, SKIPPED otherwise.
+    while IFS=$'\t' read -r hostname online; do
+        [ -z "$hostname" ] && continue
+        if [ "$online" = "true" ]; then
+            print_kv "WATCHTOWER -> ${hostname}" "OK"
+        else
+            print_kv "WATCHTOWER -> ${hostname}" "SKIPPED (offline)"
+            bump_yellow
+        fi
+    done <<< "$view_lines"
+}
+
+section_per_host() {
+    print_section "Per-host row state"
+
+    if [ -z "$DOCTOR_JSON" ]; then
+        printf '  (skipped: cluster JSON unavailable)\n'
+        return
+    fi
+
+    local now_epoch threshold_epoch
+    now_epoch="$(date +%s)"
+    threshold_epoch=$(( now_epoch - ROW_LAG_THRESHOLD_DAYS * 86400 ))
+
+    while IFS=$'\t' read -r host row_count latest_ts; do
+        [ -z "$host" ] && continue
+        local label="${host}"
+        local value
+        if [ -z "$latest_ts" ]; then
+            value="${row_count} rows, latest none"
+        else
+            value="${row_count} rows, latest ${latest_ts}"
+            # Yellow if latest_ts is older than threshold.
+            local ts_epoch
+            ts_epoch="$(date -d "$latest_ts" +%s 2>/dev/null || printf '0')"
+            if [ "$ts_epoch" -gt 0 ] && [ "$ts_epoch" -lt "$threshold_epoch" ]; then
+                value="${value} (>${ROW_LAG_THRESHOLD_DAYS}d lag)"
+                bump_yellow
+            fi
+        fi
+        print_kv "${label}" "$value"
+    done < <(parse_json_array "$DOCTOR_JSON" '.hosts[] | "\(.host)\t\(.row_count)\t\(.latest_played_at // "")"')
+}
+
+main() {
+    section_local
+    section_cluster
+    section_per_host
+    exit "$EXIT_CODE"
+}
+
+main "$@"
