@@ -323,6 +323,7 @@ if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
 
     # Install current binaries.
     ln -sf "$SCRIPT_DIR/bin/xmpctl" "$HOME/.local/bin/xmpctl"
+    ln -sf "$SCRIPT_DIR/bin/xmpd-doctor" "$HOME/.local/bin/xmpd-doctor"
     ln -sf "$SCRIPT_DIR/bin/xmpd-status" "$HOME/.local/bin/xmpd-status"
     ln -sf "$SCRIPT_DIR/bin/xmpd-search" "$HOME/.local/bin/xmpd-search"
     if [ -x "$SCRIPT_DIR/bin/xmpd-status-preview" ]; then
