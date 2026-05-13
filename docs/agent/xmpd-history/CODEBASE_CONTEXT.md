@@ -3,7 +3,7 @@
 > **Living document** -- each phase updates this with new discoveries and changes.
 > Read this before exploring the codebase. It may already have what you need.
 >
-> Last updated by: Checkpoint 1 -- Phase 1 HistoryStore Foundation + Config (2026-05-13)
+> Last updated by: Checkpoint 2 -- Phase 2 HistoryReporter Wire-Up + Syncer Stub (2026-05-13)
 
 ---
 
@@ -35,9 +35,10 @@ Tests live in `tests/`. Phase 1 introduced `tests/conftest.py` with shared fixtu
 |-----------|---------|-------|
 | `xmpd/track_store.py` | SQLite track metadata cache; pattern HistoryStore mirrors. | Single-writer via `threading.Lock`; schema migrations via `PRAGMA user_version` + `_apply_migrations`; `sqlite3.Row` factory; `check_same_thread=False`. |
 | `xmpd/history_store.py` | SQLite-backed local play history store; `(host, local_id)` PK contract; 7 public methods; SCHEMA_VERSION = 1. | Single-writer via `threading.Lock`; schema migrations via `PRAGMA user_version`; `sqlite3.Row` factory; `check_same_thread=False`. Mirror of `track_store.py` pattern. |
+| `xmpd/history_syncer.py` | Bidirectional history sync between this host and WATCHTOWER. Phase 2: stub (log + return). Phase 3: real implementation. | Constructor: `(*, history_store, ssh_target, tailscale_hostname, bidir_batch, pull_batch)`. Methods: `bidir_push() -> None`, `startup_nudge() -> None`. Signatures frozen; Phase 3 only replaces method bodies. |
 | `tests/conftest.py` | Shared pytest fixtures. | Currently: `history_store_temp(tmp_path) -> Iterator[HistoryStore]`. Phase 3 adds `mock_ssh_bidir`. |
-| `xmpd/history_reporter.py` | Monitors MPD idle, computes elapsed play, calls provider `report_play()` once 30s threshold passes. | The extension point. `_report_track(url, duration_seconds)` is where HistoryStore + HistorySyncer hook in after the existing provider report. `PROXY_URL_RE` extracts `(provider, track_id)` from the proxy URL. |
-| `xmpd/daemon.py` | `XMPDaemon` constructor wires every subsystem; `run()` starts threads. | Lines ~75-227 are the construction sequence; new HistoryStore/HistorySyncer wire here. `_history_thread` already exists when `history_reporting.enabled = true`. |
+| `xmpd/history_reporter.py` | Monitors MPD idle, computes elapsed play, calls provider `report_play()` once 30s threshold passes. Now also writes to local history DB and submits `bidir_push` to executor. | Constructor accepts optional keyword-only `history_store`, `history_syncer`, `executor` (all default `None`). `_report_track` appends a history-write block after the provider report, guarded by `try/except`. `_resolve_quality(provider_name, track)` returns per-provider quality label. `PROXY_URL_RE` extracts `(provider, track_id)`. |
+| `xmpd/daemon.py` | `XMPDaemon` constructor wires every subsystem; `run()` starts threads. | Construction sequence includes `HistoryStore`, `HistorySyncer`, `ThreadPoolExecutor(max_workers=1)` when `config['history']['enabled']` is True and `track_store is not None`. Passes all three into `HistoryReporter`. `run()` calls `startup_nudge()` after `_running=True`. `stop()` shuts executor before joining history thread. `ThreadPoolExecutor` and `as_completed` now at module level (was inline). |
 | `xmpd/__main__.py` | Entrypoint (`python -m xmpd`); calls `setup_logging()`, loads config, instantiates daemon, signal handlers. | Logging format defined here; new modules inherit. |
 | `xmpd/config.py` | YAML loader; `_DEFAULTS` dict + `_deep_merge` + `_validate_config`. | Add a top-level `history:` block to `_DEFAULTS`; mirror existing section validation idiom (booleans, paths, enums). |
 | `xmpd/exceptions.py` | `XMPDError` base + auth/config/proxy/player subclasses. | Add `HistoryStoreError` / `HistorySyncerError` if they need to be distinguishable; otherwise reuse `XMPDError`. |
@@ -48,9 +49,9 @@ Tests live in `tests/`. Phase 1 introduced `tests/conftest.py` with shared fixtu
 | `bin/xmpd-search` | Two-mode (Search / Browse) fzf wrapper. Mode toggle via temp file; `transform:` bindings; `--expect` for multi-select keys; `reload(...)` calling `xmpctl search-json`. | The reference UX for `bin/xmpd-history` (single mode, plus `ctrl-t` to toggle time<->count). Bind syntax and reload pattern are identical. |
 | `bin/xmpd-status`, `bin/xmpd-status-preview` | Waybar status line + preview. | Not touched by this feature. |
 | `tests/test_track_store_migration.py` | Reference test pattern: schema versioning, fresh DB vs `_seed_v0_db` migration. | Pattern HistoryStore tests should follow: pytest + `tmp_path`, raw `sqlite3` for assertions about migration outcomes. |
-| `tests/test_history_reporter.py` | Existing tests for HistoryReporter -- already covers MPD idle loop simulation, elapsed time calc, report dispatch. | EXTEND these (don't duplicate) when wiring HistoryStore + HistorySyncer into `_report_track`. |
-| `tests/test_config.py` | Config loader tests; deep merge, legacy detection, validation. | EXTEND with `history:` section coverage when Phase 1 wires config. |
-| `tests/test_daemon.py` | Daemon init / thread startup / socket listening. | EXTEND when wiring HistoryStore/HistorySyncer into the daemon constructor. |
+| `tests/test_history_reporter.py` | HistoryReporter tests: MPD idle loop, elapsed time, report dispatch, history write block (8 tests in `TestHistoryWriteBlock`). | `_make_reporter_with_history(tmp_path, registry)` helper creates a reporter with real `HistoryStore`, `MagicMock(spec=HistorySyncer)`, real `ThreadPoolExecutor`. Tests SELECT rows via raw `sqlite3` (anti-pattern #1 guard). |
+| `tests/test_config.py` | Config loader tests; deep merge, legacy detection, validation. Includes `history:` section coverage (Phase 1). | |
+| `tests/test_daemon.py` | Daemon init, thread startup, socket commands, history wiring (7 tests in `TestHistoryWiring`). | `_config_with_history(tmp_path, enabled)` helper. Tests verify construction, reporter collaborator passing, `startup_nudge` call, and executor shutdown semantics. |
 | `pyproject.toml` | uv-managed project config. Python 3.11+, ruff (line 100, selectors `E,F,W,I,N,UP`), mypy `disallow_untyped_defs=true`, pytest `tests/` (excludes `tests/research/`). | New code MUST satisfy mypy strict-defs and ruff. Tidal-live tests gated by `tidal_integration` marker + `XMPD_TIDAL_TEST=1` -- this feature does NOT add such tests. |
 | `xmpd.service` | systemd template (`/path/to/xmpd/.venv/bin/python -m xmpd`). | The user's installed copy lives in `~/.config/systemd/user/xmpd.service`. Restart on test peers via `systemctl --user restart xmpd`. |
 | `docs/superpowers/specs/2026-05-12-xmpd-history-design.md` | Authoritative design spec for this feature. | Read this in full at Phase 1; subsequent phases re-read only the sections relevant to them. |
@@ -89,32 +90,35 @@ Public API:
 
 Schema v1 tables: `plays` (PK `(host, local_id)`) and `sync_state` (PK `key`). Indexes: `idx_plays_played_at` (DESC), `idx_plays_provider_track`, `idx_plays_unsynced` (partial, `WHERE synced_at IS NULL`). Full DDL in `_create_schema_v1`.
 
-### `xmpd/history_reporter.py::HistoryReporter._report_track`
+### `xmpd/history_reporter.py::HistoryReporter`
 
+Constructor (Phase 2 extended):
 ```python
-def _report_track(self, url: str, duration_seconds: int) -> None
+def __init__(self, mpd_socket_path, provider_registry, track_store, proxy_config,
+             min_play_seconds=30, *, history_store=None, history_syncer=None, executor=None)
 ```
 
-Called by the idle loop only when elapsed >= `min_play_seconds` (30s default, configurable). `url` is the MPD `currentsong()['file']` (proxy URL); `duration_seconds` is the actual elapsed play time excluding pauses. Internally:
+`_report_track(url, duration_seconds)` flow:
+1. `PROXY_URL_RE.search(url)` -> `(provider, track_id)`.
+2. `provider.report_play(track_id, duration_seconds)` (existing path, unchanged).
+3. If `history_store`, `history_syncer`, and `executor` are all wired (not None):
+   - `track = self._track_store.get_track(provider, track_id)` (may be None).
+   - `self._history_store.add_play(...)` with metadata from track (or NULLs for orphans).
+   - `self._executor.submit(self._history_syncer.bidir_push)`.
+   - Entire block in `try/except Exception`; logs WARNING, never re-raises.
 
-1. `match = PROXY_URL_RE.search(url)` -> `(provider, track_id)`.
-2. `self.provider_registry[provider].report_play(track_id, duration_seconds)`.
-
-Extension for this feature (after the existing `report_play` succeeds):
-
-3. Resolve metadata: `track = self.track_store.get_track(provider, track_id)` (may be `None`; fall back to NULL fields).
-4. `self.history_store.add_play(provider=provider, track_id=track_id, played_at=<now-iso8601>, title=track.get('title'), artist=track.get('artist'), album=track.get('album'), duration_seconds=track.get('duration_seconds'), art_url=track.get('art_url'), quality=<provider-specific>, play_seconds=duration_seconds)`.
-5. `self._executor.submit(self.history_syncer.bidir_push)`.
-
-The reporter must not raise from steps 3-5; failures log and the play is preserved locally.
+`_resolve_quality(provider_name, track)`: returns `track.get("quality")` for tidal, None for all others. TrackStore has no `quality` column today; returns None.
 
 ### `xmpd/daemon.py::XMPDaemon` (subsystem wiring)
 
-The constructor (lines ~75-227) reads config, then constructs in order: `MPDClient` -> `StreamResolver` -> `TrackStore` (if proxy_enabled) -> `provider_registry` -> `SyncEngine` -> optional `StreamRedirectProxy` -> `HistoryReporter` (if `history_reporting.enabled`).
+Construction order: `MPDClient` -> `StreamResolver` -> `TrackStore` (if proxy_enabled) -> `provider_registry` -> `SyncEngine` -> optional `StreamRedirectProxy` -> **HistoryStore + HistorySyncer + ThreadPoolExecutor** (when `history.enabled` and `track_store is not None`) -> `HistoryReporter` (if `history_reporting.enabled`, now receives the three new collaborators).
 
-For this feature, insert HistoryStore + HistorySyncer between `TrackStore` and `HistoryReporter` (when `history.enabled == true`), and pass them into HistoryReporter's constructor (along with an `executor: ThreadPoolExecutor(max_workers=1)` for fire-and-forget pushes).
+New instance attributes: `history_store: HistoryStore | None`, `history_syncer: HistorySyncer | None`, `_history_executor: ThreadPoolExecutor | None`.
 
-`run()` (line ~265) is where threads start; add a `history_syncer.startup_nudge()` call at that boundary (after `_running = True`, before the existing initial sync).
+`run()`: calls `history_syncer.startup_nudge()` after `_running = True`, wrapped in `try/except`.
+`stop()`: shuts executor (`wait=False, cancel_futures=True`) before joining the history thread.
+
+The two config gates (`history.enabled` and `history_reporting.enabled`) are independent.
 
 ### `xmpd/config.py`
 
@@ -241,7 +245,7 @@ This regex is reused by the backfill subcommand to parse `played` lines from MPD
 
 ## Dependencies & Integration Points
 
-- **Daemon construction order** (`xmpd/daemon.py::XMPDaemon.__init__`): MPDClient -> StreamResolver -> TrackStore -> provider_registry -> SyncEngine -> StreamRedirectProxy (optional) -> HistoryReporter. New: HistoryStore between TrackStore and provider_registry; HistorySyncer between HistoryStore and HistoryReporter; both passed to HistoryReporter constructor.
+- **Daemon construction order** (`xmpd/daemon.py::XMPDaemon.__init__`): MPDClient -> StreamResolver -> TrackStore -> provider_registry -> SyncEngine -> StreamRedirectProxy (optional) -> HistoryStore + HistorySyncer + ThreadPoolExecutor (when `history.enabled`) -> HistoryReporter (receives all three collaborators when wired).
 - **Thread model**: `_sync_thread`, `_socket_thread`, `_proxy_thread` (optional), `_history_thread` already exist. The history feature adds a `concurrent.futures.ThreadPoolExecutor(max_workers=1)` inside HistoryReporter for fire-and-forget bidir pushes (the dedicated executor enforces the single-flight contract; HistorySyncer also uses an internal lock to coalesce calls). Daemon shutdown shuts the executor (with `wait=False, cancel_futures=True`) before joining the history thread.
 - **Config**: new `history:` block under `_DEFAULTS` in `xmpd/config.py`; validation expands paths via `os.path.expanduser`. Daemon reads `config['history']` and constructs subsystems only when `history.enabled` is true.
 - **IPC**: daemon's socket handler dispatches by command string; add cases for `history-json` and `history-backfill`. Response is JSON with `success` + per-command result fields.
