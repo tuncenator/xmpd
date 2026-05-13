@@ -11,6 +11,9 @@ WATCHTOWER_HOST="${WATCHTOWER_HOST:-WATCHTOWER}"        # ssh alias / tailscale 
 LOCAL_DB="${HOME}/.config/xmpd/history.db"
 LABEL_WIDTH=28                                           # column width for "Label:           Value"
 ROW_LAG_THRESHOLD_DAYS=7                                 # latest_played_at older than this -> yellow
+# regression for Loop E failure: OpenSSH 10.2 rejects bad-permissions system
+# config includes inside systemd services. Use -F to load user config only.
+SSH_CONFIG="${HOME}/.ssh/config"
 
 # --- Exit-code tracking. 0 = green, 2 = yellow, 1 = red. Red is sticky. ---
 EXIT_CODE=0
@@ -159,7 +162,7 @@ print('')
 time_ssh_probe() {
     local start_ns end_ns ms
     start_ns="$(date +%s%N)"
-    if ssh -o ConnectTimeout=3 -o BatchMode=yes "$WATCHTOWER_HOST" true >/dev/null 2>&1; then
+    if ssh -F "$SSH_CONFIG" -o ConnectTimeout=3 -o BatchMode=yes "$WATCHTOWER_HOST" true >/dev/null 2>&1; then
         end_ns="$(date +%s%N)"
         ms=$(( (end_ns - start_ns) / 1000000 ))
         printf '%s' "$ms"
@@ -172,7 +175,7 @@ time_ssh_probe() {
 # and parses `schema=N\nprotocol=N\n`. Renders OK / FAIL / mismatch.
 section_local_receiver() {
     local out rc=0
-    out="$(ssh -o ConnectTimeout=3 -o BatchMode=yes "$WATCHTOWER_HOST" \
+    out="$(ssh -F "$SSH_CONFIG" -o ConnectTimeout=3 -o BatchMode=yes "$WATCHTOWER_HOST" \
               "~/bin/xmpd-history-receiver version" 2>/dev/null)" || rc=$?
     if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 127 ]; then
@@ -321,7 +324,7 @@ section_cluster() {
     fi
 
     local rc=0
-    DOCTOR_JSON="$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$WATCHTOWER_HOST" \
+    DOCTOR_JSON="$(ssh -F "$SSH_CONFIG" -o ConnectTimeout=5 -o BatchMode=yes "$WATCHTOWER_HOST" \
                        "~/bin/xmpd-history-receiver doctor" 2>/dev/null)" || rc=$?
     if [ "$rc" -ne 0 ] || [ -z "$DOCTOR_JSON" ]; then
         print_kv "Registered hosts" "FAIL (receiver doctor exited rc=${rc})"

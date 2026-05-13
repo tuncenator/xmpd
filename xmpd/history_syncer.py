@@ -8,6 +8,7 @@ invocations. Failures log and return cleanly so the next play event drives retry
 
 import json
 import logging
+import os
 import socket
 import subprocess
 import threading
@@ -157,8 +158,15 @@ class HistorySyncer:
         cursor: int,
     ) -> None:
         """Execute the SSH subprocess for a single bidir round-trip."""
+        # regression for Loop A failure: OpenSSH 10.2 rejects bad-permissions
+        # system config includes (e.g. /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf)
+        # when running as a systemd user service subprocess. Using -F to load
+        # only the user config bypasses the broken system include.
+        user_ssh_config = os.path.expanduser("~/.ssh/config")
         cmd = [
             "ssh",
+            "-F",
+            user_ssh_config,
             self._ssh_target,
             "xmpd-history-receiver",
             "bidir",
