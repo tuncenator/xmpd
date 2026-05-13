@@ -134,7 +134,18 @@ No helper issues reported in Phase 8 summary. The phase used `scripts/spark-rest
 
 ## Code Review Results
 
-> Pending code review. To be filled in by the conductor after review.
+- **Result**: REVIEW PASSED WITH NOTES (no fix round required)
+- **Reviewer**: spark-code-reviewer (claude-opus-4-6)
+- **Diff range**: `e95c5ac..48a2d7e`
+
+All key invariants verified: bug-fix scope discipline (each `[Phase 8/8] fix:` commit touches exactly 2 files -- one production module + its test); regression test placement; regression comments present in both production code and tests; `-F ~/.ssh/config` correctly preserves user config (WATCHTOWER alias) while bypassing the broken system ssh_config in fix #1 and #4; `< /dev/null` cleanly removed from `bin/xmpd-history` in fix #2 with stderr redirect preserved; `--tabstop` rename complete in production code (only `PHASE_05.md` historical content still mentions the old spelling); `SSH_CONFIG` constant added to `bin/xmpd-doctor` and applied to all three SSH invocations; INTEGRATION_TEST_REPORT.md complete with byte-for-byte evidence + summary line "5 loops, 3 passed, 2 failed-and-fixed, 0 escalated"; no fix touched ARCHON state at OS level; no new features or refactors beyond surgical fix scope; PHASE_08_SUMMARY.md is brief and references the report. Mock discipline acceptable: fix #1 uses existing `mock_ssh_bidir` and inspects the actual Popen command list; fixes #2/#3/#4 read the production script source and use `re.search`/source-level guards. No mock-verifies-mock anti-patterns.
+
+### Notes (non-blocking, no fix required)
+
+| Severity | Location | Note |
+|----------|----------|------|
+| Minor | `docs/agent/xmpd-history/phase_plans/PHASE_05.md` | Original phase plan still references `--tab-stop` (4 occurrences). Historical documentation; doesn't affect production. A reader following the plan for a future similar feature would hit the same fzf 0.70 spelling issue. |
+| Minor | `bin/xmpd-search` | The wrapper this feature's `bin/xmpd-history` was modeled after may still reference `--tab-stop`. Not in scope for this batch, but worth noting for a future quality sweep. |
 
 ---
 
