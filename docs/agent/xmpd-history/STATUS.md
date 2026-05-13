@@ -80,7 +80,7 @@
 ### Conductor
 
 - **Total Batches**: 6
-- **Current Batch**: 6
+- **Current Batch**: 6 (COMPLETE)
 - **Pacing**: auto-refresh
 - **Batches Per Session**: 3
 - **Execution Plan**: docs/agent/xmpd-history/EXECUTION_PLAN.md
@@ -88,16 +88,16 @@
 ---
 
 **Last Updated:** 2026-05-13
-**Current Phase:** 8 of 8
+**Current Phase:** COMPLETE (8 of 8)
 **Phase Name:** Integration Testing on Test Peers
-**Progress:** 87% (7/8 phases complete)
+**Progress:** 100% (8/8 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[#######-] 87% (7/8)
+[########] 100% (8/8)
 ```
 
 ---
@@ -113,7 +113,7 @@
 | 5 | xmpctl history-json + bin/xmpd-history | `[Complete]` |
 | 6 | xmpctl history-backfill | `[Complete]` |
 | 7 | bin/xmpd-doctor | `[Complete]` |
-| 8 | Integration Testing on Test Peers | `[Current]` |
+| 8 | Integration Testing on Test Peers | `[Complete]` |
 
 ---
 
