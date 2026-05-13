@@ -1,5 +1,22 @@
 # xmpd Project Status
 
+## ACTION REQUIRED -- MANUAL REVIEW GATE
+
+> The xmpd-history feature is implementation-complete (8/8 phases under /spark-conductor) and PASSED automated code review at every batch checkpoint. **Before the branch is pushed to origin**, the user is performing one or more rounds of manual diff review with `spark-fix` repair cycles in between.
+>
+> **For the next-session orchestrator (you, Claude, in a fresh context)**: read `docs/agent/xmpd-history/MANUAL_REVIEW_HANDOFF.md` end-to-end and follow its protocol. You are NOT /spark-conductor; you are running the smaller manual-review-loop orchestrator described in that handoff. Do not push, do not finalize, do not parse this STATUS file's "Quick Phase Reference" as a completion signal -- the 8/8 reflects automated work, the manual review gate is the new bar.
+>
+> **State at handoff write time**:
+>
+> - Feature branch: `feature/xmpd-history` at HEAD `8fd9ffe` (`[Checkpoint 6/6] update: code review results`), NOT pushed to origin.
+> - Manual review log: `docs/agent/xmpd-history/MANUAL_REVIEW_LOG.md` (created by the orchestrator on Round 1; may not exist yet).
+> - Handoff protocol: `docs/agent/xmpd-history/MANUAL_REVIEW_HANDOFF.md`.
+> - The user is the reviewer. The orchestrator's only dispatchable subagent is `spark-fix`.
+>
+> When the user types PASS in a round, the orchestrator pushes the branch, removes this banner, appends a one-line completion note in the `## Notes` section below, and posts the final summary. Until then, this banner stays.
+
+---
+
 ## Project Location
 
 **IMPORTANT: Verify your location before working!**
