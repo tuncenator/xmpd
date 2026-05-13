@@ -173,3 +173,25 @@ class TestXmpdHistoryCleanExit:
             assert result.returncode == 0
         finally:
             sock.close()
+
+
+# regression for Loop C failure: fzf 0.70.0 exits instantly when stdin is
+# /dev/null, even with --bind "start:reload(...)". The wrapper must NOT
+# redirect fzf's stdin from /dev/null.
+class TestFzfStdinNotDevNull:
+    """Wrapper must not feed /dev/null to fzf stdin."""
+
+    def test_wrapper_does_not_redirect_fzf_stdin_from_devnull(
+        self, tmp_path: Path
+    ) -> None:
+        """Read bin/xmpd-history and verify the fzf invocation does not
+        include '< /dev/null'. The fix uses a process substitution that
+        keeps the fd open until fzf exits."""
+        script = Path(_XMPD_HISTORY).read_text()
+        # Find the fzf invocation block. It should NOT have < /dev/null
+        # on the same logical line as the fzf call.
+        assert "< /dev/null" not in script, (
+            "bin/xmpd-history must not redirect fzf stdin from /dev/null; "
+            "fzf 0.70.0 exits immediately when stdin is /dev/null even with "
+            "start:reload binding"
+        )

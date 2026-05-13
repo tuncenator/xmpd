@@ -88,7 +88,7 @@ FZF_OUTPUT=$(
         --no-scrollbar \
         --color='bg+:#1a1b26,pointer:#f7768e' \
         --expect='ctrl-a,ctrl-p' \
-    < /dev/null 2>/dev/null
+    2>/dev/null
 ) || exit 0
 
 # Parse fzf --expect output.
