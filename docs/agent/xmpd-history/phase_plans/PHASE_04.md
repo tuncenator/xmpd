@@ -500,7 +500,7 @@ The second invocation's stdout is the captured wire-format sample. Paste it verb
 
 ## Helpers Required
 
-> [SETUP_AGENT: populate after step 7.6 helper consolidation. This phase did NOT propose any helper -- the deploy is one-shot for this phase, and the doctor SSH query in Phase 7 is read-only and trivially inlined. If consolidation produces no helpers relevant here, leave this section empty or remove it.]
+No helpers used in this phase. The deploy is one-shot and inlined as Step D in the implementation order.
 
 ---
 
