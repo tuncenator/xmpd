@@ -434,3 +434,64 @@ def test_doctor_json_malformed(tmp_path: Path) -> None:
     assert result.returncode == 1, f"stdout: {result.stdout}\nstderr: {result.stderr}"
     assert "Registered hosts:" in result.stdout
     assert "FAIL (malformed JSON from receiver)" in result.stdout
+
+
+# SSH stub: schema mismatch (bump_red) + doctor JSON with an offline peer (bump_yellow).
+# The sticky-red invariant means the final exit must remain 1 (red), NOT be overwritten to 2.
+SSH_SCHEMA_MISMATCH_WITH_OFFLINE_PEER_STUB = textwrap.dedent("""\
+    #!/usr/bin/env bash
+    remote_cmd="${@: -1}"
+    case "$remote_cmd" in
+      "true")
+        exit 0
+        ;;
+      *"xmpd-history-receiver version"*)
+        printf 'schema=2\\nprotocol=1\\n'
+        exit 0
+        ;;
+      *"xmpd-history-receiver doctor"*)
+        cat <<'JSON'
+    {
+      "schema_version": 2,
+      "protocol_version": 1,
+      "hosts": [
+        {"host": "ARCHON", "row_count": 100, "latest_played_at": "2026-05-13T18:42:11+03:00"}
+      ],
+      "tailscale_peers": [
+        {"hostname": "ARCHON", "online": true},
+        {"hostname": "STORMTREE", "online": false}
+      ]
+    }
+    JSON
+        exit 0
+        ;;
+    esac
+    exit 1
+""")
+
+
+def test_sticky_red_not_downgraded_to_yellow(tmp_path: Path) -> None:
+    """Red from schema mismatch must NOT be downgraded to yellow by an offline peer.
+
+    Regression test for the bump_yellow bug where ``[ "$EXIT_CODE" -lt 2 ]``
+    would overwrite EXIT_CODE=1 (red) with 2 (yellow). The fix changed the
+    guard to ``[ "$EXIT_CODE" -eq 0 ]`` so bump_yellow only promotes green.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_stub(bin_dir, "tailscale", TAILSCALE_ONLINE_STUB)
+    _write_stub(bin_dir, "ssh", SSH_SCHEMA_MISMATCH_WITH_OFFLINE_PEER_STUB)
+    _seed_db(tmp_path, total_rows=3)
+
+    result = _run_doctor(bin_dir, tmp_path)
+
+    # Must be red (1), NOT yellow (2).
+    assert result.returncode == 1, (
+        f"Expected exit 1 (red) but got {result.returncode}. "
+        f"bump_yellow may have downgraded red to yellow.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    # Schema mismatch rendered
+    assert "FAIL (schema mismatch: receiver=v2, expected v1)" in result.stdout
+    # Offline peer rendered
+    assert "STORMTREE" in result.stdout

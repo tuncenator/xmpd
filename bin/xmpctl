@@ -489,7 +489,9 @@ def format_played_at(iso_str: str) -> str:
         Short string like 'May-12 19:39'.
     """
     try:
-        dt = __import__("datetime").datetime.fromisoformat(iso_str)
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(iso_str)
         return dt.strftime("%b-%d %H:%M")
     except (ValueError, TypeError):
         return iso_str or "?"

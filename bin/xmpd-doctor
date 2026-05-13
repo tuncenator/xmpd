@@ -14,7 +14,7 @@ ROW_LAG_THRESHOLD_DAYS=7                                 # latest_played_at olde
 
 # --- Exit-code tracking. 0 = green, 2 = yellow, 1 = red. Red is sticky. ---
 EXIT_CODE=0
-bump_yellow() { [ "$EXIT_CODE" -lt 2 ] && EXIT_CODE=2; return 0; }
+bump_yellow() { [ "$EXIT_CODE" -eq 0 ] && EXIT_CODE=2; return 0; }
 bump_red()    { EXIT_CODE=1; return 0; }                 # red wins; never downgraded
 
 # Set to 1 once section_local confirms SSH to WATCHTOWER succeeded.
