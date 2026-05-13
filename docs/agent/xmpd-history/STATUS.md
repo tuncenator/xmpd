@@ -80,7 +80,7 @@
 ### Conductor
 
 - **Total Batches**: 6
-- **Current Batch**: 5
+- **Current Batch**: 6
 - **Pacing**: auto-refresh
 - **Batches Per Session**: 3
 - **Execution Plan**: docs/agent/xmpd-history/EXECUTION_PLAN.md
@@ -88,16 +88,16 @@
 ---
 
 **Last Updated:** 2026-05-13
-**Current Phase:** 6 of 8
-**Phase Name:** xmpctl history-backfill
-**Progress:** 75% (6/8 phases complete)
+**Current Phase:** 8 of 8
+**Phase Name:** Integration Testing on Test Peers
+**Progress:** 87% (7/8 phases complete)
 
 ---
 
 ## Progress Bar
 
 ```
-[######--] 75% (6/8)
+[#######-] 87% (7/8)
 ```
 
 ---
@@ -111,9 +111,9 @@
 | 3 | HistorySyncer Real Implementation | `[Complete]` |
 | 4 | Receiver Script + WATCHTOWER Deploy | `[Complete]` |
 | 5 | xmpctl history-json + bin/xmpd-history | `[Complete]` |
-| 6 | xmpctl history-backfill | `[Current]` |
+| 6 | xmpctl history-backfill | `[Complete]` |
 | 7 | bin/xmpd-doctor | `[Complete]` |
-| 8 | Integration Testing on Test Peers | `[Pending]` |
+| 8 | Integration Testing on Test Peers | `[Current]` |
 
 ---
 
