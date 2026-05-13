@@ -9,13 +9,19 @@ import logging
 import re
 import threading
 import time
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from mpd import MPDClient as MPDClientBase
 
 from xmpd.exceptions import MPDConnectionError
+from xmpd.history_store import HistoryStore
 from xmpd.providers.base import Provider
 from xmpd.track_store import TrackStore
+
+if TYPE_CHECKING:
+    from xmpd.history_syncer import HistorySyncer
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +43,9 @@ class HistoryReporter:
         proxy_config: Dict with ``host``, ``port``, ``enabled`` keys.
         min_play_seconds: Minimum seconds of actual play time before a
             track is reported.  Defaults to 30.
+        history_store: Optional HistoryStore for persisting play history.
+        history_syncer: Optional HistorySyncer for bidirectional sync.
+        executor: Optional ThreadPoolExecutor for background sync tasks.
     """
 
     def __init__(
@@ -46,12 +55,19 @@ class HistoryReporter:
         track_store: TrackStore,
         proxy_config: dict[str, Any],
         min_play_seconds: int = 30,
+        *,
+        history_store: HistoryStore | None = None,
+        history_syncer: "HistorySyncer | None" = None,
+        executor: ThreadPoolExecutor | None = None,
     ) -> None:
         self._mpd_socket_path = mpd_socket_path
         self._provider_registry = provider_registry
         self._track_store = track_store
         self._proxy_config = proxy_config
         self._min_play_seconds = min_play_seconds
+        self._history_store = history_store
+        self._history_syncer = history_syncer
+        self._executor = executor
 
         self._mpd: MPDClientBase | None = None
 
@@ -221,7 +237,7 @@ class HistoryReporter:
     # ------------------------------------------------------------------
 
     def _report_track(self, url: str, duration_seconds: int) -> None:
-        """Look up *url*, dispatch via the provider registry."""
+        """Look up *url*, dispatch via the provider registry, write history."""
         if not url:
             return
         match = PROXY_URL_RE.search(url)
@@ -237,6 +253,8 @@ class HistoryReporter:
                 track_id,
             )
             return
+
+        # ---- existing provider report (UNCHANGED) ----
         try:
             ok = provider.report_play(track_id, duration_seconds)
             if ok:
@@ -259,3 +277,41 @@ class HistoryReporter:
                 track_id,
                 e,
             )
+
+        # ---- NEW: history write + bidir submit ----
+        if self._history_store is None or self._history_syncer is None or self._executor is None:
+            return
+        try:
+            track = self._track_store.get_track(provider_name, track_id)
+            played_at = datetime.now(UTC).astimezone().isoformat()
+            quality = self._resolve_quality(provider_name, track)
+            self._history_store.add_play(
+                provider=provider_name,
+                track_id=track_id,
+                played_at=played_at,
+                title=(track or {}).get("title"),
+                artist=(track or {}).get("artist"),
+                album=(track or {}).get("album"),
+                duration_seconds=(track or {}).get("duration_seconds"),
+                art_url=(track or {}).get("art_url"),
+                quality=quality,
+                play_seconds=duration_seconds,
+            )
+            self._executor.submit(self._history_syncer.bidir_push)
+        except Exception as e:
+            logger.warning("history-write failed for %s/%s: %s", provider_name, track_id, e)
+
+    def _resolve_quality(
+        self, provider_name: str, track: dict[str, Any] | None,
+    ) -> str | None:
+        """Return per-provider quality label for the history row.
+
+        For tidal: prefer the track's stored quality field if present
+        (TrackStore may surface it via TrackMetadata); otherwise None and
+        let the syncer / aggregator infer from config later.
+        For yt: None (YT doesn't expose a meaningful quality tier).
+        Other providers: None.
+        """
+        if provider_name == "tidal" and track is not None:
+            return track.get("quality")
+        return None
