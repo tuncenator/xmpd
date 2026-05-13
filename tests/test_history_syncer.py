@@ -273,11 +273,12 @@ class TestWireFormatAndState:
         popen_mock = mock_ssh_bidir(stdout_bytes=b"", wait_returncode=0)
         syncer.bidir_push()
 
-        # Verify ssh command
+        # Verify ssh command (includes -F for user config bypass)
         cmd = popen_mock.call_args[0][0]
-        assert cmd == [
-            "ssh",
-            "WATCHTOWER",
+        assert cmd[0] == "ssh"
+        assert "-F" in cmd
+        assert "WATCHTOWER" in cmd
+        assert cmd[-6:] == [
             "xmpd-history-receiver",
             "bidir",
             "--as",
@@ -597,3 +598,38 @@ class TestStartupNudge:
         # Cursor advanced
         cursor = history_store_temp.get_sync_state("last_received_server_id")
         assert cursor == "10"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests
+# ---------------------------------------------------------------------------
+
+
+# regression for Loop A failure: SSH subprocess fails inside systemd service
+# because OpenSSH 10.2 rejects bad-permissions system config includes
+# (e.g. /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf). Fix: pass
+# -F ~/.ssh/config to skip system config entirely.
+class TestSSHConfigBypass:
+    """Verify SSH command bypasses system config with -F flag."""
+
+    def test_bidir_ssh_command_uses_user_config_only(
+        self,
+        history_store_temp: HistoryStore,
+        mock_ssh_bidir: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SSH command must include -F ~/.ssh/config to avoid system config issues."""
+        syncer = _make_syncer(history_store_temp)
+        monkeypatch.setattr(subprocess, "run", _tailscale_run_ok())
+
+        popen_mock = mock_ssh_bidir(stdout_bytes=b"", wait_returncode=0)
+        syncer.bidir_push()
+
+        cmd = popen_mock.call_args[0][0]
+        # Must contain -F with a path ending in .ssh/config
+        assert "-F" in cmd, "SSH command must include -F to specify user config"
+        f_idx = cmd.index("-F")
+        config_path = cmd[f_idx + 1]
+        assert config_path.endswith(".ssh/config"), (
+            f"Expected .ssh/config path, got {config_path}"
+        )
