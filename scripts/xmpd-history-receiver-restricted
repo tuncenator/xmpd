@@ -1,0 +1,23 @@
+#!/bin/sh
+# xmpd-history service-key command wrapper. Restricts the SSH key to
+# only invoke xmpd-history-receiver subcommands. Other commands rejected.
+#
+# Install on WATCHTOWER at ~/bin/xmpd-history-receiver-restricted (chmod 755).
+# Reference from authorized_keys via:
+#   command="$HOME/bin/xmpd-history-receiver-restricted",restrict <pubkey> xmpd-history service
+
+set -e
+
+CMD="${SSH_ORIGINAL_COMMAND:-}"
+
+case "$CMD" in
+    "xmpd-history-receiver bidir --as "*) ;;
+    "xmpd-history-receiver doctor"|"xmpd-history-receiver doctor "*) ;;
+    "xmpd-history-receiver version"|"xmpd-history-receiver version "*) ;;
+    *)
+        echo "xmpd-history-receiver-restricted: refused: $CMD" >&2
+        exit 1
+        ;;
+esac
+
+exec "$HOME/bin/xmpd-history-receiver" ${CMD#xmpd-history-receiver }
