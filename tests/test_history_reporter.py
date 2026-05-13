@@ -384,9 +384,7 @@ class TestShutdown:
             return ["player"]
 
         mpd.idle.side_effect = idle_blocks
-        with patch.object(
-            reporter, "_connect", side_effect=lambda: setattr(reporter, "_mpd", mpd)
-        ):
+        with patch.object(reporter, "_connect", side_effect=lambda: setattr(reporter, "_mpd", mpd)):
             reporter.run(shutdown)
         assert shutdown.is_set()
 

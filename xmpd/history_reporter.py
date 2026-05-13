@@ -302,7 +302,9 @@ class HistoryReporter:
             logger.warning("history-write failed for %s/%s: %s", provider_name, track_id, e)
 
     def _resolve_quality(
-        self, provider_name: str, track: dict[str, Any] | None,
+        self,
+        provider_name: str,
+        track: dict[str, Any] | None,
     ) -> str | None:
         """Return per-provider quality label for the history row.
 

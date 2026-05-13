@@ -161,8 +161,13 @@ class TestPerformSync:
     def test_perform_sync_updates_state(self, tmp_path):
         daemon = _make_daemon(tmp_path)
         sync_result = SyncResult(
-            success=True, playlists_synced=3, playlists_failed=0,
-            tracks_added=50, tracks_failed=2, duration_seconds=10.5, errors=[],
+            success=True,
+            playlists_synced=3,
+            playlists_failed=0,
+            tracks_added=50,
+            tracks_failed=2,
+            duration_seconds=10.5,
+            errors=[],
         )
         daemon.sync_engine.sync_all_playlists.return_value = sync_result
         daemon._perform_sync()
@@ -202,8 +207,12 @@ class TestSocketCommands:
         daemon.state = {
             "last_sync": "2025-10-17T12:00:00Z",
             "last_sync_result": {
-                "success": True, "playlists_synced": 5, "playlists_failed": 0,
-                "tracks_added": 100, "tracks_failed": 2, "errors": [],
+                "success": True,
+                "playlists_synced": 5,
+                "playlists_failed": 0,
+                "tracks_added": 100,
+                "tracks_failed": 2,
+                "errors": [],
             },
             "daemon_start_time": "2025-10-17T10:00:00Z",
         }
@@ -218,12 +227,20 @@ class TestSocketCommands:
         yt = _make_yt_provider()
         yt.list_playlists.return_value = [
             ProviderPlaylist(
-                provider="yt", playlist_id="PL123", name="Favorites",
-                track_count=50, is_owned=True, is_favorites=True,
+                provider="yt",
+                playlist_id="PL123",
+                name="Favorites",
+                track_count=50,
+                is_owned=True,
+                is_favorites=True,
             ),
             ProviderPlaylist(
-                provider="yt", playlist_id="PL456", name="Workout",
-                track_count=30, is_owned=True, is_favorites=False,
+                provider="yt",
+                playlist_id="PL456",
+                name="Workout",
+                track_count=30,
+                is_owned=True,
+                is_favorites=False,
             ),
         ]
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
@@ -265,10 +282,14 @@ class TestCmdRadio:
         yt = _make_yt_provider()
         yt.get_radio.return_value = [
             Track(
-                provider="yt", track_id="r1r1r1r1r1r",
+                provider="yt",
+                track_id="r1r1r1r1r1r",
                 metadata=TrackMetadata(
-                    title="Radio 1", artist="Art", album=None,
-                    duration_seconds=180, art_url=None,
+                    title="Radio 1",
+                    artist="Art",
+                    album=None,
+                    duration_seconds=180,
+                    art_url=None,
                 ),
             ),
         ]
@@ -286,10 +307,14 @@ class TestCmdRadio:
         yt = _make_yt_provider()
         yt.get_radio.return_value = [
             Track(
-                provider="yt", track_id="r2r2r2r2r2r",
+                provider="yt",
+                track_id="r2r2r2r2r2r",
                 metadata=TrackMetadata(
-                    title="R2", artist="A2", album=None,
-                    duration_seconds=200, art_url=None,
+                    title="R2",
+                    artist="A2",
+                    album=None,
+                    duration_seconds=200,
+                    art_url=None,
                 ),
             ),
         ]
@@ -305,30 +330,43 @@ class TestCmdRadio:
         tidal = _make_tidal_provider()
         tidal.get_radio.return_value = [
             Track(
-                provider="tidal", track_id="111",
+                provider="tidal",
+                track_id="111",
                 metadata=TrackMetadata(
-                    title="Other", artist="A", album=None,
-                    duration_seconds=180, art_url=None,
+                    title="Other",
+                    artist="A",
+                    album=None,
+                    duration_seconds=180,
+                    art_url=None,
                 ),
             ),
             Track(
-                provider="tidal", track_id="222",
+                provider="tidal",
+                track_id="222",
                 metadata=TrackMetadata(
-                    title="Other2", artist="B", album=None,
-                    duration_seconds=200, art_url=None,
+                    title="Other2",
+                    artist="B",
+                    album=None,
+                    duration_seconds=200,
+                    art_url=None,
                 ),
             ),
         ]
         tidal.get_track_metadata.return_value = TrackMetadata(
-            title="Seed", artist="S", album=None,
-            duration_seconds=210, art_url=None,
+            title="Seed",
+            artist="S",
+            album=None,
+            duration_seconds=210,
+            art_url=None,
         )
         tidal.get_favorites.return_value = []
         daemon = _make_daemon(tmp_path, registry={"tidal": tidal})
 
         captured = {}
+
         def _capture(name, tracks, **kwargs):
             captured["tracks"] = tracks
+
         daemon.mpd_client.create_or_replace_playlist = Mock(side_effect=_capture)
 
         response = daemon._cmd_radio("tidal", "999")
@@ -344,17 +382,25 @@ class TestCmdRadio:
         yt = _make_yt_provider()
         yt.get_radio.return_value = [
             Track(
-                provider="yt", track_id="seed_id_xx",
+                provider="yt",
+                track_id="seed_id_xx",
                 metadata=TrackMetadata(
-                    title="Seed", artist="S", album=None,
-                    duration_seconds=180, art_url=None,
+                    title="Seed",
+                    artist="S",
+                    album=None,
+                    duration_seconds=180,
+                    art_url=None,
                 ),
             ),
             Track(
-                provider="yt", track_id="next_id_xx",
+                provider="yt",
+                track_id="next_id_xx",
                 metadata=TrackMetadata(
-                    title="Next", artist="N", album=None,
-                    duration_seconds=200, art_url=None,
+                    title="Next",
+                    artist="N",
+                    album=None,
+                    duration_seconds=200,
+                    art_url=None,
                 ),
             ),
         ]
@@ -362,8 +408,10 @@ class TestCmdRadio:
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
 
         captured = {}
+
         def _capture(name, tracks, **kwargs):
             captured["tracks"] = tracks
+
         daemon.mpd_client.create_or_replace_playlist = Mock(side_effect=_capture)
 
         response = daemon._cmd_radio("yt", "seed_id_xx")
@@ -376,24 +424,36 @@ class TestCmdRadio:
         yt = _make_yt_provider()
         yt.get_radio.return_value = [
             Track(
-                provider="yt", track_id="aaaaaaaaaa1",
+                provider="yt",
+                track_id="aaaaaaaaaa1",
                 metadata=TrackMetadata(
-                    title="A", artist="A", album=None,
-                    duration_seconds=180, art_url=None,
+                    title="A",
+                    artist="A",
+                    album=None,
+                    duration_seconds=180,
+                    art_url=None,
                 ),
             ),
             Track(
-                provider="yt", track_id="seed_id_xx",
+                provider="yt",
+                track_id="seed_id_xx",
                 metadata=TrackMetadata(
-                    title="Seed", artist="S", album=None,
-                    duration_seconds=190, art_url=None,
+                    title="Seed",
+                    artist="S",
+                    album=None,
+                    duration_seconds=190,
+                    art_url=None,
                 ),
             ),
             Track(
-                provider="yt", track_id="bbbbbbbbbb2",
+                provider="yt",
+                track_id="bbbbbbbbbb2",
                 metadata=TrackMetadata(
-                    title="B", artist="B", album=None,
-                    duration_seconds=200, art_url=None,
+                    title="B",
+                    artist="B",
+                    album=None,
+                    duration_seconds=200,
+                    art_url=None,
                 ),
             ),
         ]
@@ -401,15 +461,19 @@ class TestCmdRadio:
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
 
         captured = {}
+
         def _capture(name, tracks, **kwargs):
             captured["tracks"] = tracks
+
         daemon.mpd_client.create_or_replace_playlist = Mock(side_effect=_capture)
 
         response = daemon._cmd_radio("yt", "seed_id_xx")
         assert response["success"] is True
         yt.get_track_metadata.assert_not_called()
         assert [t.video_id for t in captured["tracks"]] == [
-            "seed_id_xx", "aaaaaaaaaa1", "bbbbbbbbbb2",
+            "seed_id_xx",
+            "aaaaaaaaaa1",
+            "bbbbbbbbbb2",
         ]
 
     def test_cmd_radio_seed_metadata_lookup_fails_gracefully(self, tmp_path):
@@ -417,10 +481,14 @@ class TestCmdRadio:
         tidal = _make_tidal_provider()
         tidal.get_radio.return_value = [
             Track(
-                provider="tidal", track_id="111",
+                provider="tidal",
+                track_id="111",
                 metadata=TrackMetadata(
-                    title="Other", artist="A", album=None,
-                    duration_seconds=180, art_url=None,
+                    title="Other",
+                    artist="A",
+                    album=None,
+                    duration_seconds=180,
+                    art_url=None,
                 ),
             ),
         ]
@@ -429,8 +497,10 @@ class TestCmdRadio:
         daemon = _make_daemon(tmp_path, registry={"tidal": tidal})
 
         captured = {}
+
         def _capture(name, tracks, **kwargs):
             captured["tracks"] = tracks
+
         daemon.mpd_client.create_or_replace_playlist = Mock(side_effect=_capture)
 
         response = daemon._cmd_radio("tidal", "999")
@@ -453,8 +523,11 @@ class TestCmdPlayQueue:
     def test_cmd_play_success(self, tmp_path):
         yt = _make_yt_provider()
         yt.get_track_metadata.return_value = TrackMetadata(
-            title="Test Song", artist="Test Artist",
-            album=None, duration_seconds=180, art_url=None,
+            title="Test Song",
+            artist="Test Artist",
+            album=None,
+            duration_seconds=180,
+            art_url=None,
         )
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
         daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
@@ -479,8 +552,11 @@ class TestCmdPlayQueue:
         """TrackStore registration happens before MPD addid call."""
         yt = _make_yt_provider()
         yt.get_track_metadata.return_value = TrackMetadata(
-            title="Order Song", artist="Order Artist",
-            album=None, duration_seconds=120, art_url=None,
+            title="Order Song",
+            artist="Order Artist",
+            album=None,
+            duration_seconds=120,
+            art_url=None,
         )
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
         daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
@@ -488,9 +564,11 @@ class TestCmdPlayQueue:
         daemon.mpd_client._client.addid.return_value = "99"
         call_order = []
         daemon.track_store.add_track.side_effect = lambda **kw: call_order.append("add_track")
+
         def _addid(url):
             call_order.append("mpd_add")
             return "99"
+
         daemon.mpd_client._client.addid.side_effect = _addid
         daemon._cmd_play("yt", "order123")
         assert call_order.index("add_track") < call_order.index("mpd_add")
@@ -498,8 +576,11 @@ class TestCmdPlayQueue:
     def test_cmd_queue_success(self, tmp_path):
         yt = _make_yt_provider()
         yt.get_track_metadata.return_value = TrackMetadata(
-            title="Q Song", artist="Q Artist",
-            album=None, duration_seconds=200, art_url=None,
+            title="Q Song",
+            artist="Q Artist",
+            album=None,
+            duration_seconds=200,
+            art_url=None,
         )
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
         daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
@@ -510,12 +591,8 @@ class TestCmdPlayQueue:
         daemon.mpd_client._client.addid.assert_called_once_with(
             "http://localhost:6602/proxy/yt/def12345678"
         )
-        daemon.mpd_client._client.addtagid.assert_any_call(
-            "77", "Title", "Q Song"
-        )
-        daemon.mpd_client._client.addtagid.assert_any_call(
-            "77", "Artist", "Q Artist"
-        )
+        daemon.mpd_client._client.addtagid.assert_any_call("77", "Title", "Q Song")
+        daemon.mpd_client._client.addtagid.assert_any_call("77", "Artist", "Q Artist")
         daemon.track_store.add_track.assert_called_once_with(
             provider="yt",
             track_id="def12345678",
@@ -528,20 +605,22 @@ class TestCmdPlayQueue:
         """TrackStore registration happens before MPD addid call."""
         yt = _make_yt_provider()
         yt.get_track_metadata.return_value = TrackMetadata(
-            title="Q Order Song", artist="Q Order Artist",
-            album=None, duration_seconds=240, art_url=None,
+            title="Q Order Song",
+            artist="Q Order Artist",
+            album=None,
+            duration_seconds=240,
+            art_url=None,
         )
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
         daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
         daemon.mpd_client._client = Mock()
         call_order = []
-        daemon.track_store.add_track.side_effect = (
-            lambda **kw: call_order.append("add_track")
-        )
+        daemon.track_store.add_track.side_effect = lambda **kw: call_order.append("add_track")
 
         def _addid(url):
             call_order.append("mpd_add")
             return "99"
+
         daemon.mpd_client._client.addid.side_effect = _addid
         daemon._cmd_queue("yt", "qorder456")
         assert call_order.index("add_track") < call_order.index("mpd_add")
@@ -654,25 +733,19 @@ class TestExtractProviderAndTrack:
 
     def test_new_shape(self, tmp_path):
         daemon = _make_daemon(tmp_path)
-        p, t = daemon._extract_provider_and_track(
-            "http://localhost:8080/proxy/yt/abc12345678"
-        )
+        p, t = daemon._extract_provider_and_track("http://localhost:8080/proxy/yt/abc12345678")
         assert p == "yt"
         assert t == "abc12345678"
 
     def test_tidal_shape(self, tmp_path):
         daemon = _make_daemon(tmp_path)
-        p, t = daemon._extract_provider_and_track(
-            "http://localhost:8080/proxy/tidal/12345"
-        )
+        p, t = daemon._extract_provider_and_track("http://localhost:8080/proxy/tidal/12345")
         assert p == "tidal"
         assert t == "12345"
 
     def test_legacy_shape(self, tmp_path):
         daemon = _make_daemon(tmp_path)
-        p, t = daemon._extract_provider_and_track(
-            "http://localhost:8080/proxy/testvideoid"
-        )
+        p, t = daemon._extract_provider_and_track("http://localhost:8080/proxy/testvideoid")
         assert p == "yt"
         assert t == "testvideoid"
 
