@@ -173,9 +173,7 @@ class TestMPDConfigFields:
                 config = load_config()
 
                 # Check that ~ was expanded
-                assert config["mpd_socket_path"] == str(
-                    Path.home() / "custom" / "mpd" / "socket"
-                )
+                assert config["mpd_socket_path"] == str(Path.home() / "custom" / "mpd" / "socket")
 
     def test_sync_interval_validation_positive(self) -> None:
         """Test that sync_interval_minutes must be positive."""
@@ -655,4 +653,109 @@ class TestLegacyShapeRejection:
             yaml.safe_dump(legacy_config, f)
         with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
             with pytest.raises(ConfigError, match="install.sh"):
+                load_config()
+
+
+class TestHistoryConfig:
+    """Tests for the new history: config section."""
+
+    def test_history_section_present_in_defaults(self, tmp_path: Path) -> None:
+        """Default config contains the history block with correct defaults."""
+        mock_config_dir = tmp_path / "xmpd"
+        with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
+            c = load_config()
+        assert "history" in c
+        assert c["history"]["enabled"] is False
+        assert c["history"]["db_path"].endswith("/history.db")
+        assert c["history"]["mpd_log_path"] is None
+        assert c["history"]["watchtower"]["ssh_target"] == "WATCHTOWER"
+        assert c["history"]["watchtower"]["bidir_batch"] == 1000
+
+    def test_history_db_path_tilde_expansion(self, tmp_path: Path) -> None:
+        """~ in db_path is expanded to the real home directory."""
+        mock_config_dir = tmp_path / "xmpd"
+        mock_config_dir.mkdir(parents=True)
+        config_file = mock_config_dir / "config.yaml"
+        with open(config_file, "w") as f:
+            yaml.safe_dump({"history": {"db_path": "~/custom/history.db"}}, f)
+        with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
+            c = load_config()
+        assert "~" not in c["history"]["db_path"]
+        assert c["history"]["db_path"].endswith("/custom/history.db")
+
+    def test_history_mpd_log_path_null_unchanged(self, tmp_path: Path) -> None:
+        """mpd_log_path: null is accepted and stays None."""
+        mock_config_dir = tmp_path / "xmpd"
+        mock_config_dir.mkdir(parents=True)
+        config_file = mock_config_dir / "config.yaml"
+        with open(config_file, "w") as f:
+            yaml.safe_dump({"history": {"mpd_log_path": None}}, f)
+        with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
+            c = load_config()
+        assert c["history"]["mpd_log_path"] is None
+
+    def test_history_mpd_log_path_key_absent_unchanged(self, tmp_path: Path) -> None:
+        """Omitting mpd_log_path altogether still results in None."""
+        mock_config_dir = tmp_path / "xmpd"
+        mock_config_dir.mkdir(parents=True)
+        config_file = mock_config_dir / "config.yaml"
+        with open(config_file, "w") as f:
+            yaml.safe_dump({"history": {"enabled": False}}, f)
+        with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
+            c = load_config()
+        assert c["history"]["mpd_log_path"] is None
+
+    def test_history_mpd_log_path_tilde_expansion(self, tmp_path: Path) -> None:
+        """~ in mpd_log_path is expanded."""
+        mock_config_dir = tmp_path / "xmpd"
+        mock_config_dir.mkdir(parents=True)
+        config_file = mock_config_dir / "config.yaml"
+        with open(config_file, "w") as f:
+            yaml.safe_dump({"history": {"mpd_log_path": "~/.mpd/log"}}, f)
+        with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
+            c = load_config()
+        assert "~" not in c["history"]["mpd_log_path"]
+
+    def test_history_enabled_must_be_bool(self, tmp_path: Path) -> None:
+        """history.enabled: 'yes' raises ValueError."""
+        mock_config_dir = tmp_path / "xmpd"
+        mock_config_dir.mkdir(parents=True)
+        config_file = mock_config_dir / "config.yaml"
+        with open(config_file, "w") as f:
+            yaml.safe_dump({"history": {"enabled": "yes"}}, f)
+        with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
+            with pytest.raises(ValueError, match="history.enabled"):
+                load_config()
+
+    def test_history_watchtower_ssh_target_must_be_string(self, tmp_path: Path) -> None:
+        """history.watchtower.ssh_target as integer raises ValueError."""
+        mock_config_dir = tmp_path / "xmpd"
+        mock_config_dir.mkdir(parents=True)
+        config_file = mock_config_dir / "config.yaml"
+        with open(config_file, "w") as f:
+            yaml.safe_dump({"history": {"watchtower": {"ssh_target": 42}}}, f)
+        with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
+            with pytest.raises(ValueError):
+                load_config()
+
+    def test_history_watchtower_bidir_batch_must_be_positive_int(self, tmp_path: Path) -> None:
+        """history.watchtower.bidir_batch: 0 raises ValueError."""
+        mock_config_dir = tmp_path / "xmpd"
+        mock_config_dir.mkdir(parents=True)
+        config_file = mock_config_dir / "config.yaml"
+        with open(config_file, "w") as f:
+            yaml.safe_dump({"history": {"watchtower": {"bidir_batch": 0}}}, f)
+        with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
+            with pytest.raises(ValueError):
+                load_config()
+
+    def test_history_watchtower_bidir_batch_bool_rejected(self, tmp_path: Path) -> None:
+        """history.watchtower.bidir_batch: true (bool) raises ValueError."""
+        mock_config_dir = tmp_path / "xmpd"
+        mock_config_dir.mkdir(parents=True)
+        config_file = mock_config_dir / "config.yaml"
+        with open(config_file, "w") as f:
+            yaml.safe_dump({"history": {"watchtower": {"bidir_batch": True}}}, f)
+        with patch("xmpd.config.get_config_dir", return_value=mock_config_dir):
+            with pytest.raises(ValueError):
                 load_config()
