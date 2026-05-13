@@ -115,7 +115,23 @@ No helpers were listed in Phase 6's "Helpers Required" section. No helper issues
 
 ## Code Review Results
 
-> Pending code review.
+- **Result**: REVIEW PASSED WITH NOTES (no fix round required)
+- **Reviewer**: spark-code-reviewer (claude-opus-4-6)
+- **Diff range**: `2e565b5..ad11e99`
+
+All key invariants verified: `_cmd_history_backfill` short-circuit returns the disabled-feature error when `self.history_store` is falsy; idempotency dedup set built once from `get_plays(mode="time", since=None, limit=10_000_000)` filtered to own-host rows; `play_seconds=None` always for backfilled rows; bidir push only when `not dry_run AND inserted > 0 AND history_syncer is not None`; within-log duplicates collapse silently (since the same `(played_at, provider, track_id)` key on rerun lands in `skipped`, not double-inserted); malformed lines NOT in any counter; auto-detect walks `_MPDCONF_CANDIDATES` and parses `MPDCONF_LOG_FILE_RE`. Code placement is correct: `_cmd_history_backfill` directly below `_cmd_history_json`, `cmd_history_backfill` directly below `cmd_history_json`, both `elif` dispatches placed below their Phase 5 anchors. The phase-summary-flagged deviations are both correct: `LOG_LINE_RE` now handles three-token legacy timestamps (`May  8 09:12:33` with double space), and orphan counting before the dedup-skip check produces `orphans=6` on both first and second run (matching the spec). Mock discipline acceptable: tests use `MagicMock(spec=TrackStore)` with side_effect, assert via raw `sqlite3.connect` + SELECT, and the xmpctl tests mock at the `send_command` IPC boundary. Test coverage is strong: 16 tests across 5 classes (regex, timestamp parsing, core logic, autodetect, xmpctl client).
+
+### Notes (non-blocking, no fix required)
+
+| Severity | Location | Note |
+|----------|----------|------|
+| Minor | `xmpd/history_backfill.py` lines 92-109 | `_resolve_log_path` helper defined but never called. Daemon's `_cmd_history_backfill` implements its own inline resolution chain. Dead code but harmless. |
+| Minor | `tests/test_history_backfill.py` | No test assertion that `play_seconds IS NULL` for backfilled rows via raw SQL. Production code passes `play_seconds=None`; the invariant is honored, just not directly asserted. |
+| Minor | `tests/test_history_backfill.py` lines 312-319 | `dry_run` test compares `os.path.getmtime` before/after. The raw `SELECT COUNT(*)` assertion is the real verification; the mtime check is redundant but not broken. |
+
+### Functional QA Coverage Note
+
+The phase summary documents a Python REPL invocation of `run_backfill()` directly (with byte-for-byte captured output for dry-run, first-run, and rerun). The user-facing `xmpctl history-backfill` over the Unix socket was NOT exercised end-to-end -- this was legitimately deferred because no test peer has the Phase 6 code yet (Syncthing replication and a `systemctl --user restart xmpd` on STORMTREE / VICAR are required to surface the new daemon handler). The xmpctl client layer is thin (IPC forwarding + output formatting), so the deferral is acceptable.
 
 ---
 
