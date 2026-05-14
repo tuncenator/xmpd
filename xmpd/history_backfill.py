@@ -42,6 +42,13 @@ LOG_LINE_RE = re.compile(
     r'^(?P<ts>\S+(?:\s+\S+(?:\s+\S+)?)?)\s+player:\s+played\s+"http://[^/]+/proxy/(?P<provider>\w+)/(?P<track_id>[^"]+)"\s*$'
 )
 
+# Matches any player:played line; the URL group is later classified as
+# proxy (already captured above), local file (no scheme), or other stream
+# (has "://" but not proxy -- silently ignored).
+PLAYED_LINE_RE = re.compile(
+    r'^(?P<ts>\S+(?:\s+\S+(?:\s+\S+)?)?)\s+player:\s+played\s+"(?P<url>[^"]+)"\s*$'
+)
+
 # Matches an MPD "Failed to decode" exception line for a proxy URL.
 # Extracts timestamp, provider, and track_id so we can correlate with
 # subsequent ``player: played`` lines for the same track.
@@ -53,6 +60,41 @@ FAILED_DECODE_RE = re.compile(
 # ``player: played`` event for the same URL to still be considered a
 # phantom play (and thus skipped).
 FAILED_DECODE_GRACE_SECONDS = 2
+
+# Title/artist values that mark a TrackStore row as an unresolved stub. These
+# are the strings the resolver writes when it can't fetch real metadata
+# (e.g. the historical ``testvideoid`` / tidal ``99999999`` placeholders left
+# in track_mapping.db from earlier dev runs). A play whose TrackStore record
+# carries these placeholders never represents real listening data and is
+# excluded from history backfill.
+_PLACEHOLDER_TITLES = frozenset({"Unknown", "Unknown Title"})
+_PLACEHOLDER_ARTISTS = frozenset({"Unknown", "Unknown Artist"})
+
+# Hard-coded (provider, track_id) pairs that must never enter history. These
+# are well-known dev-time placeholders that linger in old MPD logs and would
+# otherwise be re-imported every time the user runs ``history-backfill``.
+# Adding to this set is intentionally a code change so the decision is
+# explicit and reviewable.
+_BLOCKLISTED_TRACKS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("yt", "testvideoid"),
+        ("tidal", "99999999"),
+    }
+)
+
+
+def _is_placeholder_stub(track: dict | None) -> bool:
+    """Return True when *track* is the explicit unresolved-track stub."""
+    if not track:
+        return False
+    title = track.get("title")
+    artist = track.get("artist")
+    return title in _PLACEHOLDER_TITLES and artist in _PLACEHOLDER_ARTISTS
+
+
+def _is_blocklisted_track(provider: str, track_id: str) -> bool:
+    """Return True for (provider, track_id) pairs banned from history."""
+    return (provider, track_id) in _BLOCKLISTED_TRACKS
 
 # Detects ISO 8601 timestamps like 2026-05-07T17:51:23
 ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
@@ -105,6 +147,73 @@ def _parse_played_at(timestamp_str: str, log_mtime: float) -> str:
     raise ValueError(f"unrecognized timestamp: {timestamp_str!r}")
 
 
+def _enrich_local_tracks(
+    paths: set[str], mpd_socket_path: str | None
+) -> dict[str, dict[str, object]]:
+    """Look up tags for a set of MPD-relative paths via a transient connection.
+
+    Returns ``{path: {"title", "artist", "album", "duration_seconds"}}``.
+    Paths that MPD doesn't know are absent from the mapping; the caller
+    falls back to NULL metadata for those rows.
+
+    Args:
+        paths: Set of MPD-relative file paths.
+        mpd_socket_path: Unix socket path or ``host:port`` for MPD. If None
+            or empty, the lookup is skipped and an empty dict is returned.
+    """
+    if not paths or not mpd_socket_path:
+        return {}
+
+    from mpd import MPDClient as MPDClientBase
+
+    client = MPDClientBase()
+    client.timeout = 30
+    try:
+        if ":" in mpd_socket_path:
+            host, port_str = mpd_socket_path.split(":", 1)
+            client.connect(host, int(port_str))
+        else:
+            client.connect(mpd_socket_path)
+    except Exception as exc:
+        logger.warning(
+            "backfill: MPD connect failed, skipping local enrichment: %s", exc
+        )
+        return {}
+
+    out: dict[str, dict[str, object]] = {}
+    try:
+        for path in paths:
+            try:
+                results = client.find("file", path)
+            except Exception as exc:
+                logger.debug("backfill: MPD find failed for %r: %s", path, exc)
+                continue
+            if not results:
+                continue
+            r = results[0]
+            time_raw = r.get("time")
+            try:
+                duration: int | None = int(time_raw) if time_raw else None
+            except (TypeError, ValueError):
+                duration = None
+            out[path] = {
+                "title": r.get("title") or None,
+                "artist": r.get("artist") or None,
+                "album": r.get("album") or None,
+                "duration_seconds": duration,
+                "art_url": None,
+                "quality": None,
+            }
+    finally:
+        try:
+            client.close()
+            client.disconnect()
+        except Exception:
+            pass
+
+    return out
+
+
 def _resolve_log_path(explicit: str | None, configured: str | None) -> str:
     """Resolve the MPD log path from explicit arg, config, or raise.
 
@@ -136,6 +245,7 @@ def run_backfill(
     log_path: str,
     *,
     dry_run: bool,
+    mpd_socket_path: str | None = None,
 ) -> dict[str, int]:
     """Import all ``player: played`` events from an MPD log into the history store.
 
@@ -147,11 +257,19 @@ def run_backfill(
     Orphan rows (no track_store match) are inserted with NULL metadata fields
     and counted under ``orphans``; they are still included in ``inserted``.
 
+    Local file plays (``player: played "<bare path>"``) are imported with
+    ``provider="local"`` and ``track_id`` set to the MPD-relative path.
+    When ``mpd_socket_path`` is provided, each unique local path is enriched
+    via ``find file <path>`` so the row carries title/artist/album/duration.
+
     Args:
         history_store: Open HistoryStore for this host.
         track_store: TrackStore for metadata enrichment, or None.
         log_path: Absolute path to the MPD log file.
         dry_run: If True, parse and count but do not write to the DB.
+        mpd_socket_path: Optional MPD socket (or host:port) used to look up
+            tags for local file plays. When None, local rows are inserted
+            with NULL metadata.
 
     Returns:
         Dict with keys ``inserted``, ``skipped``, ``orphans``,
@@ -197,13 +315,24 @@ def run_backfill(
     matches: list[tuple[str, str, str]] = []
     for line in lines:
         line = line.rstrip("\n")
-        m = LOG_LINE_RE.match(line)
-        if not m:
-            logger.debug("backfill: skipping non-match line: %r", line)
-            continue
-        ts_str = m.group("ts")
-        provider = m.group("provider")
-        track_id = m.group("track_id")
+        proxy_m = LOG_LINE_RE.match(line)
+        if proxy_m is not None:
+            ts_str = proxy_m.group("ts")
+            provider = proxy_m.group("provider")
+            track_id = proxy_m.group("track_id")
+        else:
+            generic_m = PLAYED_LINE_RE.match(line)
+            if generic_m is None:
+                logger.debug("backfill: skipping non-match line: %r", line)
+                continue
+            url = generic_m.group("url")
+            if "://" in url:
+                # http://... that didn't hit the proxy regex => non-xmpd stream
+                logger.debug("backfill: skipping non-proxy stream line: %r", line)
+                continue
+            ts_str = generic_m.group("ts")
+            provider = "local"
+            track_id = url
         try:
             played_at = _parse_played_at(ts_str, log_mtime)
         except ValueError:
@@ -211,10 +340,15 @@ def run_backfill(
             continue
         matches.append((played_at, provider, track_id))
 
+    # Enrich local file paths via MPD before the insert loop.
+    local_paths = {tid for _, prov, tid in matches if prov == "local"}
+    local_meta = _enrich_local_tracks(local_paths, mpd_socket_path)
+
     inserted = 0
     skipped = 0
     orphans = 0
     skipped_failed_decode = 0
+    skipped_placeholder = 0
 
     for played_at, provider, track_id in matches:
         # Check if this play is a phantom from a failed decode.
@@ -235,19 +369,50 @@ def run_backfill(
                 )
                 continue
 
-        # Metadata lookup (done for all rows to compute orphan count accurately)
-        track = track_store.get_track(provider, track_id) if track_store is not None else None
-        is_orphan = track is None
+        # Hard-coded blocklist (e.g., legacy testvideoid / tidal 99999999
+        # that escaped the failed-decode window). Counted under
+        # ``skipped_placeholder`` alongside metadata-stub skips.
+        if _is_blocklisted_track(provider, track_id):
+            skipped_placeholder += 1
+            logger.debug(
+                "backfill: skipping blocklisted %s/%s at %s",
+                provider,
+                track_id,
+                played_at,
+            )
+            continue
 
-        if is_orphan:
-            orphans += 1
+        # Metadata lookup (done for all rows to compute orphan count accurately).
+        # Local plays bypass track_store and read tags from the MPD enrichment
+        # map; they never count as orphans because the live MPD library is the
+        # source of truth for local files.
+        if provider == "local":
+            track = local_meta.get(track_id)
+            is_orphan = False
+        else:
+            track = track_store.get_track(provider, track_id) if track_store is not None else None
+            is_orphan = track is None
+            if is_orphan:
+                orphans += 1
+
+        # Skip placeholder-stub rows (e.g., legacy testvideoid / tidal 99999999
+        # that were never resolved to real tracks).
+        if _is_placeholder_stub(track):
+            skipped_placeholder += 1
+            logger.debug(
+                "backfill: skipping placeholder-stub %s/%s at %s",
+                provider,
+                track_id,
+                played_at,
+            )
+            continue
 
         key = (played_at, provider, track_id)
         if key in seen:
             skipped += 1
             continue
 
-        if is_orphan:
+        if track is None:
             title: str | None = None
             artist: str | None = None
             album: str | None = None
@@ -255,7 +420,6 @@ def run_backfill(
             art_url: str | None = None
             quality: str | None = None
         else:
-            assert track is not None
             title = track.get("title")
             artist = track.get("artist")
             album = track.get("album")
@@ -282,12 +446,14 @@ def run_backfill(
         seen.add(key)
 
     logger.info(
-        "backfill: %s inserted=%d skipped=%d orphans=%d skipped_failed_decode=%d log=%s",
+        "backfill: %s inserted=%d skipped=%d orphans=%d skipped_failed_decode=%d "
+        "skipped_placeholder=%d log=%s",
         "(dry-run)" if dry_run else "done",
         inserted,
         skipped,
         orphans,
         skipped_failed_decode,
+        skipped_placeholder,
         log_path,
     )
     return {
@@ -295,4 +461,5 @@ def run_backfill(
         "skipped": skipped,
         "orphans": orphans,
         "skipped_failed_decode": skipped_failed_decode,
+        "skipped_placeholder": skipped_placeholder,
     }

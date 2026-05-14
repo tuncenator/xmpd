@@ -16,6 +16,8 @@ import pytest
 
 from xmpd.history_backfill import (
     LOG_LINE_RE,
+    _is_blocklisted_track,
+    _is_placeholder_stub,
     _parse_played_at,
     run_backfill,
 )
@@ -346,7 +348,13 @@ class TestRunBackfill:
             str(empty_log),
             dry_run=False,
         )
-        assert result == {"inserted": 0, "skipped": 0, "orphans": 0, "skipped_failed_decode": 0}
+        assert result == {
+            "inserted": 0,
+            "skipped": 0,
+            "orphans": 0,
+            "skipped_failed_decode": 0,
+            "skipped_placeholder": 0,
+        }
 
     def test_run_backfill_track_store_none_treats_all_as_orphans(
         self, history_store_temp: HistoryStore, tmp_path: Path
@@ -512,10 +520,247 @@ class TestFailedDecodeFiltering:
         assert result["inserted"] == 4
         assert result["skipped_failed_decode"] == 3
 
+
+# ---------------------------------------------------------------------------
+# 4. Local file plays (bare path, no scheme)
+# ---------------------------------------------------------------------------
+
+
+class TestLocalFileBackfill:
+    """Bare-path player:played lines are imported with provider='local'."""
+
+    _FUTURE_PROOF = "New Era/Massive Attack/100th Window/01 Future Proof.mp3"
+    _BUTTERFLY = "New Era/Massive Attack/100th Window/05 Butterfly Caught.mp3"
+    _LOCAL_LOG_LINES = [
+        f'2026-05-10T23:16:06 player: played "{_FUTURE_PROOF}"',
+        f'2026-05-10T23:23:41 player: played "{_BUTTERFLY}"',
+        '2026-05-10T23:31:41 player: played "http://radio.example.com/stream.ogg"',
+        '2026-05-10T23:45:04 player: played "http://localhost:6602/proxy/yt/realtrack"',
+    ]
+
+    def _write_log(self, tmp_path: Path) -> Path:
+        log = tmp_path / "local.log"
+        log.write_text("\n".join(self._LOCAL_LOG_LINES) + "\n")
+        return log
+
+    def test_local_lines_imported_as_provider_local(
+        self, history_store_temp: HistoryStore, tmp_path: Path
+    ) -> None:
+        log = self._write_log(tmp_path)
+        result = run_backfill(history_store_temp, None, str(log), dry_run=False)
+        # 2 local + 1 yt proxy. The non-proxy http stream is dropped.
+        assert result["inserted"] == 3
+
+        conn = sqlite3.connect(str(tmp_path / "history.db"))
+        rows = conn.execute(
+            "SELECT provider, track_id FROM plays ORDER BY played_at"
+        ).fetchall()
+        conn.close()
+        providers = [r[0] for r in rows]
+        track_ids = [r[1] for r in rows]
+        assert providers == ["local", "local", "yt"]
+        assert track_ids[0].endswith("01 Future Proof.mp3")
+        assert track_ids[1].endswith("05 Butterfly Caught.mp3")
+        assert track_ids[2] == "realtrack"
+
+    def test_local_lines_skip_non_proxy_http(
+        self, history_store_temp: HistoryStore, tmp_path: Path
+    ) -> None:
+        log = self._write_log(tmp_path)
+        run_backfill(history_store_temp, None, str(log), dry_run=False)
+        conn = sqlite3.connect(str(tmp_path / "history.db"))
+        radio_rows = conn.execute(
+            "SELECT * FROM plays WHERE track_id LIKE 'http://radio%'"
+        ).fetchall()
+        conn.close()
+        assert len(radio_rows) == 0
+
+    def test_local_metadata_enriched_via_mpd_lookup(
+        self, history_store_temp: HistoryStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When mpd_socket_path is provided, local rows pull title/artist via find."""
+        log = self._write_log(tmp_path)
+
+        # Stub the python-mpd2 MPDClient used inside _enrich_local_tracks.
+        find_results = {
+            "New Era/Massive Attack/100th Window/01 Future Proof.mp3": [
+                {
+                    "file": "New Era/Massive Attack/100th Window/01 Future Proof.mp3",
+                    "title": "Future Proof",
+                    "artist": "Massive Attack",
+                    "album": "100th Window",
+                    "time": "362",
+                }
+            ],
+            "New Era/Massive Attack/100th Window/05 Butterfly Caught.mp3": [],
+        }
+
+        class FakeMPDClient:
+            timeout = 0
+
+            def connect(self, *_a, **_kw) -> None:  # noqa: ANN401
+                return None
+
+            def find(self, _kind: str, path: str):
+                return find_results.get(path, [])
+
+            def close(self) -> None:
+                return None
+
+            def disconnect(self) -> None:
+                return None
+
+        # Swap MPDClientBase inside the local import of _enrich_local_tracks
+        import sys
+        import types
+
+            # _enrich_local_tracks does `from mpd import MPDClient as MPDClientBase`
+            # so we patch the `mpd` module attribute.
+        fake_mpd = types.ModuleType("mpd_fake")
+        fake_mpd.MPDClient = FakeMPDClient  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "mpd", fake_mpd)
+
+        result = run_backfill(
+            history_store_temp,
+            None,
+            str(log),
+            dry_run=False,
+            mpd_socket_path="/tmp/fake.sock",
+        )
+        assert result["inserted"] == 3
+
+        conn = sqlite3.connect(str(tmp_path / "history.db"))
+        future_proof = conn.execute(
+            "SELECT title, artist, album, duration_seconds FROM plays"
+            " WHERE track_id LIKE '%Future Proof.mp3'"
+        ).fetchone()
+        butterfly = conn.execute(
+            "SELECT title, artist FROM plays WHERE track_id LIKE '%Butterfly Caught.mp3'"
+        ).fetchone()
+        conn.close()
+        # Enriched
+        assert future_proof == ("Future Proof", "Massive Attack", "100th Window", 362)
+        # Not in MPD library => NULL metadata
+        assert butterfly == (None, None)
+
+    def test_blocklisted_track_helper(self) -> None:
+        """Known dev-time placeholder IDs are unconditionally blocklisted."""
+        assert _is_blocklisted_track("yt", "testvideoid")
+        assert _is_blocklisted_track("tidal", "99999999")
+        assert not _is_blocklisted_track("yt", "realtrack")
+        assert not _is_blocklisted_track("tidal", "420578915")
+
+    def test_blocklisted_tracks_skipped_regardless_of_track_store(
+        self, history_store_temp: HistoryStore, tmp_path: Path
+    ) -> None:
+        """Blocklist must apply even when TrackStore returns None (orphan path)."""
+        log = tmp_path / "blocklist.log"
+        log.write_text(
+            "\n".join(
+                [
+                    '2026-05-09T23:29:56 player: played "http://localhost:6602/proxy/tidal/99999999"',
+                    '2026-05-09T23:43:31 player: played "http://localhost:6602/proxy/yt/testvideoid"',
+                    '2026-05-09T23:50:00 player: played "http://localhost:6602/proxy/tidal/391401491"',
+                ]
+            )
+            + "\n"
+        )
+        # track_store returns None for everything -> orphan path; blocklist
+        # must still drop the test stubs.
+        ts = MagicMock(spec=TrackStore)
+        ts.get_track.return_value = None
+        result = run_backfill(history_store_temp, ts, str(log), dry_run=False)
+        assert result["inserted"] == 1
+        assert result["skipped_placeholder"] == 2
+
+        conn = sqlite3.connect(str(tmp_path / "history.db"))
+        rows = conn.execute(
+            "SELECT provider, track_id FROM plays"
+        ).fetchall()
+        conn.close()
+        assert rows == [("tidal", "391401491")]
+
+    def test_placeholder_stub_helper(self) -> None:
+        """Recognises the legacy 'Unknown'/'Unknown Title' + 'Unknown Artist' stubs."""
+        assert _is_placeholder_stub({"title": "Unknown Title", "artist": "Unknown Artist"})
+        assert _is_placeholder_stub({"title": "Unknown", "artist": "Unknown Artist"})
+        # Real track
+        assert not _is_placeholder_stub({"title": "Teardrop", "artist": "Massive Attack"})
+        # Only one side is placeholder => still real
+        assert not _is_placeholder_stub({"title": "Unknown Title", "artist": "Real Artist"})
+        # None track
+        assert not _is_placeholder_stub(None)
+        # Empty
+        assert not _is_placeholder_stub({})
+
+    def test_placeholder_stub_tracks_excluded_from_backfill(
+        self, history_store_temp: HistoryStore, tmp_path: Path
+    ) -> None:
+        """testvideoid / tidal 99999999 stubs never enter history even without fd pairs."""
+        log = tmp_path / "stubs.log"
+        log.write_text(
+            "\n".join(
+                [
+                    '2026-05-09T23:29:56 player: played "http://localhost:6602/proxy/tidal/99999999"',
+                    '2026-05-09T23:30:48 player: played "http://localhost:6602/proxy/tidal/99999999"',
+                    '2026-05-09T23:43:31 player: played "http://localhost:6602/proxy/yt/testvideoid"',
+                    '2026-05-09T23:50:00 player: played "http://localhost:6602/proxy/tidal/391401491"',
+                ]
+            )
+            + "\n"
+        )
+
+        ts = MagicMock(spec=TrackStore)
+
+        def _get_track(provider: str, track_id: str) -> dict | None:
+            if (provider, track_id) == ("tidal", "99999999"):
+                return {
+                    "title": "Unknown",
+                    "artist": "Unknown Artist",
+                    "album": None,
+                    "duration_seconds": None,
+                    "art_url": None,
+                    "quality": None,
+                }
+            if (provider, track_id) == ("yt", "testvideoid"):
+                return {
+                    "title": "Unknown Title",
+                    "artist": "Unknown Artist",
+                    "album": None,
+                    "duration_seconds": None,
+                    "art_url": None,
+                    "quality": None,
+                }
+            return _KNOWN_TRACKS.get((provider, track_id))
+
+        ts.get_track.side_effect = _get_track
+
+        result = run_backfill(history_store_temp, ts, str(log), dry_run=False)
+        # Only the real tidal track is inserted; three stub rows are dropped.
+        assert result["inserted"] == 1
+        assert result["skipped_placeholder"] == 3
+
+        conn = sqlite3.connect(str(tmp_path / "history.db"))
+        rows = conn.execute(
+            "SELECT provider, track_id FROM plays"
+        ).fetchall()
+        conn.close()
+        assert rows == [("tidal", "391401491")]
+
+    def test_local_rows_idempotent_on_rerun(
+        self, history_store_temp: HistoryStore, tmp_path: Path
+    ) -> None:
+        log = self._write_log(tmp_path)
+        first = run_backfill(history_store_temp, None, str(log), dry_run=False)
+        second = run_backfill(history_store_temp, None, str(log), dry_run=False)
+        assert first["inserted"] == 3
+        assert second["inserted"] == 0
+        assert second["skipped"] == 3
+
         conn = sqlite3.connect(str(tmp_path / "history.db"))
         count = conn.execute("SELECT COUNT(*) FROM plays").fetchone()[0]
         conn.close()
-        assert count == 0
+        assert count == 3
 
 
 # ---------------------------------------------------------------------------

@@ -302,6 +302,67 @@ class TestHistoryJsonFallbackDisplay:
 
 
 # ---------------------------------------------------------------------------
+# Local-provider rendering
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryJsonLocalProvider:
+    """Local plays render with the [LO] tag and a path-aware fallback title."""
+
+    def test_local_row_renders_lo_tag_with_metadata(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        row = {
+            **_SAMPLE_TIME_ROW,
+            "provider": "local",
+            "track_id": (
+                "New Era/Massive Attack/Mezzanine/"
+                "Massive Attack - Mezzanine - 03 - Teardrop.mp3"
+            ),
+            "title": "Teardrop",
+            "artist": "Massive Attack",
+        }
+
+        def fake_send(cmd: str) -> dict[str, Any]:
+            return {"success": True, "rows": [row]}
+
+        with patch.object(_xmpctl, "send_command", side_effect=fake_send):
+            _xmpctl.cmd_history_json(["--format", "fzf"])
+
+        out = capsys.readouterr().out
+        visible = out.split("\t", 2)[2]
+        assert "[LO]" in visible
+        assert "Teardrop" in visible
+        assert "Massive Attack" in visible
+
+    def test_local_row_missing_metadata_falls_back_to_basename(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        row = {
+            **_SAMPLE_TIME_ROW,
+            "provider": "local",
+            "track_id": "New Era/Massive Attack/Heligoland/07 Paradise Circus.mp3",
+            "title": None,
+            "artist": None,
+            "quality": None,
+        }
+
+        def fake_send(cmd: str) -> dict[str, Any]:
+            return {"success": True, "rows": [row]}
+
+        with patch.object(_xmpctl, "send_command", side_effect=fake_send):
+            _xmpctl.cmd_history_json(["--format", "fzf"])
+
+        out = capsys.readouterr().out
+        visible = _strip_ansi(out.split("\t", 2)[2])
+        # Falls back to basename without extension; full path NOT shown.
+        assert "07 Paradise Circus" in visible
+        assert ".mp3" not in visible
+        assert "New Era/" not in visible
+        assert "[LO]" in visible
+
+
+# ---------------------------------------------------------------------------
 # Finding 2: host column alignment across rows of different widths
 # ---------------------------------------------------------------------------
 

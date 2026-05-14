@@ -358,6 +358,7 @@ def parse_provider_flag(args: list[str]) -> tuple[str | None, list[str]]:
 # ANSI true color escapes for fzf output (consistent with bin/xmpd-status)
 ANSI_TIDAL = "\033[38;2;115;218;202m"  # #73daca teal
 ANSI_YT = "\033[38;2;247;118;142m"  # #f7768e pink
+ANSI_LOCAL = "\033[38;2;158;206;106m"  # #9ece6a green (local files)
 ANSI_RESET = "\033[0m"
 ANSI_BOLD = "\033[1m"
 ANSI_DIM = "\033[2m"
@@ -399,6 +400,9 @@ def format_track_fzf(track: dict[str, Any]) -> str:
     if provider == "tidal":
         color = ANSI_TIDAL
         tag = "[TD]"
+    elif provider == "local":
+        color = ANSI_LOCAL
+        tag = "[LO]"
     else:
         color = ANSI_YT
         tag = "[YT]"
@@ -621,11 +625,15 @@ def cmd_history_json(args: list[str]) -> None:
         raw_artist = row.get("artist")
         title_missing = (not raw_title) or raw_title == "Unknown Title"
         artist_missing = (not raw_artist) or raw_artist == "Unknown Artist"
+        if provider == "local":
+            id_fallback = os.path.splitext(os.path.basename(track_id))[0] or track_id
+        else:
+            id_fallback = f"({provider}:{track_id})"
         if title_missing and artist_missing:
-            display_title = f"({provider}:{track_id})"
+            display_title = id_fallback
             display_artist = "?"
         else:
-            display_title = raw_title if not title_missing else f"({provider}:{track_id})"
+            display_title = raw_title if not title_missing else id_fallback
             display_artist = raw_artist if not artist_missing else "?"
 
         track = {
@@ -694,15 +702,18 @@ def cmd_history_backfill(args: list[str]) -> None:
     skipped = result.get("skipped", 0)
     orphans = result.get("orphans", 0)
     failed_decode_skipped = result.get("skipped_failed_decode", 0)
+    placeholder_skipped = result.get("skipped_placeholder", 0)
     if dry_run:
         print(
             f"would-insert={inserted} would-skip={skipped}"
             f" orphans={orphans} failed_decode_skipped={failed_decode_skipped}"
+            f" placeholder_skipped={placeholder_skipped}"
         )
     else:
         print(
             f"inserted={inserted} skipped={skipped}"
             f" orphans={orphans} failed_decode_skipped={failed_decode_skipped}"
+            f" placeholder_skipped={placeholder_skipped}"
         )
 
 

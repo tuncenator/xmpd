@@ -1374,6 +1374,7 @@ class XMPDaemon:
                 self.track_store,
                 log_path,
                 dry_run=dry_run,
+                mpd_socket_path=self.config.get("mpd_socket_path"),
             )
         except Exception as exc:
             logger.error("history-backfill failed: %s", exc, exc_info=True)
@@ -1389,11 +1390,12 @@ class XMPDaemon:
 
         logger.info(
             "history-backfill: inserted=%d skipped=%d orphans=%d"
-            " skipped_failed_decode=%d dry_run=%s log=%s",
+            " skipped_failed_decode=%d skipped_placeholder=%d dry_run=%s log=%s",
             result["inserted"],
             result["skipped"],
             result["orphans"],
             result["skipped_failed_decode"],
+            result["skipped_placeholder"],
             dry_run,
             log_path,
         )
@@ -1403,6 +1405,7 @@ class XMPDaemon:
             "skipped": result["skipped"],
             "orphans": result["orphans"],
             "skipped_failed_decode": result["skipped_failed_decode"],
+            "skipped_placeholder": result["skipped_placeholder"],
             "dry_run": dry_run,
             "log_path": log_path,
         }

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from mpd import MPDClient as MPDClientBase
 
 from xmpd.exceptions import MPDConnectionError
+from xmpd.history_backfill import _is_blocklisted_track, _is_placeholder_stub
 from xmpd.history_store import HistoryStore
 from xmpd.providers.base import Provider
 from xmpd.track_store import TrackStore
@@ -73,6 +74,10 @@ class HistoryReporter:
 
         # Playback tracking state
         self._current_track_url: str | None = None
+        self._current_track_title: str | None = None
+        self._current_track_artist: str | None = None
+        self._current_track_album: str | None = None
+        self._current_track_duration: int | None = None
         self._current_track_start: float | None = None
         self._accumulated_play: float = 0.0
         self._pause_start: float | None = None
@@ -154,12 +159,12 @@ class HistoryReporter:
         assert self._mpd is not None
         status = self._mpd.status()
         state = status.get("state", "stop")
-        song = self._mpd.currentsong()
-        file_url = song.get("file") if song else None
+        song = self._mpd.currentsong() or {}
+        file_url = song.get("file")
 
         self._last_state = state
         if state == "play" and file_url:
-            self._current_track_url = file_url
+            self._stash_track_from_song(file_url, song)
             self._current_track_start = time.monotonic()
             self._accumulated_play = 0.0
             self._pause_start = None
@@ -171,8 +176,8 @@ class HistoryReporter:
         assert self._mpd is not None
         status = self._mpd.status()
         new_state = status.get("state", "stop")
-        song = self._mpd.currentsong()
-        new_url = song.get("file") if song else None
+        song = self._mpd.currentsong() or {}
+        new_url = song.get("file")
 
         prev_state = self._last_state
         prev_url = self._current_track_url
@@ -200,7 +205,7 @@ class HistoryReporter:
 
         # ---- start tracking new track if playing ----
         if new_state == "play" and new_url:
-            self._current_track_url = new_url
+            self._stash_track_from_song(new_url, song)
             self._current_track_start = time.monotonic()
             self._accumulated_play = 0.0
             self._pause_start = None
@@ -228,61 +233,111 @@ class HistoryReporter:
 
     def _reset_tracking(self) -> None:
         self._current_track_url = None
+        self._current_track_title = None
+        self._current_track_artist = None
+        self._current_track_album = None
+        self._current_track_duration = None
         self._current_track_start = None
         self._accumulated_play = 0.0
         self._pause_start = None
+
+    def _stash_track_from_song(self, url: str, song: dict[str, Any]) -> None:
+        """Record url + tag snapshot for the now-playing track.
+
+        Tags are read from MPD's currentsong() so local plays can write
+        history without a TrackStore entry.
+        """
+        self._current_track_url = url
+        self._current_track_title = song.get("title") or None
+        self._current_track_artist = song.get("artist") or None
+        self._current_track_album = song.get("album") or None
+        time_raw = song.get("time")
+        try:
+            self._current_track_duration = int(time_raw) if time_raw else None
+        except (TypeError, ValueError):
+            self._current_track_duration = None
 
     # ------------------------------------------------------------------
     # Reporting
     # ------------------------------------------------------------------
 
     def _report_track(self, url: str, duration_seconds: int) -> None:
-        """Look up *url*, dispatch via the provider registry, write history."""
+        """Look up *url*, dispatch via the provider registry, write history.
+
+        Three URL shapes are handled:
+        - xmpd proxy (``/proxy/<provider>/<track_id>``): provider report + history write.
+        - bare path (no ``://``): treated as a local MPD file; provider="local",
+          metadata pulled from the cached currentsong tags.
+        - other URL with ``://`` (internet radio, ad-hoc HTTP stream): ignored.
+        """
         if not url:
             return
         match = PROXY_URL_RE.search(url)
-        if match is None:
-            logger.debug("Track URL not from xmpd proxy; skipping report: %s", url)
-            return
-        provider_name, track_id = match.groups()
-        provider = self._provider_registry.get(provider_name)
-        if provider is None:
-            logger.warning(
-                "Provider %s not in registry; skipping report for %s",
-                provider_name,
-                track_id,
-            )
-            return
-
-        # ---- existing provider report (UNCHANGED) ----
-        try:
-            ok = provider.report_play(track_id, duration_seconds)
-            if ok:
-                logger.info(
-                    "Reported play for %s/%s (%ds)",
-                    provider_name,
-                    track_id,
-                    duration_seconds,
-                )
-            else:
+        if match is not None:
+            provider_name, track_id = match.groups()
+            provider = self._provider_registry.get(provider_name)
+            if provider is None:
                 logger.warning(
-                    "Provider %s.report_play returned False for %s",
+                    "Provider %s not in registry; skipping report for %s",
                     provider_name,
                     track_id,
                 )
-        except Exception as e:
-            logger.warning(
-                "report_play failed for %s/%s: %s",
+                return
+
+            try:
+                ok = provider.report_play(track_id, duration_seconds)
+                if ok:
+                    logger.info(
+                        "Reported play for %s/%s (%ds)",
+                        provider_name,
+                        track_id,
+                        duration_seconds,
+                    )
+                else:
+                    logger.warning(
+                        "Provider %s.report_play returned False for %s",
+                        provider_name,
+                        track_id,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "report_play failed for %s/%s: %s",
+                    provider_name,
+                    track_id,
+                    e,
+                )
+
+            track = self._track_store.get_track(provider_name, track_id)
+        else:
+            if "://" in url:
+                logger.debug("Track URL not from xmpd proxy; skipping report: %s", url)
+                return
+            provider_name = "local"
+            track_id = url
+            track = {
+                "title": self._current_track_title,
+                "artist": self._current_track_artist,
+                "album": self._current_track_album,
+                "duration_seconds": self._current_track_duration,
+                "art_url": None,
+            }
+
+        # Drop blocklisted IDs and placeholder-stub tracks (e.g., legacy
+        # testvideoid / tidal 99999999 left over in track_mapping.db). These
+        # are never real plays. provider.report_play has already fired above
+        # so we only short-circuit the history write here.
+        if _is_blocklisted_track(provider_name, track_id) or _is_placeholder_stub(track):
+            logger.info(
+                "history-write skipped %s/%s (placeholder/blocklisted)",
                 provider_name,
                 track_id,
-                e,
             )
+            return
 
-        # ---- NEW: history write + bidir submit ----
+        # ---- history write + bidir submit ----
         if self._history_store is None or self._history_syncer is None or self._executor is None:
             return
         try:
-            track = self._track_store.get_track(provider_name, track_id)
             played_at = datetime.now(UTC).astimezone().isoformat()
             quality = self._resolve_quality(provider_name, track)
             self._history_store.add_play(
