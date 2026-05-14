@@ -823,7 +823,17 @@ def cmd_radio(
 
                 print(colorize(f"{check} Radio playlist loaded and playing!", "green"))
             except subprocess.CalledProcessError as e:
-                print(colorize(f"✗ Failed to apply radio playlist: {e}", "red"), file=sys.stderr)
+                stderr_text = (e.stderr or b"").decode("utf-8", errors="replace").strip()
+                stdout_text = (e.stdout or b"").decode("utf-8", errors="replace").strip()
+                cmd_text = " ".join(str(c) for c in e.cmd)
+                cross = "✗" if has_unicode_support() else "ERROR"
+                msg = f"{cross} Failed to apply radio playlist (exit {e.returncode})"
+                print(colorize(msg, "red"), file=sys.stderr)
+                print(colorize(f"  command: {cmd_text}", "red"), file=sys.stderr)
+                if stderr_text:
+                    print(colorize(f"  stderr: {stderr_text}", "red"), file=sys.stderr)
+                if stdout_text:
+                    print(colorize(f"  stdout: {stdout_text}", "red"), file=sys.stderr)
                 sys.exit(1)
         else:
             print()

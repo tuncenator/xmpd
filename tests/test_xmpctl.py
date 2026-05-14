@@ -7,6 +7,8 @@ Full integration tests are in Phase 8.
 import subprocess
 from pathlib import Path
 
+import pytest
+
 XMPCTL = Path(__file__).parent.parent / "bin" / "xmpctl"
 
 
@@ -205,3 +207,76 @@ class TestXmpctlRadioEmptyArgs:
         # Should fail because daemon is not reachable in unit test, not because of arg parsing.
         # The error must not mention --track-id argument validation.
         assert "--track-id was given but resolved to an empty value" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Radio --apply error reporting (Finding 2, Manual Review Round 5)
+# ---------------------------------------------------------------------------
+
+
+class TestXmpctlRadioApplyErrorReporting:
+    """cmd_radio --apply must surface mpc stderr/stdout on CalledProcessError.
+
+    Loads bin/xmpctl as a Python module via SourceFileLoader (no .py extension)
+    and stubs send_command + subprocess.run to exercise the error path.
+    """
+
+    @staticmethod
+    def _load_xmpctl_module():
+        """Load bin/xmpctl as an importable module."""
+        import importlib.machinery
+        import importlib.util
+        import sys
+
+        xmpctl_path = str(Path(__file__).parent.parent / "bin" / "xmpctl")
+        loader = importlib.machinery.SourceFileLoader("xmpctl_radio_test", xmpctl_path)
+        spec = importlib.util.spec_from_loader("xmpctl_radio_test", loader)
+        assert spec is not None
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["xmpctl_radio_test"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        return mod
+
+    def test_apply_failure_surfaces_mpc_stderr_and_command(self, capsys, tmp_path):
+        """CalledProcessError handler prints command, stderr, and stdout."""
+        from unittest.mock import patch
+
+        mod = self._load_xmpctl_module()
+
+        radio_response = {
+            "success": True,
+            "tracks": 10,
+            "playlist": "TD: Radio",
+        }
+
+        config_yaml = tmp_path / ".config" / "xmpd" / "config.yaml"
+        config_yaml.parent.mkdir(parents=True)
+        config_yaml.write_text("mpd_socket_path: /run/mpd/socket\n")
+
+        mpc_error = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["mpc", "-h", "/run/mpd/socket", "load", "_xmpd/TD: Radio.xspf"],
+            output=b"some stdout context",
+            stderr=b"error: No such playlist",
+        )
+
+        def fake_run(cmd, **kwargs):
+            # "clear" succeeds; "load" raises
+            if "load" in cmd:
+                raise mpc_error
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        with (
+            patch.object(mod, "send_command", return_value=radio_response),
+            patch("subprocess.run", side_effect=fake_run),
+            patch.object(mod.Path, "home", return_value=tmp_path),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            mod.cmd_radio(apply=True, provider="tidal", track_id="12345")
+
+        captured = capsys.readouterr()
+        assert "command:" in captured.err
+        assert "load" in captured.err
+        assert "stderr: error: No such playlist" in captured.err
+        assert "stdout: some stdout context" in captured.err
+        assert "exit 1" in captured.err
