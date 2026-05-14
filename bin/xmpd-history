@@ -6,7 +6,7 @@
 #
 # Keybindings:
 #   enter      Play selected track (closes history)
-#   ctrl-q     Queue selected track (stays open)
+#   ctrl-e     Queue selected track (stays open)
 #   ctrl-r     Start radio from selected track (closes history)
 #   ctrl-l     Toggle like/unlike for selected track (stays open)
 #   ctrl-t     Toggle time/count mode
@@ -63,7 +63,7 @@ RELOAD_CMD="${XMPCTL} history-json --mode \$(cat ${MODE_FILE}) --since 30d --for
 TOGGLE_TRANSFORM="execute-silent(if [[ \$(cat ${MODE_FILE}) == 'time' ]]; then echo count > ${MODE_FILE}; else echo time > ${MODE_FILE}; fi)+reload(${RELOAD_CMD})"
 
 # Header legend
-HEADER="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube ${DIM}| enter=play  ctrl-q=queue  ctrl-r=radio  ctrl-l=like  tab=select  ctrl-a=queue-all  ctrl-p=play-all  ctrl-t=mode  esc=back${RESET}"
+HEADER="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube ${DIM}| enter=play  ctrl-e=queue  ctrl-r=radio  ctrl-l=like  tab=select  ctrl-a=queue-all  ctrl-p=play-all  ctrl-t=mode  esc=back${RESET}"
 
 # Launch fzf
 FZF_OUTPUT=$(
@@ -74,7 +74,7 @@ FZF_OUTPUT=$(
         --tabstop=8 \
         --bind "start:reload(${RELOAD_CMD})" \
         --bind "ctrl-t:${TOGGLE_TRANSFORM}" \
-        --bind "ctrl-q:execute-silent([ -n {2} ] && ${XMPCTL} queue {1} {2})" \
+        --bind "ctrl-e:execute-silent([ -n {2} ] && ${XMPCTL} queue {1} {2})" \
         --bind "ctrl-r:execute-silent([ -n {2} ] && ${XMPCTL} radio --provider {1} --track-id {2} --apply)+abort" \
         --bind "ctrl-l:execute-silent([ -n {2} ] && ${XMPCTL} like-toggle {1} {2})" \
         --bind "tab:toggle" \

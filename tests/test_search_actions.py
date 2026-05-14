@@ -353,9 +353,9 @@ class TestXmpdSearchScript:
         assert "enter:" in content
         assert "play" in content
 
-    def test_script_has_ctrl_q_queue_binding(self):
+    def test_script_has_ctrl_e_queue_binding(self):
         content = XMPD_SEARCH.read_text()
-        assert "ctrl-q:" in content
+        assert "ctrl-e:" in content
         assert "queue" in content
 
     def test_script_has_ctrl_r_radio_binding(self):
@@ -387,7 +387,7 @@ class TestXmpdSearchScript:
         content = XMPD_SEARCH.read_text()
         # Header should mention key actions
         assert "enter" in content
-        assert "ctrl-q" in content
+        assert "ctrl-e" in content
         assert "ctrl-r" in content
 
     def test_script_radio_uses_provider_and_track_id_flags(self):
