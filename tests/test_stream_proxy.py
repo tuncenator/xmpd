@@ -11,6 +11,7 @@ from xmpd.proxy_url import build_proxy_url
 from xmpd.stream_proxy import (
     StreamRedirectProxy,
     _is_dash_manifest,
+    _patch_flac_streaminfo_total_samples,
     resolve_stream_cache_hours,
 )
 from xmpd.track_store import TrackStore
@@ -1293,3 +1294,152 @@ async def test_route_tidal_dash_ffmpeg_receives_map_flag(track_store, tidal_prov
     assert "-map" in ffmpeg_args
     map_idx = list(ffmpeg_args).index("-map")
     assert ffmpeg_args[map_idx + 1] == "0:a:1"
+
+
+# ---------------------------------------------------------------------------
+# 24. FLAC STREAMINFO.total_samples patcher
+# ---------------------------------------------------------------------------
+
+
+def _make_streaminfo_header(
+    sample_rate: int = 44100,
+    channels: int = 2,
+    bits_per_sample: int = 16,
+    total_samples: int = 0,
+    trailing: bytes = b"",
+) -> bytes:
+    """Build a minimal FLAC STREAMINFO header for patcher tests.
+
+    Layout: 'fLaC' magic + 1-byte block header (last=0, type=0=STREAMINFO)
+    + 3-byte body length (34) + 34-byte body. Body packs sample_rate (20),
+    channels-1 (3), bps-1 (5), total_samples (36) across bytes 10-17. The
+    remaining fields (block sizes, frame sizes, MD5) are left zero.
+    """
+    body = bytearray(34)
+    body[10] = (sample_rate >> 12) & 0xFF
+    body[11] = (sample_rate >> 4) & 0xFF
+    body[12] = ((sample_rate & 0x0F) << 4) | (((channels - 1) & 0x07) << 1) | (
+        ((bits_per_sample - 1) >> 4) & 0x01
+    )
+    body[13] = (((bits_per_sample - 1) & 0x0F) << 4) | ((total_samples >> 32) & 0x0F)
+    body[14] = (total_samples >> 24) & 0xFF
+    body[15] = (total_samples >> 16) & 0xFF
+    body[16] = (total_samples >> 8) & 0xFF
+    body[17] = total_samples & 0xFF
+    return b"fLaC" + b"\x00" + b"\x00\x00\x22" + bytes(body) + trailing
+
+
+def _read_total_samples(header: bytes) -> int:
+    """Decode total_samples from a STREAMINFO header for assertions."""
+    body = header[8:42]
+    return (
+        ((body[13] & 0x0F) << 32)
+        | (body[14] << 24)
+        | (body[15] << 16)
+        | (body[16] << 8)
+        | body[17]
+    )
+
+
+def test_patch_streaminfo_writes_total_samples_for_44100():
+    header = _make_streaminfo_header(sample_rate=44100, trailing=b"AUDIO")
+    out = _patch_flac_streaminfo_total_samples(header, duration_seconds=180)
+    assert _read_total_samples(out) == 180 * 44100
+    # Trailing audio payload is preserved untouched.
+    assert out[42:] == b"AUDIO"
+    # bits_per_sample (16) low 4 bits = 0xF; must be preserved in body[13] high nibble.
+    assert out[8 + 13] & 0xF0 == 0xF0
+
+
+def test_patch_streaminfo_uses_actual_sample_rate_for_48000():
+    header = _make_streaminfo_header(sample_rate=48000)
+    out = _patch_flac_streaminfo_total_samples(header, duration_seconds=200)
+    assert _read_total_samples(out) == 200 * 48000
+
+
+def test_patch_streaminfo_noop_when_duration_none():
+    header = _make_streaminfo_header(sample_rate=44100, total_samples=0)
+    out = _patch_flac_streaminfo_total_samples(header, duration_seconds=None)
+    assert out == header
+
+
+def test_patch_streaminfo_noop_when_duration_zero_or_negative():
+    header = _make_streaminfo_header(sample_rate=44100, total_samples=42)
+    assert _patch_flac_streaminfo_total_samples(header, 0) == header
+    assert _patch_flac_streaminfo_total_samples(header, -5) == header
+
+
+def test_patch_streaminfo_noop_on_non_flac_header():
+    # The legacy DASH tests feed a fake header (no real STREAMINFO); the
+    # patcher must leave such inputs alone or the existing tests would break.
+    fake = b"fLaC" + b"\x00" * 4096
+    assert _patch_flac_streaminfo_total_samples(fake, 180) == fake
+    assert _patch_flac_streaminfo_total_samples(b"NOTFLAC", 180) == b"NOTFLAC"
+
+
+def test_patch_streaminfo_preserves_bits_per_sample_low_nibble():
+    # bps=24 -> stored as 23 -> low 4 bits = 0x7. The patcher writes
+    # total_samples high-nibble into body[13] low nibble; the high nibble
+    # (bps tail) must survive.
+    header = _make_streaminfo_header(sample_rate=44100, bits_per_sample=24)
+    bps_tail_before = header[8 + 13] & 0xF0
+    out = _patch_flac_streaminfo_total_samples(header, duration_seconds=10)
+    assert out[8 + 13] & 0xF0 == bps_tail_before
+    assert _read_total_samples(out) == 10 * 44100
+
+
+def test_patch_streaminfo_clamps_to_36_bit_max():
+    header = _make_streaminfo_header(sample_rate=44100)
+    out = _patch_flac_streaminfo_total_samples(
+        header, duration_seconds=10**9  # absurd; would overflow 36 bits
+    )
+    assert _read_total_samples(out) == (1 << 36) - 1
+
+
+# ---------------------------------------------------------------------------
+# 25. DASH path injects total_samples from track_store duration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_route_tidal_dash_patches_first_chunk_with_track_duration(
+    track_store, tidal_provider_mock
+):
+    """First chunk written to MPD must have STREAMINFO.total_samples set
+    from the track's duration_seconds, so the client can compute length."""
+    track_store.add_track(
+        "tidal",
+        "12345678",
+        stream_url="https://im-fa.manifest.tidal.com/abc.mpd?token=xyz",
+        title="Track",
+        artist="Artist",
+        duration_seconds=200,
+    )
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"tidal": tidal_provider_mock},
+        stream_cache_hours={"tidal": 5},
+    )
+
+    first_chunk = _make_streaminfo_header(sample_rate=44100, trailing=b"PAYLOAD")
+    fake_proc = Mock()
+    fake_proc.returncode = 0
+    fake_proc.stdout = AsyncMock()
+    fake_proc.stdout.read = AsyncMock(side_effect=[first_chunk, b""])
+    fake_proc.stderr = AsyncMock()
+    fake_proc.stderr.read = AsyncMock(return_value=b"")
+    fake_proc.wait = AsyncMock(return_value=0)
+    fake_proc.kill = Mock()
+
+    with patch(
+        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=fake_proc),
+    ):
+        async with TestClient(TestServer(proxy.app)) as client:
+            resp = await client.get("/proxy/tidal/12345678", allow_redirects=False)
+            assert resp.status == 200
+            body = await resp.read()
+
+    # Body must start with the patched header and preserve the trailing payload.
+    assert body.endswith(b"PAYLOAD")
+    assert _read_total_samples(body[: len(first_chunk)]) == 200 * 44100

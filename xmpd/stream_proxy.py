@@ -54,6 +54,51 @@ TRACK_ID_PATTERNS: dict[str, re.Pattern[str]] = {
 }
 
 
+def _patch_flac_streaminfo_total_samples(
+    header: bytes, duration_seconds: float | int | None
+) -> bytes:
+    """Overwrite STREAMINFO.total_samples in a FLAC stream header.
+
+    ffmpeg's FLAC encoder writes STREAMINFO with total_samples=0 when emitting
+    to a pipe (it can't seek back to patch the field at EOF), which leaves MPD
+    unable to compute track duration and makes `mpc status` show 0:00. Since
+    xmpd already knows the provider-reported duration, we patch the field on
+    the fly: parse sample_rate out of the actual header (don't assume 44.1k),
+    compute total_samples = duration_seconds * sample_rate, and rewrite the
+    36-bit field at body bits 108-143.
+
+    Returns ``header`` unchanged when duration is missing, the bytes don't
+    look like a STREAMINFO header, or the sample rate is zero -- the caller
+    can pass the first ffmpeg chunk in blindly.
+    """
+    if duration_seconds is None or duration_seconds <= 0:
+        return header
+    if len(header) < 42 or header[0:4] != b"fLaC":
+        return header
+    if (header[4] & 0x7F) != 0:  # first metadata block must be STREAMINFO
+        return header
+    if int.from_bytes(header[5:8], "big") != 34:
+        return header
+
+    body = bytearray(header[8:42])
+    sample_rate = (body[10] << 12) | (body[11] << 4) | (body[12] >> 4)
+    if sample_rate == 0:
+        return header
+
+    total_samples = min(round(duration_seconds * sample_rate), (1 << 36) - 1)
+    if total_samples <= 0:
+        return header
+
+    bps_high_nibble = body[13] & 0xF0  # preserve low 4 bits of bits_per_sample
+    body[13] = bps_high_nibble | ((total_samples >> 32) & 0x0F)
+    body[14] = (total_samples >> 24) & 0xFF
+    body[15] = (total_samples >> 16) & 0xFF
+    body[16] = (total_samples >> 8) & 0xFF
+    body[17] = total_samples & 0xFF
+
+    return header[:8] + bytes(body) + header[42:]
+
+
 def _is_dash_manifest(url: str) -> bool:
     """Return True if ``url`` looks like a DASH MPD manifest.
 
@@ -134,12 +179,17 @@ async def _stream_dash_via_ffmpeg(
     provider: str,
     track_id: str,
     stream_index: int = 0,
+    duration_seconds: float | int | None = None,
 ) -> web.StreamResponse:
     """Pipe ffmpeg's FLAC remux of a DASH manifest back to the client.
 
     ``stream_index`` selects which audio adaptation set to map. Pass the value
     returned by ``_probe_best_audio_stream`` to get the highest-quality stream.
     Defaults to 0 (safe fallback when probing is skipped).
+
+    ``duration_seconds`` is patched into the FLAC STREAMINFO.total_samples
+    field on the first chunk so MPD can show a real track length instead of
+    0:00. When None, the field is left at whatever ffmpeg wrote (zero).
 
     Reads the first chunk *before* committing HTTP 200 so that a failed
     ffmpeg (network down, expired manifest) raises DashStreamError instead
@@ -193,6 +243,8 @@ async def _stream_dash_via_ffmpeg(
             f"ffmpeg produced no data for {provider}/{track_id}: "
             f"{stderr_bytes.decode(errors='replace')[:300]}"
         )
+
+    first_chunk = _patch_flac_streaminfo_total_samples(first_chunk, duration_seconds)
 
     response = web.StreamResponse(
         status=200, headers={"Content-Type": "audio/flac"}
@@ -527,12 +579,14 @@ class StreamRedirectProxy:
             )
 
         # Resolution phase: acquire semaphore, resolve URL, release semaphore.
-        stream_url = await self._resolve_stream_url(provider, track_id, req_id)
+        stream_url, duration_seconds = await self._resolve_stream_url(
+            provider, track_id, req_id
+        )
 
         # Streaming phase: runs outside the semaphore.
         if _is_dash_manifest(stream_url):
             return await self._stream_dash_with_retry(
-                request, stream_url, provider, track_id, req_id
+                request, stream_url, provider, track_id, req_id, duration_seconds
             )
 
         logger.debug(
@@ -548,6 +602,7 @@ class StreamRedirectProxy:
         provider: str,
         track_id: str,
         req_id: str,
+        duration_seconds: float | int | None = None,
     ) -> web.StreamResponse:
         """Try DASH streaming with retries on ffmpeg failure.
 
@@ -566,7 +621,8 @@ class StreamRedirectProxy:
             await self._increment_counter("_active_streams")
             try:
                 return await _stream_dash_via_ffmpeg(
-                    request, stream_url, provider, track_id, stream_index
+                    request, stream_url, provider, track_id, stream_index,
+                    duration_seconds,
                 )
             except DashStreamError as e:
                 last_err = e
@@ -617,10 +673,11 @@ class StreamRedirectProxy:
 
     async def _resolve_stream_url(
         self, provider: str, track_id: str, req_id: str
-    ) -> str:
+    ) -> tuple[str, int | None]:
         """Look up track and resolve/refresh its stream URL under the semaphore.
 
-        Returns the validated stream URL string. Raises appropriate
+        Returns ``(stream_url, duration_seconds)`` where duration may be None
+        when the track row has no recorded duration. Raises appropriate
         HTTPException on any failure.
         """
         async with self._resolution_semaphore:
@@ -642,7 +699,7 @@ class StreamRedirectProxy:
 
     async def _do_resolve(
         self, provider: str, track_id: str, req_id: str
-    ) -> str:
+    ) -> tuple[str, int | None]:
         """Core resolution logic: track lookup, TTL check, URL refresh.
 
         Separated from _resolve_stream_url for testability and clarity.
@@ -655,6 +712,7 @@ class StreamRedirectProxy:
 
         stream_url: str | None = track["stream_url"]
         updated_at: float = track["updated_at"]
+        duration_seconds: int | None = track.get("duration_seconds")
         ttl = self._get_ttl_hours(provider)
 
         # Refresh decision: None URL or expired URL
@@ -706,7 +764,7 @@ class StreamRedirectProxy:
                 text=f"Invalid stream URL format for {provider}/{track_id}"
             )
 
-        return stream_url
+        return stream_url, duration_seconds
 
     async def __aenter__(self) -> "StreamRedirectProxy":
         """Async context manager entry."""
