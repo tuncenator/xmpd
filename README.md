@@ -89,6 +89,13 @@ Check current state without making changes:
 ./install.sh --check
 ```
 
+### After pulling new changes
+
+Re-run `./install.sh` after `git pull` to pick up new binaries and
+dependencies. The script is idempotent and only touches what changed. Recent
+additions include `xmpd-history` (fzf history browser) and `xmpd-doctor`
+(healthcheck), which need symlinks created by `install.sh`.
+
 ## Authentication
 
 ### YouTube Music
@@ -173,6 +180,80 @@ mpc lsplaylists | grep -E '^(YT|TD):'
 | `like_indicator` | `enabled` | `false` | Tag liked tracks in playlists. |
 
 Full reference with comments: [`examples/config.yaml`](examples/config.yaml).
+
+## Setup: secure WATCHTOWER auth (recommended)
+
+The `xmpd-history` bidir sync connects to WATCHTOWER over SSH. When xmpd runs
+as a systemd user service, the environment lacks `SSH_AUTH_SOCK`, so
+passphrase-protected keys fail silently (`Permission denied (publickey)` plus
+`Error: Can't open display:` from SSH_ASKPASS). Even if that's resolved, using
+a personal SSH key gives the daemon shell-level access on WATCHTOWER, which is
+excessive for a service that should only invoke `xmpd-history-receiver`.
+
+The recommended setup uses a dedicated passphraseless key locked down to
+receiver subcommands only.
+
+### 1. Generate a dedicated key (on each client host)
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/xmpd-history -N "" -C "xmpd-history service key"
+```
+
+### 2. Add an SSH alias (on each client host)
+
+In `~/.ssh/config` (use your actual WATCHTOWER hostname/user/port):
+
+```
+Host WATCHTOWER_XMPD
+    hostname <WATCHTOWER hostname or IP>
+    user <user>
+    IdentityFile ~/.ssh/xmpd-history
+    IdentitiesOnly yes
+```
+
+### 3. Install the restricted command wrapper (on WATCHTOWER)
+
+Copy `scripts/xmpd-history-receiver-restricted` from this repo to
+`~/bin/xmpd-history-receiver-restricted` on WATCHTOWER:
+
+```bash
+scp scripts/xmpd-history-receiver-restricted WATCHTOWER:~/bin/
+ssh WATCHTOWER chmod 755 ~/bin/xmpd-history-receiver-restricted
+```
+
+The wrapper inspects `SSH_ORIGINAL_COMMAND` and allows only `bidir`, `doctor`,
+and `version` subcommands. Everything else is rejected.
+
+### 4. Authorize the key (on WATCHTOWER)
+
+Append to `~/.ssh/authorized_keys`:
+
+```
+command="/home/<user>/bin/xmpd-history-receiver-restricted",restrict <contents of ~/.ssh/xmpd-history.pub> xmpd-history service
+```
+
+Replace `<user>` with the actual WATCHTOWER username.
+
+`restrict` is OpenSSH shorthand for
+`no-pty,no-X11-forwarding,no-agent-forwarding,no-port-forwarding,no-user-rc`
+(plus future-safe defaults). Combined with the `command=` override, the key is
+limited to exactly the receiver subcommands.
+
+### 5. Point xmpd at the new alias (on each client host)
+
+In `~/.config/xmpd/config.yaml`:
+
+```yaml
+history:
+  enabled: true
+  watchtower:
+    ssh_target: WATCHTOWER_XMPD
+```
+
+The default `ssh_target` is `WATCHTOWER`, which uses whatever your SSH config
+maps that alias to. For multi-host production use, switching to a dedicated
+alias (`WATCHTOWER_XMPD` or similar) with a restricted key is strongly
+recommended.
 
 ## Cross-provider behavior
 

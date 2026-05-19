@@ -64,3 +64,6 @@ oauth.json
 
 # Spark agent framework local settings
 .claude/settings.local.json
+
+# Spark phase worktrees (created by /spark-conductor)
+.worktrees/

@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.5] - 2026-05-14
+
+### Fixed
+
+- `extras/airplay-bridge` installs a second drop-in (`~/.config/pipewire/pipewire-pulse.conf.d/30-mpd-bridge-pin.conf`) that sets `node.dont-move=true` on every MPD pulse stream. The 2.1.4 fix only isolated WirePlumber's state-stream restore slot; the visible `node.media.role` stayed `"Music"`, so any pavucontrol / wpctl move wrote `target.object` overrides into the default metadata for the bridge stream's node.id and dragged it onto whichever sink the local stream was parked on (first HDMI, then Bluetooth). With `node.dont-move=true`, WirePlumber's `find-defined-target.lua` skips its metadata-override branch and the bridge's `target.object="owntone-bridge"` hint stays authoritative. The local `PulseAudio` output is also covered (the rule keys on `application.name="Music Player Daemon"`, which pulse.rules can only match at the client level), but its routing remained driven by the default sink anyway via `speaker-rofi`/`speaker` and `linking.follow-default-target`, so pavucontrol-move was never the move path. The 2.1.4 WirePlumber drop-in stays in place as defense-in-depth for per-stream volume/mute state.
+
 ## [2.1.4] - 2026-05-12
 
 ### Fixed

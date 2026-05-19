@@ -8,11 +8,14 @@ rating dispatch, and an HTTP stream-redirect proxy.
 import asyncio
 import json
 import logging
+import os
 import re
 import signal
 import socket
+import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +23,8 @@ from typing import Any
 from xmpd.config import get_config_dir, load_config
 from xmpd.exceptions import MPDConnectionError
 from xmpd.history_reporter import HistoryReporter
+from xmpd.history_store import HistoryStore
+from xmpd.history_syncer import HistorySyncer
 from xmpd.mpd_client import MPDClient
 from xmpd.providers import build_registry
 from xmpd.providers.base import Provider
@@ -30,6 +35,9 @@ from xmpd.sync_engine import SyncEngine
 from xmpd.track_store import TrackStore
 
 logger = logging.getLogger(__name__)
+
+# Candidate paths for MPD configuration files (used by _autodetect_mpd_log_path).
+_MPDCONF_CANDIDATES = ["~/.mpdconf", "~/.mpd/mpd.conf", "/etc/mpd.conf"]
 
 
 def _build_yt_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -127,7 +135,9 @@ class XMPDaemon:
                 else:
                     logger.warning(
                         "%s not configured (%s); run 'xmpctl auth %s'",
-                        name, err or "no credentials", name,
+                        name,
+                        err or "no credentials",
+                        name,
                     )
                 # Keep all providers in registry for provider-status reporting;
                 # downstream consumers (sync, proxy, history) guard with
@@ -204,22 +214,52 @@ class XMPDaemon:
         self._liked_ids_cache_time: float = 0.0
         self._liked_ids_cache_ttl: float = 300.0  # 5 minutes
 
-        # History reporting
+        # History store / syncer / executor (new in xmpd-history feature)
+        self.history_store: HistoryStore | None = None
+        self.history_syncer: HistorySyncer | None = None
+        self._history_executor: ThreadPoolExecutor | None = None
+        history_cfg = self.config.get("history", {})
+        if history_cfg.get("enabled", False) and self.track_store is not None:
+            self.history_store = HistoryStore(history_cfg["db_path"])
+            watchtower_cfg = history_cfg["watchtower"]
+            self.history_syncer = HistorySyncer(
+                history_store=self.history_store,
+                ssh_target=watchtower_cfg["ssh_target"],
+                tailscale_hostname=watchtower_cfg["tailscale_hostname"],
+                bidir_batch=watchtower_cfg["bidir_batch"],
+                pull_batch=watchtower_cfg["pull_batch"],
+            )
+            self._history_executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="hist-sync",
+            )
+            logger.info(
+                "History store enabled: db=%s, ssh_target=%s",
+                history_cfg["db_path"],
+                watchtower_cfg["ssh_target"],
+            )
+        else:
+            logger.info("History store disabled")
+
+        # History reporting (existing block -- now passes the new collaborators)
         self._history_reporter: HistoryReporter | None = None
         self._history_thread: threading.Thread | None = None
         self._history_shutdown = threading.Event()
-        history_config = self.config.get("history_reporting", {})
-        if history_config.get("enabled", False) and self.track_store is not None:
+        history_reporting_cfg = self.config.get("history_reporting", {})
+        if history_reporting_cfg.get("enabled", False) and self.track_store is not None:
             self._history_reporter = HistoryReporter(
                 mpd_socket_path=self.config["mpd_socket_path"],
                 provider_registry=self.provider_registry,
                 track_store=self.track_store,
                 proxy_config=self.proxy_config or {},
-                min_play_seconds=history_config.get("min_play_seconds", 30),
+                min_play_seconds=history_reporting_cfg.get("min_play_seconds", 30),
+                history_store=self.history_store,
+                history_syncer=self.history_syncer,
+                executor=self._history_executor,
             )
             logger.info(
                 "History reporting enabled (min_play_seconds=%d)",
-                history_config.get("min_play_seconds", 30),
+                history_reporting_cfg.get("min_play_seconds", 30),
             )
         else:
             logger.info("History reporting disabled")
@@ -270,6 +310,13 @@ class XMPDaemon:
             self._history_thread.start()
             logger.info("History reporting thread started")
 
+        # Trigger startup nudge so any rows queued while offline get drained early.
+        if self.history_syncer is not None:
+            try:
+                self.history_syncer.startup_nudge()
+            except Exception as e:
+                logger.warning("history startup_nudge failed: %s", e)
+
         logger.info("xmpd daemon started successfully")
 
         # Perform initial sync immediately
@@ -303,6 +350,14 @@ class XMPDaemon:
 
         logger.info("Stopping xmpd daemon...")
         self._running = False
+
+        # Shut down the history sync executor before joining the reporter thread.
+        if self._history_executor is not None:
+            try:
+                self._history_executor.shutdown(wait=False, cancel_futures=True)
+                logger.info("history sync executor shutdown")
+            except Exception as e:
+                logger.warning("history executor shutdown failed: %s", e)
 
         # Signal history reporter to stop
         if self._history_thread is not None:
@@ -636,6 +691,12 @@ class XMPDaemon:
             elif cmd == "search-json":
                 # search-json [--provider yt|all] [--limit N] QUERY
                 response = self._cmd_search_json(parts[1:])
+            elif cmd == "history-json":
+                # history-json [--mode time|count] [--since ISO|all] [--limit N]
+                response = self._cmd_history_json(parts[1:])
+            elif cmd == "history-backfill":
+                # history-backfill [--log PATH] [--dry-run]
+                response = self._cmd_history_backfill(parts[1:])
             elif cmd == "play":
                 provider, track_id = self._parse_play_queue_args(args)
                 response = self._cmd_play(provider, track_id)
@@ -672,9 +733,7 @@ class XMPDaemon:
         except Exception as e:
             logger.error("Error handling socket connection: %s", e, exc_info=True)
             try:
-                conn.sendall(
-                    (json.dumps({"success": False, "error": str(e)}) + "\n").encode()
-                )
+                conn.sendall((json.dumps({"success": False, "error": str(e)}) + "\n").encode())
             except (BrokenPipeError, ConnectionResetError, Exception):
                 pass
         finally:
@@ -718,7 +777,8 @@ class XMPDaemon:
         return "yt", None
 
     def _extract_provider_and_track(
-        self, url: str,
+        self,
+        url: str,
     ) -> tuple[str | None, str | None]:
         """Extract (provider, track_id) from a proxy URL.
 
@@ -839,7 +899,9 @@ class XMPDaemon:
         return {"success": True, "providers": statuses}
 
     def _cmd_radio(
-        self, provider: str | None, track_id: str | None,
+        self,
+        provider: str | None,
+        track_id: str | None,
     ) -> dict[str, Any]:
         """Handle 'radio' command - generate radio playlist.
 
@@ -868,7 +930,9 @@ class XMPDaemon:
                     return {"success": False, "error": "Current track is not a provider track"}
 
                 logger.info(
-                    "Inferred from current track: provider=%s track_id=%s", provider, track_id,
+                    "Inferred from current track: provider=%s track_id=%s",
+                    provider,
+                    track_id,
                 )
 
             # Default provider to yt for backward compat
@@ -885,7 +949,8 @@ class XMPDaemon:
 
             # Fetch radio tracks via Provider Protocol
             radio_tracks = prov.get_radio(
-                track_id, limit=self.config.get("radio_playlist_limit", 25),
+                track_id,
+                limit=self.config.get("radio_playlist_limit", 25),
             )
             if not radio_tracks:
                 return {"success": False, "error": "No tracks found in radio playlist"}
@@ -894,7 +959,10 @@ class XMPDaemon:
             # Tidal's get_track_radio omits the seed; YT's watch_playlist usually
             # includes it but ordering is not contractual.
             radio_tracks = self._ensure_seed_first(
-                prov, provider, track_id, radio_tracks,
+                prov,
+                provider,
+                track_id,
+                radio_tracks,
             )
 
             logger.info("Fetched %d radio tracks from %s", len(radio_tracks), provider)
@@ -933,7 +1001,8 @@ class XMPDaemon:
 
             # Build liked set for like indicator
             like_indicator = self.config.get(
-                "like_indicator", {"enabled": False, "tag": "+1", "alignment": "right"},
+                "like_indicator",
+                {"enabled": False, "tag": "+1", "alignment": "right"},
             )
             liked_video_ids: set[str] = set()
             if like_indicator.get("enabled", False):
@@ -972,7 +1041,10 @@ class XMPDaemon:
 
     @staticmethod
     def _ensure_seed_first(
-        prov: Provider, provider: str, seed_id: str, tracks: list[Any],
+        prov: Provider,
+        provider: str,
+        seed_id: str,
+        tracks: list[Any],
     ) -> list[Any]:
         """Return ``tracks`` with the seed track at index 0.
 
@@ -984,25 +1056,29 @@ class XMPDaemon:
         from xmpd.providers.base import Track
 
         seed_idx = next(
-            (i for i, t in enumerate(tracks) if t.track_id == seed_id), None,
+            (i for i, t in enumerate(tracks) if t.track_id == seed_id),
+            None,
         )
         if seed_idx == 0:
             return tracks
         if seed_idx is not None:
-            return [tracks[seed_idx], *tracks[:seed_idx], *tracks[seed_idx + 1:]]
+            return [tracks[seed_idx], *tracks[:seed_idx], *tracks[seed_idx + 1 :]]
 
         try:
             meta = prov.get_track_metadata(seed_id)
         except Exception as e:
             logger.warning(
                 "Could not fetch seed metadata for %s/%s: %s",
-                provider, seed_id, e,
+                provider,
+                seed_id,
+                e,
             )
             return tracks
         if meta is None:
             logger.warning(
                 "Seed track %s/%s metadata unavailable; not prepending",
-                provider, seed_id,
+                provider,
+                seed_id,
             )
             return tracks
         return [Track(provider=provider, track_id=seed_id, metadata=meta), *tracks]
@@ -1039,7 +1115,10 @@ class XMPDaemon:
 
     @staticmethod
     def _parse_liked_from_playlist(
-        path: Path, fmt: str, pname: str, liked: set[str],
+        path: Path,
+        fmt: str,
+        pname: str,
+        liked: set[str],
     ) -> None:
         text = path.read_text(encoding="utf-8")
         if fmt == "xspf":
@@ -1064,9 +1143,7 @@ class XMPDaemon:
     def _quality_for_provider(self, provider_name: str) -> str:
         """Return fallback quality label when per-track data is unavailable."""
         if provider_name == "tidal":
-            ceiling = self.config.get("tidal", {}).get(
-                "quality_ceiling", "LOSSLESS"
-            )
+            ceiling = self.config.get("tidal", {}).get("quality_ceiling", "LOSSLESS")
             return self._TIDAL_QUALITY_LABELS.get(ceiling, "HiFi")
         return "Lo"
 
@@ -1105,7 +1182,9 @@ class XMPDaemon:
         query = " ".join(remaining).strip()
         logger.info(
             "search-json command: query=%r, provider=%s, limit=%d",
-            query, provider_filter, limit,
+            query,
+            provider_filter,
+            limit,
         )
 
         if not query:
@@ -1129,7 +1208,8 @@ class XMPDaemon:
                 logger.warning("search-json: auth check failed for %s: %s", pname, e)
 
         def _search_provider(
-            pname: str, prov: Provider,
+            pname: str,
+            prov: Provider,
         ) -> tuple[str, list[tuple[str, str, dict[str, Any]]]]:
             search_results = prov.search(query, limit=limit)
             fallback_quality = self._quality_for_provider(pname)
@@ -1137,23 +1217,23 @@ class XMPDaemon:
             for track in search_results:
                 duration_secs = track.metadata.duration_seconds or 0
                 quality = track.metadata.quality or fallback_quality
-                hits.append((
-                    track.provider,
-                    track.track_id,
-                    {
-                        "provider": track.provider,
-                        "track_id": track.track_id,
-                        "title": track.metadata.title,
-                        "artist": track.metadata.artist or "Unknown Artist",
-                        "album": track.metadata.album or None,
-                        "duration": self._format_duration(duration_secs),
-                        "duration_seconds": duration_secs,
-                        "quality": quality,
-                    },
-                ))
+                hits.append(
+                    (
+                        track.provider,
+                        track.track_id,
+                        {
+                            "provider": track.provider,
+                            "track_id": track.track_id,
+                            "title": track.metadata.title,
+                            "artist": track.metadata.artist or "Unknown Artist",
+                            "album": track.metadata.album or None,
+                            "duration": self._format_duration(duration_secs),
+                            "duration_seconds": duration_secs,
+                            "quality": quality,
+                        },
+                    )
+                )
             return pname, hits
-
-        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         raw_hits: list[tuple[str, str, dict[str, Any]]] = []
         with ThreadPoolExecutor(max_workers=len(auth_targets) + 1) as pool:
@@ -1173,12 +1253,184 @@ class XMPDaemon:
 
         results: list[dict[str, Any]] = []
         for provider, track_id, entry in raw_hits:
-            entry["liked"] = (
-                f"{provider}:{track_id}" in liked_ids if track_id else None
-            )
+            entry["liked"] = f"{provider}:{track_id}" in liked_ids if track_id else None
             results.append(entry)
         logger.info("search-json: returning %d results for %r", len(results), query)
         return {"success": True, "results": results}
+
+    def _cmd_history_json(self, args: list[str]) -> dict[str, Any]:
+        """Handle 'history-json' command - return local history rows.
+
+        Syntax: history-json [--mode time|count] [--since ISO|all] [--limit N]
+
+        Args:
+            args: Remaining command tokens after 'history-json'.
+
+        Returns:
+            Response dict with 'success' and 'rows' (list of row dicts).
+            Each row dict carries the columns in the local plays table
+            plus, in count mode, 'play_count' and 'last_played_at'.
+        """
+        if self.history_store is None:
+            return {"success": False, "error": "history not enabled"}
+
+        mode = "time"
+        since_str = "all"
+        limit = 5000
+        i = 0
+        while i < len(args):
+            if args[i] == "--mode" and i + 1 < len(args):
+                mode = args[i + 1]
+                i += 2
+            elif args[i] == "--since" and i + 1 < len(args):
+                since_str = args[i + 1]
+                i += 2
+            elif args[i] == "--limit" and i + 1 < len(args):
+                try:
+                    limit = int(args[i + 1])
+                except ValueError:
+                    pass
+                i += 2
+            else:
+                i += 1
+
+        if mode not in ("time", "count"):
+            return {"success": False, "error": "mode must be time or count"}
+        assert mode in ("time", "count")  # narrowing for mypy
+
+        since: datetime | None = None
+        if since_str != "all":
+            try:
+                since = datetime.fromisoformat(since_str)
+            except ValueError:
+                return {"success": False, "error": f"invalid since: {since_str}"}
+
+        try:
+            rows = self.history_store.get_plays(
+                mode=mode,  # type: ignore[arg-type]
+                since=since,
+                limit=limit,
+            )
+        except sqlite3.Error as e:
+            logger.exception("history-json: SQLite error")
+            return {"success": False, "error": f"history-json: {e}"}
+
+        logger.info(
+            "history-json: mode=%s since=%s limit=%d -> %d rows",
+            mode,
+            since_str,
+            limit,
+            len(rows),
+        )
+        return {"success": True, "rows": rows}
+
+    def _cmd_history_backfill(self, args: list[str]) -> dict[str, Any]:
+        """Handle 'history-backfill' IPC command.
+
+        Parses ``--log PATH`` and ``--dry-run`` from args, resolves the MPD log
+        path (explicit -> config -> autodetect), calls run_backfill, and if rows
+        were inserted triggers one bidir push.
+
+        Args:
+            args: Remaining command tokens after 'history-backfill'.
+
+        Returns:
+            Response dict with 'success', 'inserted', 'skipped', 'orphans',
+            'dry_run', and 'log_path'; or 'success'=False and 'error' on failure.
+        """
+        from xmpd.history_backfill import run_backfill as _run_backfill
+
+        if not self.history_store:
+            return {"success": False, "error": "history.enabled is false"}
+
+        log_path: str | None = None
+        dry_run = False
+        i = 0
+        while i < len(args):
+            if args[i] == "--log" and i + 1 < len(args):
+                log_path = args[i + 1]
+                i += 2
+            elif args[i] == "--dry-run":
+                dry_run = True
+                i += 1
+            else:
+                i += 1
+
+        # Resolution chain: explicit -> config -> autodetect
+        if not log_path:
+            log_path = (self.config.get("history") or {}).get("mpd_log_path")
+        if not log_path:
+            log_path = self._autodetect_mpd_log_path()
+        if not log_path:
+            return {"success": False, "error": "could not locate MPD log file"}
+
+        log_path = os.path.expanduser(log_path)
+        if not os.path.isfile(log_path):
+            return {"success": False, "error": f"log file not found: {log_path}"}
+
+        try:
+            result = _run_backfill(
+                self.history_store,
+                self.track_store,
+                log_path,
+                dry_run=dry_run,
+                mpd_socket_path=self.config.get("mpd_socket_path"),
+            )
+        except Exception as exc:
+            logger.error("history-backfill failed: %s", exc, exc_info=True)
+            return {"success": False, "error": str(exc)}
+
+        # Trigger one bidir push if anything was inserted and not a dry-run
+        if not dry_run and result["inserted"] > 0 and self.history_syncer is not None:
+            try:
+                if self._history_executor is not None:
+                    self._history_executor.submit(self.history_syncer.bidir_push)
+            except Exception as exc:
+                logger.warning("history-backfill: failed to submit bidir push: %s", exc)
+
+        logger.info(
+            "history-backfill: inserted=%d skipped=%d orphans=%d"
+            " skipped_failed_decode=%d skipped_placeholder=%d dry_run=%s log=%s",
+            result["inserted"],
+            result["skipped"],
+            result["orphans"],
+            result["skipped_failed_decode"],
+            result["skipped_placeholder"],
+            dry_run,
+            log_path,
+        )
+        return {
+            "success": True,
+            "inserted": result["inserted"],
+            "skipped": result["skipped"],
+            "orphans": result["orphans"],
+            "skipped_failed_decode": result["skipped_failed_decode"],
+            "skipped_placeholder": result["skipped_placeholder"],
+            "dry_run": dry_run,
+            "log_path": log_path,
+        }
+
+    def _autodetect_mpd_log_path(self) -> str | None:
+        """Walk candidate mpd.conf paths and extract the log_file directive.
+
+        Returns:
+            Expanded absolute path to the MPD log file, or None if not found.
+        """
+        from xmpd.history_backfill import MPDCONF_LOG_FILE_RE
+
+        for candidate in _MPDCONF_CANDIDATES:
+            conf_path = os.path.expanduser(candidate)
+            if not os.path.isfile(conf_path):
+                continue
+            try:
+                with open(conf_path, encoding="utf-8", errors="replace") as fh:
+                    content = fh.read()
+            except OSError:
+                continue
+            m = MPDCONF_LOG_FILE_RE.search(content)
+            if m:
+                return os.path.expanduser(m.group(1))
+        return None
 
     def _ensure_mpd(self) -> None:
         """Reconnect to MPD if the connection was lost."""
@@ -1307,6 +1559,7 @@ class XMPDaemon:
         try:
             raw_state = prov.get_like_state(track_id)
             from xmpd.rating import RatingState
+
             state_map = {
                 "LIKED": RatingState.LIKED,
                 "DISLIKED": RatingState.DISLIKED,
@@ -1344,6 +1597,7 @@ class XMPDaemon:
         try:
             raw_state = prov.get_like_state(track_id)
             from xmpd.rating import RatingState
+
             state_map = {
                 "LIKED": RatingState.LIKED,
                 "DISLIKED": RatingState.DISLIKED,
@@ -1395,6 +1649,7 @@ class XMPDaemon:
         try:
             raw_state = prov.get_like_state(track_id)
             from xmpd.rating import RatingState
+
             state_map = {
                 "LIKED": RatingState.LIKED,
                 "DISLIKED": RatingState.DISLIKED,
@@ -1408,7 +1663,9 @@ class XMPDaemon:
             self._liked_ids_cache_time = 0.0
             logger.debug(
                 "like-toggle: invalidated favorites cache for %s:%s (new_state=%s)",
-                provider, track_id, transition.new_state.value,
+                provider,
+                track_id,
+                transition.new_state.value,
             )
 
             now_liked = transition.new_state == RatingState.LIKED
@@ -1431,12 +1688,8 @@ class XMPDaemon:
                         music_dir = self.config.get("mpd_music_directory", "~/Music")
                         xspf_dir = Path(music_dir).expanduser() / "_xmpd"
 
-                    prefix_map = self.config.get(
-                        "playlist_prefix", {"yt": "YT: ", "tidal": "TD: "}
-                    )
-                    fav_names_cfg = self.config.get(
-                        "favorites_playlist_name_per_provider", {}
-                    )
+                    prefix_map = self.config.get("playlist_prefix", {"yt": "YT: ", "tidal": "TD: "})
+                    fav_names_cfg = self.config.get("favorites_playlist_name_per_provider", {})
                     fav_names = {**DEFAULT_FAVORITES_NAMES, **fav_names_cfg}
                     favorites_set = set()
                     for prov_name, fav_name in fav_names.items():
@@ -1444,8 +1697,12 @@ class XMPDaemon:
                         favorites_set.add(f"{prov_prefix}{fav_name}")
 
                     patch_playlist_files(
-                        proxy_url, now_liked, playlist_dir, xspf_dir,
-                        like_indicator, favorites_set,
+                        proxy_url,
+                        now_liked,
+                        playlist_dir,
+                        xspf_dir,
+                        like_indicator,
+                        favorites_set,
                     )
 
                     if self.mpd_client and self.mpd_client._client:
@@ -1453,8 +1710,11 @@ class XMPDaemon:
                         track_info = self._get_track_info(provider, track_id)
                         base_title = track_info.get("title", "Unknown")
                         patch_mpd_queue(
-                            self.mpd_client._client, proxy_url, base_title,
-                            now_liked, like_indicator,
+                            self.mpd_client._client,
+                            proxy_url,
+                            base_title,
+                            now_liked,
+                            like_indicator,
                         )
             except Exception as patch_exc:
                 logger.warning("Like-toggle playlist patching failed: %s", patch_exc)

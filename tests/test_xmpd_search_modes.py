@@ -107,10 +107,10 @@ class TestBrowseMode:
         assert "rebind(" in content
 
     def test_action_keys_rebound_on_browse(self):
-        """ctrl-q, ctrl-r, ctrl-l, tab must be rebound in Browse mode."""
+        """ctrl-e, ctrl-r, ctrl-l, tab must be rebound in Browse mode."""
         content = _content()
         # Check that rebind includes the action keys
-        assert "ctrl-q" in content
+        assert "ctrl-e" in content
         assert "ctrl-l" in content
 
 
@@ -172,9 +172,9 @@ class TestModeHeaders:
         assert "enter" in content
 
     def test_browse_mode_keys_in_content(self):
-        """Browse mode uses ctrl-q, ctrl-r, ctrl-l, tab, ctrl-a, ctrl-p."""
+        """Browse mode uses ctrl-e, ctrl-r, ctrl-l, tab, ctrl-a, ctrl-p."""
         content = _content()
-        assert "ctrl-q" in content
+        assert "ctrl-e" in content
         assert "ctrl-r" in content
         assert "ctrl-l" in content
         assert "ctrl-a" in content
@@ -203,9 +203,9 @@ class TestBackwardCompatStructure:
         assert "enter:" in content
         assert "play" in content
 
-    def test_has_ctrl_q_queue_binding(self):
+    def test_has_ctrl_e_queue_binding(self):
         content = _content()
-        assert "ctrl-q:" in content
+        assert "ctrl-e:" in content
         assert "queue" in content
 
     def test_has_ctrl_r_radio_binding(self):

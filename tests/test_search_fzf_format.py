@@ -18,6 +18,7 @@ XMPCTL = Path(__file__).parent.parent / "bin" / "xmpctl"
 # ANSI escape sequences used by the formatter
 TIDAL_COLOR = "\033[38;2;115;218;202m"
 YT_COLOR = "\033[38;2;247;118;142m"
+LOCAL_COLOR = "\033[38;2;158;206;106m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
@@ -137,6 +138,16 @@ class TestProviderColors:
         line = format_track_fzf(_make_track(provider="yt"))
         visible = line.split("\t")[2]
         assert "[YT]" in visible
+
+    def test_local_tag_is_lo(self):
+        line = format_track_fzf(_make_track(provider="local", track_id="A/B.mp3"))
+        visible = line.split("\t")[2]
+        assert "[LO]" in visible
+
+    def test_local_uses_green_color(self):
+        line = format_track_fzf(_make_track(provider="local", track_id="A/B.mp3"))
+        visible = line.split("\t")[2]
+        assert LOCAL_COLOR in visible
 
     def test_unknown_provider_defaults_to_yt_style(self):
         """Unknown providers default to YT styling."""
@@ -262,7 +273,7 @@ class TestEdgeCases:
         line = format_track_fzf(
             _make_track(
                 provider="tidal",
-                track_id="99999999",
+                track_id="420578915",
                 title="Creep",
                 artist="Radiohead",
                 duration="3:59",
@@ -272,7 +283,7 @@ class TestEdgeCases:
         )
         parts = line.split("\t")
         assert parts[0] == "tidal"
-        assert parts[1] == "99999999"
+        assert parts[1] == "420578915"
         visible = parts[2]
         assert TIDAL_COLOR in visible
         assert "[TD]" in visible

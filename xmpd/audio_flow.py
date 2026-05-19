@@ -1057,7 +1057,9 @@ def format_default(report: FlowReport, color: Any) -> str:
 
     if src is not None and src.selected is not None and src.provider != "local":
         lines.append(color("=== Proxy ===", "bold"))
-        lines.append("Path:         ffmpeg -c copy -f flac (rewrap, no re-encode)")
+        lines.append(
+            "Path:         ffmpeg -c:a flac -compression_level 0 -f flac (lossless re-encode)"
+        )
         lines.append("")
 
     lines.append(color("=== MPD ===", "bold"))

@@ -161,8 +161,15 @@ async def _stream_dash_via_ffmpeg(
         manifest_url,
         "-map",
         f"0:a:{stream_index}",
-        "-c",
-        "copy",
+        # Re-encode to FLAC (lossless) instead of -c copy. The DASH→raw-FLAC
+        # rewrap occasionally emits frames whose sync bytes land off-boundary,
+        # which makes libFLAC in MPD log MISSING_FRAME and produce an audible
+        # in-track glitch. compression_level=0 keeps CPU cost near zero
+        # (~1-3s per track) while emitting a cleanly framed FLAC stream.
+        "-c:a",
+        "flac",
+        "-compression_level",
+        "0",
         "-f",
         "flac",
         "pipe:1",

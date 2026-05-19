@@ -33,6 +33,7 @@ SWAY_CONF="${HOME}/.config/sway/config"
 SYSTEMD_UNIT="${HOME}/.config/systemd/user/mpd-owntone-metadata.service"
 PADDER_UNIT="${HOME}/.config/systemd/user/mpd-owntone-padder.service"
 PW_DROPIN="${HOME}/.config/pipewire/pipewire-pulse.conf.d/20-raop-discover.conf"
+PW_BRIDGE_PIN="${HOME}/.config/pipewire/pipewire-pulse.conf.d/30-mpd-bridge-pin.conf"
 PW_NULLSINK="${HOME}/.config/pipewire/pipewire.conf.d/30-owntone-bridge.conf"
 WP_BRIDGE_ROUTE="${HOME}/.config/wireplumber/wireplumber.conf.d/40-owntone-bridge-route.conf"
 
@@ -155,6 +156,7 @@ run_checks() {
   fi
   if [[ ! -f "$I3_CONF" && ! -f "$SWAY_CONF" ]]; then miss "no i3 or sway config found"; fi
   if [[ -f "$PW_DROPIN" ]]; then ok "pipewire raop drop-in"; else miss "pipewire raop drop-in"; fi
+  if [[ -f "$PW_BRIDGE_PIN" ]]; then ok "pipewire bridge-pin drop-in"; else miss "pipewire bridge-pin drop-in"; fi
   if [[ -f "$PW_NULLSINK" ]]; then ok "pipewire null-sink drop-in"; else miss "pipewire null-sink drop-in"; fi
   if [[ -f "$WP_BRIDGE_ROUTE" ]]; then ok "wireplumber bridge-route drop-in"; else miss "wireplumber bridge-route drop-in"; fi
   if [[ -f "$PADDER_UNIT" ]]; then ok "padder systemd unit"; else miss "padder systemd unit"; fi
@@ -346,6 +348,50 @@ pulse.cmd = [
 EOF
 }
 
+install_pipewire_bridge_pin() {
+  info "installing pipewire bridge-pin drop-in -> $PW_BRIDGE_PIN"
+  mkdir -p "$(dirname "$PW_BRIDGE_PIN")"
+  # Set node.dont-move=true on every MPD pulse stream. This makes
+  # WirePlumber's find-defined-target.lua skip its metadata-override
+  # branch (see /usr/share/wireplumber/scripts/linking/find-defined-target
+  # .lua line 55 "if metadata and not dont_move"), so the bridge stream's
+  # target.object="owntone-bridge" stays authoritative and cannot be
+  # overridden by pavucontrol moves, wpctl, or pulse module-stream-restore
+  # writing -1 / another sink into the default metadata for its node.id.
+  #
+  # Without this, the original 2026-05-12 fix (wireplumber stream.rules
+  # rewriting media.role to Music-Bridge) only isolated WirePlumber's
+  # state-stream restore slot; the visible node.media.role stayed "Music"
+  # so pipewire-pulse module-stream-restore still grouped both MPD
+  # streams under sink-input-by-media-role:music, and any pavucontrol
+  # move of one stream dragged the bridge onto the local default sink
+  # (HDMI, Bluetooth, ...) - the same track playing twice in parallel.
+  #
+  # MPD's local "PulseAudio" output also gets node.dont-move=true and is
+  # therefore not movable via pavucontrol either - that is fine because
+  # this repo's speaker-rofi / speaker scripts switch outputs by changing
+  # the default sink (pactl set-default-sink), not by per-stream moves,
+  # and linking.follow-default-target keeps the local stream tracking
+  # whichever sink the user selected.
+  cat > "$PW_BRIDGE_PIN" <<'EOF'
+pulse.rules = [
+    {
+        matches = [
+            {
+                application.name = "Music Player Daemon"
+            }
+        ]
+        actions = {
+            update-props = {
+                node.dont-move = true
+            }
+        }
+    }
+]
+EOF
+  systemctl --user restart pipewire-pulse 2>/dev/null || true
+}
+
 install_wireplumber_bridge_route() {
   info "installing wireplumber bridge-route drop-in -> $WP_BRIDGE_ROUTE"
   mkdir -p "$(dirname "$WP_BRIDGE_ROUTE")"
@@ -482,6 +528,7 @@ install_packages
 bootstrap_owntone_state
 discover_and_configure
 install_pipewire_dropin
+install_pipewire_bridge_pin
 install_wireplumber_bridge_route
 install_pipewire_nullsink
 install_systemd_unit

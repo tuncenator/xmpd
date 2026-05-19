@@ -76,7 +76,7 @@ RELOAD_CMD="sleep 0.35; ${XMPCTL} search-json --format fzf {q}"
 # Headers (single-line to allow use in change-header transform output).
 # fzf processes ANSI codes in header lines.
 SEARCH_HDR="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  ${DIM}| Type to search  enter=browse${RESET}"
-BROWSE_HDR="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  ${DIM}| enter=play  ctrl-q=queue  ctrl-r=radio  ctrl-l=like  tab=select  ctrl-a=queue-all  ctrl-p=play-all  esc=back${RESET}"
+BROWSE_HDR="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  ${DIM}| enter=play  ctrl-e=queue  ctrl-r=radio  ctrl-l=like  tab=select  ctrl-a=queue-all  ctrl-p=play-all  esc=back${RESET}"
 
 # Enter action: context-aware dispatch via transform.
 #   In Search mode (BROWSE_MODE_FILE absent): transition to Browse.
@@ -87,13 +87,13 @@ BROWSE_HDR="${TIDAL_COLOR}[TD]${RESET} Tidal  ${YT_COLOR}[YT]${RESET} YouTube  $
 #   enable-search               -- activate fzf local fuzzy filtering
 #   change-prompt(Browse: )     -- update prompt text
 #   change-header(...)          -- update header legend for Browse mode
-#   rebind(ctrl-q,ctrl-r,ctrl-l,tab)  -- activate Browse action keys
+#   rebind(ctrl-e,ctrl-r,ctrl-l,tab)  -- activate Browse action keys
 #   transform-query(...)        -- save Search query, restore Browse query
 ENTER_TRANSFORM="transform:if [[ -f '${BROWSE_MODE_FILE}' ]]; then
   echo 'execute-silent([ -n \{2} ] && ${XMPCTL} play \{1} \{2})+abort'
 else
   touch '${BROWSE_MODE_FILE}'
-  echo 'unbind(change)+enable-search+change-prompt(Browse: )+change-header(${BROWSE_HDR})+rebind(ctrl-q,ctrl-r,ctrl-l,tab)+transform-query(echo \{q} > ${SEARCH_QUERY_FILE}; cat ${BROWSE_QUERY_FILE})'
+  echo 'unbind(change)+enable-search+change-prompt(Browse: )+change-header(${BROWSE_HDR})+rebind(ctrl-e,ctrl-r,ctrl-l,tab)+transform-query(echo \{q} > ${SEARCH_QUERY_FILE}; cat ${BROWSE_QUERY_FILE})'
 fi"
 
 # Esc action: context-aware dispatch via transform.
@@ -104,12 +104,12 @@ fi"
 #   disable-search              -- return to API-driven mode (no local filtering)
 #   change-prompt(Search: )     -- update prompt text
 #   change-header(...)          -- update header legend for Search mode
-#   unbind(ctrl-q,ctrl-r,ctrl-l,tab)  -- deactivate Browse action keys
+#   unbind(ctrl-e,ctrl-r,ctrl-l,tab)  -- deactivate Browse action keys
 #   rebind(change)              -- restore change:reload for API search
 #   transform-query(...)        -- save Browse query, restore Search query
 ESC_TRANSFORM="transform:if [[ -f '${BROWSE_MODE_FILE}' ]]; then
   rm -f '${BROWSE_MODE_FILE}'
-  echo 'disable-search+change-prompt(Search: )+change-header(${SEARCH_HDR})+unbind(ctrl-q,ctrl-r,ctrl-l,tab)+rebind(change)+transform-query(echo \{q} > ${BROWSE_QUERY_FILE}; cat ${SEARCH_QUERY_FILE})'
+  echo 'disable-search+change-prompt(Search: )+change-header(${SEARCH_HDR})+unbind(ctrl-e,ctrl-r,ctrl-l,tab)+rebind(change)+transform-query(echo \{q} > ${BROWSE_QUERY_FILE}; cat ${SEARCH_QUERY_FILE})'
 else
   echo 'abort'
 fi"
@@ -121,7 +121,7 @@ fi"
 #   - change:reload: fires API search on every keystroke (350ms debounce)
 #   - enter: context-aware via transform (Search->Browse or Play)
 #   - esc: context-aware via transform (abort in Search, return in Browse)
-#   - ctrl-q, ctrl-r, ctrl-l, tab: unbound at start, rebound on Browse entry
+#   - ctrl-e, ctrl-r, ctrl-l, tab: unbound at start, rebound on Browse entry
 #
 # --expect captures ctrl-a/ctrl-p for multi-select post-processing.
 FZF_OUTPUT=$(
@@ -131,7 +131,7 @@ FZF_OUTPUT=$(
         --delimiter=$'\t' \
         --with-nth=3.. \
         --bind "change:reload:${RELOAD_CMD}" \
-        --bind "start:reload(echo '')+unbind(ctrl-q,ctrl-r,ctrl-l,tab)" \
+        --bind "start:reload(echo '')+unbind(ctrl-e,ctrl-r,ctrl-l,tab)" \
         --header="${SEARCH_HDR}" \
         --prompt="Search: " \
         --pointer=">" \
@@ -143,10 +143,11 @@ FZF_OUTPUT=$(
         --expect='ctrl-a,ctrl-p' \
         --bind "enter:${ENTER_TRANSFORM}" \
         --bind "esc:${ESC_TRANSFORM}" \
-        --bind "ctrl-q:execute-silent([ -n {2} ] && ${XMPCTL} queue {1} {2})" \
+        --bind "ctrl-e:execute-silent([ -n {2} ] && ${XMPCTL} queue {1} {2})" \
         --bind "ctrl-r:execute-silent([ -n {2} ] && ${XMPCTL} radio --provider {1} --track-id {2} --apply)+abort" \
         --bind "ctrl-l:execute-silent([ -n {2} ] && ${XMPCTL} like-toggle {1} {2})" \
-        --bind "tab:toggle" \
+        --bind "tab:toggle+down" \
+        --bind "btab:toggle+up" \
     < /dev/null 2>/dev/null
 ) || exit 0
 

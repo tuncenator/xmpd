@@ -1,0 +1,22 @@
+2026-05-07T17:51:23 player: played "http://localhost:6602/proxy/tidal/391401491"
+2026-05-07T17:51:32 player: played "http://localhost:6602/proxy/tidal/391247705"
+2026-05-07T17:51:32 player: played "http://localhost:6602/proxy/tidal/327615436"
+2026-05-07T17:52:10 player: played "http://localhost:6602/proxy/tidal/378043005"
+2026-05-07T17:52:48 player: played "http://localhost:6602/proxy/yt/dQw4w9WgXcQ"
+2026-05-07T17:53:15 player: played "http://localhost:6602/proxy/yt/abc-123_XYZ"
+2026-05-07T17:53:55 player: played "http://localhost:6602/proxy/yt/oHg5SJYRHA0"
+2026-05-07T17:54:33 player: played "http://localhost:6602/proxy/tidal/orphan-id-1"
+2026-05-07T17:55:01 player: played "http://localhost:6602/proxy/tidal/orphan-id-2"
+2026-05-07T17:55:42 player: played "http://localhost:6602/proxy/tidal/orphan-id-3"
+2026-05-07T17:56:10 player: played "http://localhost:6602/proxy/tidal/orphan-id-4"
+2026-05-07T17:56:50 player: played "http://localhost:6602/proxy/tidal/orphan-id-5"
+2026-05-07T17:57:33 player: played "http://localhost:6602/proxy/yt/orphan-id-6"
+2026-05-07T17:51:23 exception: Failed to decode "http://localhost:6602/proxy/tidal/391401491"
+2026-05-07T17:51:24 decoder: ffmpeg/mp3: Invalid frame
+May  8 09:12:33 player: played "http://localhost:6602/proxy/tidal/legacy-track-1"
+May  8 09:13:01 player: played "http://localhost:6602/proxy/yt/legacy-track-2"
+May  8 09:13:42 player: played "http://localhost:6602/proxy/tidal/legacy-track-1"
+May  8 09:14:12 random text not a player line at all
+2026-05-07T17:58:00 player: opened a stream
+2026-05-07T17:58:30 output: stopped
+2026-05-07T17:59:01 player: played "http://localhost:6602/proxy/tidal/391247705"

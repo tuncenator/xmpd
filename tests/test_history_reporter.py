@@ -1,12 +1,17 @@
 """Unit tests for HistoryReporter (provider-aware, Phase 7+)."""
 
+import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from xmpd.history_reporter import PROXY_URL_RE, HistoryReporter
+from xmpd.history_store import HistoryStore
+from xmpd.history_syncer import HistorySyncer
 from xmpd.providers.base import Provider
 
 # ---------------------------------------------------------------------------
@@ -66,6 +71,37 @@ def _set_mpd_state(
         song["file"] = file_url
     mpd.currentsong.return_value = song
     reporter._mpd = mpd
+
+
+def _make_reporter_with_history(tmp_path, registry=None):
+    """Return (reporter, store, syncer_mock, executor, db_path)."""
+    if registry is None:
+        registry = {}
+    db_path = str(tmp_path / "history.db")
+    store = HistoryStore(db_path)
+    syncer = MagicMock(spec=HistorySyncer)
+    executor = ThreadPoolExecutor(max_workers=1)
+    submit_spy = MagicMock(wraps=executor.submit)
+    executor.submit = submit_spy
+    track_store = MagicMock()
+    track_store.get_track.return_value = {
+        "title": "Test Title",
+        "artist": "Test Artist",
+        "album": "Test Album",
+        "duration_seconds": 200,
+        "art_url": "http://example.com/art.png",
+    }
+    reporter = HistoryReporter(
+        mpd_socket_path="/tmp/fake.sock",
+        provider_registry=registry,
+        track_store=track_store,
+        proxy_config={"host": "localhost", "port": 8080, "enabled": True},
+        min_play_seconds=30,
+        history_store=store,
+        history_syncer=syncer,
+        executor=executor,
+    )
+    return reporter, store, syncer, executor, db_path
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +323,146 @@ class TestNonProxyUrl:
 
 
 # ---------------------------------------------------------------------------
+# Local file plays
+# ---------------------------------------------------------------------------
+
+
+class TestLocalProvider:
+    """Plays of bare-path (non-proxy, non-URL) MPD files are logged as local."""
+
+    _LOCAL_PATH = "New Era/Massive Attack/Mezzanine/03 Teardrop.mp3"
+
+    def test_local_play_skips_provider_report(self) -> None:
+        yt = MagicMock(spec=Provider)
+        reporter = _make_reporter({"yt": yt})
+        reporter._report_track(self._LOCAL_PATH, 45)
+        yt.report_play.assert_not_called()
+
+    def test_local_play_writes_history_row_with_local_provider(self, tmp_path) -> None:
+        reporter, store, _, executor, db_path = _make_reporter_with_history(tmp_path)
+        reporter._current_track_title = "Teardrop"
+        reporter._current_track_artist = "Massive Attack"
+        reporter._current_track_album = "Mezzanine"
+        reporter._current_track_duration = 330
+        reporter._report_track(self._LOCAL_PATH, 60)
+        executor.shutdown(wait=True)
+
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT provider, track_id, title, artist, album, duration_seconds,"
+            " play_seconds, quality FROM plays"
+        ).fetchall()
+        conn.close()
+        store.close()
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row[0] == "local"
+        assert row[1] == self._LOCAL_PATH
+        assert row[2] == "Teardrop"
+        assert row[3] == "Massive Attack"
+        assert row[4] == "Mezzanine"
+        assert row[5] == 330
+        assert row[6] == 60
+        assert row[7] is None  # quality always NULL for local
+
+    def test_local_play_track_store_not_consulted(self, tmp_path) -> None:
+        """Local plays must not touch the proxy track_store."""
+        reporter, store, _, executor, _ = _make_reporter_with_history(tmp_path)
+        reporter._report_track(self._LOCAL_PATH, 45)
+        executor.shutdown(wait=True)
+        store.close()
+        reporter._track_store.get_track.assert_not_called()
+
+    def test_handle_player_event_logs_local_after_threshold(self, tmp_path) -> None:
+        """End-to-end: starting then leaving a local track emits a local play row."""
+        reporter, store, _, executor, db_path = _make_reporter_with_history(tmp_path)
+        reporter._current_track_url = self._LOCAL_PATH
+        reporter._current_track_title = "Teardrop"
+        reporter._current_track_artist = "Massive Attack"
+        reporter._current_track_album = "Mezzanine"
+        reporter._current_track_duration = 330
+        reporter._current_track_start = time.monotonic() - 60
+        reporter._accumulated_play = 0.0
+        reporter._pause_start = None
+        reporter._last_state = "play"
+        _set_mpd_state(reporter, "stop", None)
+        reporter._handle_player_event()
+        executor.shutdown(wait=True)
+
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT provider, track_id, title FROM plays"
+        ).fetchall()
+        conn.close()
+        store.close()
+        assert len(rows) == 1
+        assert rows[0] == ("local", self._LOCAL_PATH, "Teardrop")
+
+    def test_handle_player_event_below_threshold_skips_local(self, tmp_path) -> None:
+        """30 s gate also applies to local plays."""
+        reporter, store, _, executor, db_path = _make_reporter_with_history(tmp_path)
+        reporter._current_track_url = self._LOCAL_PATH
+        reporter._current_track_title = "Teardrop"
+        reporter._current_track_start = time.monotonic() - 5  # only 5 s
+        reporter._accumulated_play = 0.0
+        reporter._pause_start = None
+        reporter._last_state = "play"
+        _set_mpd_state(reporter, "stop", None)
+        reporter._handle_player_event()
+        executor.shutdown(wait=True)
+
+        conn = sqlite3.connect(db_path)
+        count = conn.execute("SELECT COUNT(*) FROM plays").fetchone()[0]
+        conn.close()
+        store.close()
+        assert count == 0
+
+    def test_local_play_with_null_metadata_inserts_null_columns(self, tmp_path) -> None:
+        """When MPD didn't emit tags, the row's metadata columns are NULL."""
+        reporter, store, _, executor, db_path = _make_reporter_with_history(tmp_path)
+        # leave _current_track_* at defaults (None)
+        reporter._report_track(self._LOCAL_PATH, 45)
+        executor.shutdown(wait=True)
+
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT title, artist, album, duration_seconds, art_url FROM plays"
+        ).fetchall()
+        conn.close()
+        store.close()
+        assert len(rows) == 1
+        assert all(v is None for v in rows[0])
+
+    def test_stash_track_from_song_extracts_tags(self) -> None:
+        reporter = _make_reporter()
+        reporter._stash_track_from_song(
+            self._LOCAL_PATH,
+            {
+                "file": self._LOCAL_PATH,
+                "title": "Teardrop",
+                "artist": "Massive Attack",
+                "album": "Mezzanine",
+                "time": "330",
+            },
+        )
+        assert reporter._current_track_url == self._LOCAL_PATH
+        assert reporter._current_track_title == "Teardrop"
+        assert reporter._current_track_artist == "Massive Attack"
+        assert reporter._current_track_album == "Mezzanine"
+        assert reporter._current_track_duration == 330
+
+    def test_stash_track_from_song_handles_missing_tags(self) -> None:
+        reporter = _make_reporter()
+        reporter._stash_track_from_song(self._LOCAL_PATH, {"file": self._LOCAL_PATH})
+        assert reporter._current_track_url == self._LOCAL_PATH
+        assert reporter._current_track_title is None
+        assert reporter._current_track_artist is None
+        assert reporter._current_track_album is None
+        assert reporter._current_track_duration is None
+
+
+# ---------------------------------------------------------------------------
 # Error recovery
 # ---------------------------------------------------------------------------
 
@@ -348,8 +524,184 @@ class TestShutdown:
             return ["player"]
 
         mpd.idle.side_effect = idle_blocks
-        with patch.object(
-            reporter, "_connect", side_effect=lambda: setattr(reporter, "_mpd", mpd)
-        ):
+        with patch.object(reporter, "_connect", side_effect=lambda: setattr(reporter, "_mpd", mpd)):
             reporter.run(shutdown)
         assert shutdown.is_set()
+
+
+# ---------------------------------------------------------------------------
+# History write block tests
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryWriteBlock:
+    """Tests for the new history-write code path in _report_track."""
+
+    def test_history_write_inserts_row_after_provider_report(self, tmp_path):
+        """Provider report fires AND a DB row is inserted."""
+        yt = MagicMock(spec=Provider)
+        yt.report_play.return_value = True
+        reporter, store, syncer, executor, db_path = _make_reporter_with_history(
+            tmp_path, registry={"yt": yt}
+        )
+        reporter._report_track("http://localhost:8080/proxy/yt/abc12345678", 45)
+        yt.report_play.assert_called_once_with("abc12345678", 45)
+        # Drain executor before reading DB
+        executor.shutdown(wait=True)
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT provider, track_id, title, artist, play_seconds, synced_at FROM plays"
+        ).fetchall()
+        conn.close()
+        store.close()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row[0] == "yt"
+        assert row[1] == "abc12345678"
+        assert row[2] == "Test Title"
+        assert row[3] == "Test Artist"
+        assert row[4] == 45
+        assert row[5] is None  # synced_at NULL for own rows
+
+    def test_history_write_submits_bidir_push_to_executor(self, tmp_path):
+        """executor.submit is called with syncer.bidir_push as first argument."""
+        yt = MagicMock(spec=Provider)
+        yt.report_play.return_value = True
+        reporter, store, syncer, executor, db_path = _make_reporter_with_history(
+            tmp_path, registry={"yt": yt}
+        )
+        reporter._report_track("http://localhost:8080/proxy/yt/abc12345678", 45)
+        executor.shutdown(wait=True)
+        store.close()
+        executor.submit.assert_called_once_with(syncer.bidir_push)
+
+    def test_history_write_skipped_when_history_store_none(self, tmp_path):
+        """Reporter constructed without history kwargs is backward-compatible."""
+        yt = MagicMock(spec=Provider)
+        yt.report_play.return_value = True
+        reporter = _make_reporter({"yt": yt})
+        # Must not raise; provider report still fires
+        reporter._report_track("http://localhost:8080/proxy/yt/abc12345678", 45)
+        yt.report_play.assert_called_once()
+
+    def test_history_write_orphan_track_inserts_null_metadata(self, tmp_path):
+        """When get_track returns None all metadata columns are NULL."""
+        yt = MagicMock(spec=Provider)
+        yt.report_play.return_value = True
+        reporter, store, syncer, executor, db_path = _make_reporter_with_history(
+            tmp_path, registry={"yt": yt}
+        )
+        reporter._track_store.get_track.return_value = None
+        reporter._report_track("http://localhost:8080/proxy/yt/orphantrack", 40)
+        executor.shutdown(wait=True)
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT title, artist, album, duration_seconds, art_url FROM plays"
+        ).fetchall()
+        conn.close()
+        store.close()
+        assert len(rows) == 1
+        assert all(v is None for v in rows[0])
+
+    def test_history_write_failure_does_not_break_provider_report(self, tmp_path, caplog):
+        """add_play raising must not prevent provider report or re-raise."""
+        yt = MagicMock(spec=Provider)
+        yt.report_play.return_value = True
+        reporter, store, syncer, executor, db_path = _make_reporter_with_history(
+            tmp_path, registry={"yt": yt}
+        )
+        store.add_play = MagicMock(side_effect=RuntimeError("DB exploded"))
+        with caplog.at_level("WARNING"):
+            reporter._report_track("http://localhost:8080/proxy/yt/abc12345678", 45)
+        # Provider report still ran
+        yt.report_play.assert_called_once_with("abc12345678", 45)
+        # executor.submit NOT called (exception happened before it)
+        executor.submit.assert_not_called()
+        # Warning logged
+        assert any("history-write failed" in rec.message for rec in caplog.records)
+        store.close()
+        executor.shutdown(wait=True)
+
+    def test_history_write_quality_resolution_yt_returns_none(self, tmp_path):
+        """For provider='yt', quality column must be NULL."""
+        yt = MagicMock(spec=Provider)
+        yt.report_play.return_value = True
+        reporter, store, syncer, executor, db_path = _make_reporter_with_history(
+            tmp_path, registry={"yt": yt}
+        )
+        reporter._report_track("http://localhost:8080/proxy/yt/abc12345678", 45)
+        executor.shutdown(wait=True)
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute("SELECT quality FROM plays").fetchall()
+        conn.close()
+        store.close()
+        assert len(rows) == 1
+        assert rows[0][0] is None
+
+    def test_history_write_quality_resolution_tidal_uses_track_quality(self, tmp_path):
+        """For provider='tidal', quality is taken from the track dict."""
+        tidal = MagicMock(spec=Provider)
+        tidal.report_play.return_value = True
+        reporter, store, syncer, executor, db_path = _make_reporter_with_history(
+            tmp_path, registry={"tidal": tidal}
+        )
+        reporter._track_store.get_track.return_value = {
+            "title": "HiRes Track",
+            "artist": "Artist",
+            "album": "Album",
+            "duration_seconds": 300,
+            "art_url": None,
+            "quality": "HiRes",
+        }
+        reporter._report_track("http://localhost:8080/proxy/tidal/999", 60)
+        executor.shutdown(wait=True)
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute("SELECT quality FROM plays").fetchall()
+        conn.close()
+        store.close()
+        assert len(rows) == 1
+        assert rows[0][0] == "HiRes"
+
+    def test_history_write_skips_placeholder_stub(self, tmp_path):
+        """Reporter must drop rows whose TrackStore record is the unresolved stub."""
+        yt = MagicMock(spec=Provider)
+        yt.report_play.return_value = True
+        reporter, store, _, executor, db_path = _make_reporter_with_history(
+            tmp_path, registry={"yt": yt}
+        )
+        reporter._track_store.get_track.return_value = {
+            "title": "Unknown Title",
+            "artist": "Unknown Artist",
+            "album": None,
+            "duration_seconds": None,
+            "art_url": None,
+            "quality": None,
+        }
+        reporter._report_track("http://localhost:8080/proxy/yt/testvideoid", 45)
+        executor.shutdown(wait=True)
+        # provider.report_play still fires (we don't second-guess the provider)
+        yt.report_play.assert_called_once_with("testvideoid", 45)
+        # but no history row is written
+        conn = sqlite3.connect(db_path)
+        count = conn.execute("SELECT COUNT(*) FROM plays").fetchone()[0]
+        conn.close()
+        store.close()
+        assert count == 0
+
+    def test_history_write_played_at_is_iso8601_with_offset(self, tmp_path):
+        """played_at stored in DB must be ISO 8601 with a timezone offset."""
+        yt = MagicMock(spec=Provider)
+        yt.report_play.return_value = True
+        reporter, store, syncer, executor, db_path = _make_reporter_with_history(
+            tmp_path, registry={"yt": yt}
+        )
+        reporter._report_track("http://localhost:8080/proxy/yt/abc12345678", 45)
+        executor.shutdown(wait=True)
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute("SELECT played_at FROM plays").fetchall()
+        conn.close()
+        store.close()
+        assert len(rows) == 1
+        played_at = rows[0][0]
+        parsed = datetime.fromisoformat(played_at)
+        assert parsed.tzinfo is not None
