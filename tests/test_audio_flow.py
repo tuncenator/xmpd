@@ -22,6 +22,7 @@ from xmpd.audio_flow import (
     format_brief,
     format_default,
     format_short,
+    mpd_sink_from_inputs,
     parse_dash_streams,
     parse_pactl_sink_block,
     select_best_stream,
@@ -135,6 +136,32 @@ class TestSelectBestStream:
         assert select_best_stream([a, b]) is b
 
 
+_PACTL_SINKS_HDMI_EDID_FIXTURE = """Sink #595
+\tState: RUNNING
+\tName: alsa_output.pci-0000_65_00.1.hdmi-stereo-extra1
+\tDescription: Radeon High Definition Audio Controller Digital Stereo (HDMI 2)
+\tDriver: PipeWire
+\tSample Specification: s32le 2ch 44100Hz
+\tProperties:
+\t\talsa.name = "DENON-AVR"
+\t\talsa.card_name = "HD-Audio Generic"
+\t\tnode.nick = "DENON-AVR"
+"""
+
+
+_PACTL_SINKS_HDMI_NO_EDID_FIXTURE = """Sink #600
+\tState: RUNNING
+\tName: alsa_output.pci-0000_65_00.1.hdmi-stereo
+\tDescription: Generic HDMI Stereo
+\tDriver: PipeWire
+\tSample Specification: s32le 2ch 48000Hz
+\tProperties:
+\t\talsa.name = "HD-Audio Generic"
+\t\talsa.card_name = "HD-Audio Generic"
+\t\tnode.nick = "HD-Audio Generic"
+"""
+
+
 class TestParsePactlSinkBlock:
     def test_parses_sample_spec_and_state(self):
         props = parse_pactl_sink_block(
@@ -153,6 +180,21 @@ class TestParsePactlSinkBlock:
 
     def test_returns_empty_for_blank_name(self):
         assert parse_pactl_sink_block(_PACTL_SINKS_FIXTURE, "") == {}
+
+    def test_extracts_edid_downstream_on_hdmi(self):
+        props = parse_pactl_sink_block(
+            _PACTL_SINKS_HDMI_EDID_FIXTURE,
+            "alsa_output.pci-0000_65_00.1.hdmi-stereo-extra1",
+        )
+        assert props["downstream"] == "DENON-AVR"
+        assert props["alsa.name"] == "DENON-AVR"
+
+    def test_no_downstream_when_alsa_name_is_generic(self):
+        props = parse_pactl_sink_block(
+            _PACTL_SINKS_HDMI_NO_EDID_FIXTURE,
+            "alsa_output.pci-0000_65_00.1.hdmi-stereo",
+        )
+        assert "downstream" not in props
 
 
 class TestCodecFromPactlCards:
@@ -948,3 +990,83 @@ class TestComputeVerdictBitDepth:
         v = _compute_verdict(self._mpd(), self._src_24bit(), sink)
         assert v.label == "LOSSLESS (bit-depth truncated)"
         assert v.bottleneck and "bit-depth" in v.bottleneck
+
+
+# Two MPD sink-inputs: one feeding the Owntone Bridge null sink (no AirPlay
+# receivers selected, so it just drains), one feeding the real HDMI output.
+# Real-world repro from ARCHON with Outputs 1 (PulseAudio) and 3 (Owntone
+# Bridge) both enabled. pactl returns the bridge input first.
+_PACTL_SINK_INPUTS_MULTI_MPD_FIXTURE = """Sink Input #100
+\tDriver: PipeWire
+\tOwner Module: n/a
+\tSink: 31
+\tProperties:
+\t\tapplication.name = "Music Player Daemon"
+\t\tapplication.process.binary = "mpd"
+\t\tmedia.name = "Owntone Bridge"
+Sink Input #101
+\tDriver: PipeWire
+\tOwner Module: n/a
+\tSink: 595
+\tProperties:
+\t\tapplication.name = "Music Player Daemon"
+\t\tapplication.process.binary = "mpd"
+\t\tmedia.name = "PulseAudio"
+"""
+
+
+_PACTL_SINKS_MULTI_MPD_FIXTURE = """Sink #31
+\tState: RUNNING
+\tName: owntone-bridge
+\tDescription: OwnTone Bridge Null Sink
+\tSample Specification: s16le 2ch 44100Hz
+\tChannel Map: front-left,front-right
+Sink #595
+\tState: RUNNING
+\tName: alsa_output.pci-0000_65_00.1.hdmi-stereo-extra1
+\tDescription: HDMI / DisplayPort 1 Output
+\tDriver: PipeWire
+\tSample Specification: s32le 2ch 44100Hz
+\tChannel Map: front-left,front-right
+"""
+
+
+class TestMpdSinkFromInputsMultiOutput:
+    """When MPD has multiple pulse outputs (each spawning a sink-input),
+    the chosen MPD output's name must disambiguate which sink-input to read.
+    Without that hint, the previous code grabbed the first MPD sink-input,
+    which on real systems is often the Owntone Bridge null sink rather than
+    the real downstream (e.g. HDMI to AVR).
+    """
+
+    def test_prefers_media_name_match_when_provided(self):
+        name = mpd_sink_from_inputs(
+            _PACTL_SINK_INPUTS_MULTI_MPD_FIXTURE,
+            _PACTL_SINKS_MULTI_MPD_FIXTURE,
+            prefer_media_name="PulseAudio",
+        )
+        assert name == "alsa_output.pci-0000_65_00.1.hdmi-stereo-extra1"
+
+    def test_prefers_bridge_when_explicitly_chosen(self):
+        name = mpd_sink_from_inputs(
+            _PACTL_SINK_INPUTS_MULTI_MPD_FIXTURE,
+            _PACTL_SINKS_MULTI_MPD_FIXTURE,
+            prefer_media_name="Owntone Bridge",
+        )
+        assert name == "owntone-bridge"
+
+    def test_falls_back_to_first_mpd_input_without_hint(self):
+        # Backwards-compatible: no hint means take the first MPD sink-input.
+        name = mpd_sink_from_inputs(
+            _PACTL_SINK_INPUTS_MULTI_MPD_FIXTURE,
+            _PACTL_SINKS_MULTI_MPD_FIXTURE,
+        )
+        assert name == "owntone-bridge"
+
+    def test_hint_with_no_match_falls_back_to_first_mpd_input(self):
+        name = mpd_sink_from_inputs(
+            _PACTL_SINK_INPUTS_MULTI_MPD_FIXTURE,
+            _PACTL_SINKS_MULTI_MPD_FIXTURE,
+            prefer_media_name="Some Other Output",
+        )
+        assert name == "owntone-bridge"
