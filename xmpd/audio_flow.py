@@ -155,6 +155,10 @@ class SinkInfo:
     # Per-receiver detail when the sink is the OwnTone AirPlay/Chromecast fan-out.
     # Each entry is a dict with at least: name, type, volume, selected.
     airplay_outputs: list[dict[str, Any]] = field(default_factory=list)
+    # EDID-derived downstream name (HDMI sink connected to e.g. an AVR).
+    # Populated from PipeWire's node.nick / alsa.name when ALSA picked it up
+    # from the HDMI monitor block.
+    downstream: str | None = None
 
 
 @dataclass
@@ -454,11 +458,22 @@ def _probe_sink(active_outputs: list[dict[str, Any]]) -> SinkInfo | None:
     # FIFO (since it has a known downstream), then any FIFO, then whatever.
     # Multiple FIFOs are common (e.g. a visualizer tap alongside the bridge);
     # the previous code grabbed active_outputs[0] which was arbitrary.
+    # Among pulse/pipewire outputs, prefer non-bridge: when the user has both a
+    # real pulse output (e.g. HDMI to AVR) and the Owntone Bridge null sink
+    # enabled, the real one is what they actually hear.
     chosen: dict[str, Any] | None = None
     for o in active_outputs:
-        if o.get("plugin") in ("pulse", "pipewire", "alsa", "jack"):
+        if (
+            o.get("plugin") in ("pulse", "pipewire")
+            and o.get("outputname") != _BRIDGE_FIFO_NAME
+        ):
             chosen = o
             break
+    if chosen is None:
+        for o in active_outputs:
+            if o.get("plugin") in ("pulse", "pipewire", "alsa", "jack"):
+                chosen = o
+                break
     if chosen is None:
         for o in active_outputs:
             if o.get("plugin") == "fifo" and o.get("outputname") == _BRIDGE_FIFO_NAME:
@@ -470,7 +485,9 @@ def _probe_sink(active_outputs: list[dict[str, Any]]) -> SinkInfo | None:
     plugin = str(chosen.get("plugin", "unknown"))
 
     if plugin in ("pulse", "pipewire"):
-        return _probe_pulse_sink()
+        return _probe_pulse_sink(
+            prefer_media_name=str(chosen.get("outputname") or "") or None,
+        )
     if plugin == "alsa":
         return SinkInfo(
             backend="alsa", name=str(chosen.get("outputname") or "alsa"),
@@ -636,11 +653,14 @@ def _read_fifo_format(
     return None, None, None
 
 
-def _probe_pulse_sink() -> SinkInfo:
+def _probe_pulse_sink(prefer_media_name: str | None = None) -> SinkInfo:
     """Probe the sink MPD is actually streaming to, codec via ``pw-dump``.
 
     Resolution order:
     1. ``pactl list sink-inputs`` -> find MPD's stream, read its target sink id.
+       When multiple MPD-owned sink-inputs exist (multiple pulse outputs in
+       mpd.conf), ``prefer_media_name`` selects the one whose ``media.name``
+       matches -- pactl mirrors MPD's ``outputname`` there.
     2. Fall back to ``pactl get-default-sink`` if MPD isn't found in sink-inputs.
     """
     if shutil.which("pactl") is None:
@@ -676,7 +696,9 @@ def _probe_pulse_sink() -> SinkInfo:
             bt_bitrate=None, bt_lossy=None, error=f"pactl failed: {e}",
         )
 
-    sink_name = mpd_sink_from_inputs(sink_inputs_blob, sinks_blob) or default
+    sink_name = mpd_sink_from_inputs(
+        sink_inputs_blob, sinks_blob, prefer_media_name=prefer_media_name,
+    ) or default
     props = parse_pactl_sink_block(sinks_blob, sink_name)
     bt_addr = props.get("api.bluez5.address")
     is_bt = bool(bt_addr) or props.get("device.api") == "bluez5" \
@@ -728,6 +750,7 @@ def _probe_pulse_sink() -> SinkInfo:
         bt_codec_display=bt_codec_display,
         bt_bitrate=bt_bitrate,
         bt_lossy=bt_lossy,
+        downstream=props.get("downstream"),
     )
 
 
@@ -742,14 +765,24 @@ _A2DP_PROFILE_SUFFIX_RE = re.compile(r"^a2dp-sink-(\S+)$")
 
 
 def mpd_sink_from_inputs(
-    sink_inputs_blob: str, sinks_blob: str
+    sink_inputs_blob: str,
+    sinks_blob: str,
+    prefer_media_name: str | None = None,
 ) -> str | None:
     """Find the sink MPD is streaming to via ``pactl list sink-inputs``.
+
+    With multiple MPD outputs enabled (e.g. a real pulse output alongside the
+    Owntone Bridge null sink), there are several MPD-owned sink-inputs and
+    arbitrary selection misreports the downstream. ``prefer_media_name`` --
+    typically the chosen MPD output's ``outputname`` -- selects the matching
+    sink-input via its ``media.name`` property. Falls back to the first MPD
+    sink-input when no match is found or no hint is given.
 
     Returns the target sink's ``Name:`` (matching ``pactl list sinks``), or
     ``None`` if no MPD sink-input is found.
     """
     blocks = re.split(r"^Sink Input #\d+\s*$", sink_inputs_blob, flags=re.M)
+    fallback_id: str | None = None
     target_id: str | None = None
     for blk in blocks:
         if not blk.strip():
@@ -761,10 +794,23 @@ def mpd_sink_from_inputs(
         )
         if not is_mpd:
             continue
-        m = re.search(r"^\s*Sink:\s*(\d+)\s*$", blk, re.M)
-        if m:
-            target_id = m.group(1)
+        sm = re.search(r"^\s*Sink:\s*(\d+)\s*$", blk, re.M)
+        if not sm:
+            continue
+        if fallback_id is None:
+            fallback_id = sm.group(1)
+        if prefer_media_name is not None:
+            mn = re.search(
+                r'^\s*media\.name\s*=\s*"([^"]*)"\s*$', blk, re.M
+            )
+            if mn and mn.group(1) == prefer_media_name:
+                target_id = sm.group(1)
+                break
+        else:
+            target_id = sm.group(1)
             break
+    if target_id is None:
+        target_id = fallback_id
     if target_id is None:
         return None
     sink_blocks = re.split(r"^Sink #(\d+)\s*$", sinks_blob, flags=re.M)
@@ -804,13 +850,54 @@ def parse_pactl_sink_block(sinks_blob: str, sink_name: str) -> dict[str, Any]:
         props["sample_fmt"] = msa.group(1)
         props["channels"] = int(msa.group(2))
         props["sample_rate"] = int(msa.group(3))
-    for key in ("device.api", "api.bluez5.address"):
+    for key in (
+        "device.api", "api.bluez5.address",
+        "node.nick", "alsa.name", "alsa.card_name",
+    ):
         m = re.search(
             rf'^\s*{re.escape(key)}\s*=\s*"([^"]*)"$', target, re.M
         )
         if m:
             props[key] = m.group(1)
+    downstream = _edid_downstream_name(props)
+    if downstream:
+        props["downstream"] = downstream
     return props
+
+
+# PipeWire/ALSA defaults that indicate "no EDID monitor name available" --
+# these are the generic strings the kernel emits when the HDMI sink reports
+# no useful monitor block. When node.nick or alsa.name matches one of these,
+# it's not a real downstream name.
+_GENERIC_ALSA_NAMES = frozenset({
+    "hd-audio generic", "hda generic", "generic", "",
+})
+
+
+def _edid_downstream_name(props: dict[str, Any]) -> str | None:
+    """Return the EDID-derived monitor name if pactl exposed one, else None.
+
+    HDMI sinks pick up the receiver's monitor-block name (e.g. ``DENON-AVR``)
+    into ``alsa.name``; PipeWire mirrors it to ``node.nick``. Both fall back to
+    the generic card name when no EDID is present, so filter that out.
+    """
+    candidates = [
+        props.get("node.nick"),
+        props.get("alsa.name"),
+    ]
+    card = (props.get("alsa.card_name") or "").strip().lower()
+    for c in candidates:
+        if not c:
+            continue
+        s = str(c).strip()
+        if not s:
+            continue
+        if s.lower() in _GENERIC_ALSA_NAMES:
+            continue
+        if card and s.strip().lower() == card:
+            continue
+        return s
+    return None
 
 
 def _bt_codec_from_pwdump(bt_addr: str | None) -> str | None:
@@ -1081,6 +1168,8 @@ def format_default(report: FlowReport, color: Any) -> str:
             lines.append(f"Sink:         {sink.name}{state_str}")
         if sink.description:
             lines.append(f"Device:       {sink.description}")
+        if sink.downstream:
+            lines.append(f"Downstream:   {sink.downstream}  (via HDMI EDID)")
         if sink.sample_rate:
             spec = format_audio_spec(sink.sample_rate, sink.bits, sink.channels)
             fmt = f" ({sink.sample_fmt})" if sink.sample_fmt else ""
