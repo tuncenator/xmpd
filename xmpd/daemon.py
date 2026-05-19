@@ -981,6 +981,9 @@ class XMPDaemon:
                             stream_url=None,
                             title=t.metadata.title,
                             artist=t.metadata.artist,
+                            album=t.metadata.album,
+                            duration_seconds=t.metadata.duration_seconds,
+                            art_url=t.metadata.art_url,
                         )
                     except Exception as e:
                         logger.warning("Failed to save track %s: %s", t.track_id, e)
@@ -1465,6 +1468,9 @@ class XMPDaemon:
                         stream_url=None,
                         title=track_info.get("title", "Unknown"),
                         artist=track_info.get("artist", None),
+                        album=track_info.get("album"),
+                        duration_seconds=track_info.get("duration_seconds"),
+                        art_url=track_info.get("art_url"),
                     )
                 except Exception:
                     logger.warning("Failed to register track in store: %s/%s", provider, track_id)
@@ -1517,6 +1523,9 @@ class XMPDaemon:
                         stream_url=None,
                         title=track_info.get("title", "Unknown"),
                         artist=track_info.get("artist", None),
+                        album=track_info.get("album"),
+                        duration_seconds=track_info.get("duration_seconds"),
+                        art_url=track_info.get("art_url"),
                     )
                 except Exception:
                     logger.warning("Failed to register track in store: %s/%s", provider, track_id)
@@ -1741,10 +1750,15 @@ class XMPDaemon:
         secs = seconds % 60
         return f"{mins}:{secs:02d}"
 
-    def _get_track_info(self, provider: str, track_id: str) -> dict[str, str]:
+    def _get_track_info(self, provider: str, track_id: str) -> dict[str, Any]:
         """Get track metadata via the provider registry.
 
-        Falls back to "Unknown" if the provider or metadata lookup fails.
+        Returns title and artist as strings (falling back to "Unknown" if the
+        provider lookup fails) plus the optional album/duration_seconds/art_url
+        fields the provider supplies. The optional fields are needed so the
+        proxy's FLAC patcher can read duration_seconds back out of TrackStore
+        when streaming DASH; dropping them here is why many Tidal rows still
+        show 0:00 in mpc.
         """
         prov = self.provider_registry.get(provider)
         if prov is not None:
@@ -1754,10 +1768,19 @@ class XMPDaemon:
                     return {
                         "title": meta.title or "Unknown",
                         "artist": meta.artist or "Unknown Artist",
+                        "album": meta.album,
+                        "duration_seconds": meta.duration_seconds,
+                        "art_url": meta.art_url,
                     }
             except Exception as e:
                 logger.warning("Failed to get track info for %s/%s: %s", provider, track_id, e)
-        return {"title": "Unknown", "artist": "Unknown Artist"}
+        return {
+            "title": "Unknown",
+            "artist": "Unknown Artist",
+            "album": None,
+            "duration_seconds": None,
+            "art_url": None,
+        }
 
     def _signal_handler(self, signum: int, frame: Any) -> None:
         """Handle signals.

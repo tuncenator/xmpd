@@ -303,6 +303,46 @@ class TestCmdRadio:
         assert response["success"] is True
         yt.get_radio.assert_called_once_with("abc12345678", limit=25)
 
+    def test_cmd_radio_forwards_duration_to_track_store(self, tmp_path):
+        """Radio tracks must land in TrackStore with duration_seconds populated;
+        otherwise the FLAC patcher in stream_proxy can't restore track length."""
+        tidal = _make_tidal_provider()
+        tidal.get_radio.return_value = [
+            Track(
+                provider="tidal",
+                track_id="555",
+                metadata=TrackMetadata(
+                    title="Sandman",
+                    artist="Common Saints",
+                    album="Cosmic Surf",
+                    duration_seconds=233,
+                    art_url="https://example/art.jpg",
+                ),
+            ),
+        ]
+        tidal.get_track_metadata.return_value = TrackMetadata(
+            title="Seed",
+            artist="Seed Artist",
+            album=None,
+            duration_seconds=210,
+            art_url=None,
+        )
+        tidal.get_favorites.return_value = []
+        daemon = _make_daemon(tmp_path, registry={"tidal": tidal})
+        daemon.mpd_client.create_or_replace_playlist = Mock()
+        response = daemon._cmd_radio("tidal", "999")
+        assert response["success"] is True
+        # Find the add_track call for the radio entry (555); seed (999) may
+        # also be added but is keyed by its own track_id.
+        radio_calls = [
+            c for c in daemon.track_store.add_track.call_args_list
+            if c.kwargs.get("track_id") == "555"
+        ]
+        assert len(radio_calls) == 1
+        assert radio_calls[0].kwargs["duration_seconds"] == 233
+        assert radio_calls[0].kwargs["album"] == "Cosmic Surf"
+        assert radio_calls[0].kwargs["art_url"] == "https://example/art.jpg"
+
     def test_cmd_radio_explicit_provider(self, tmp_path):
         yt = _make_yt_provider()
         yt.get_radio.return_value = [
@@ -546,6 +586,9 @@ class TestCmdPlayQueue:
             stream_url=None,
             title="Test Song",
             artist="Test Artist",
+            album=None,
+            duration_seconds=180,
+            art_url=None,
         )
 
     def test_cmd_play_registers_track_before_mpd_add(self, tmp_path):
@@ -599,6 +642,9 @@ class TestCmdPlayQueue:
             stream_url=None,
             title="Q Song",
             artist="Q Artist",
+            album=None,
+            duration_seconds=200,
+            art_url=None,
         )
 
     def test_cmd_queue_registers_track_before_mpd_add(self, tmp_path):
@@ -624,6 +670,59 @@ class TestCmdPlayQueue:
         daemon.mpd_client._client.addid.side_effect = _addid
         daemon._cmd_queue("yt", "qorder456")
         assert call_order.index("add_track") < call_order.index("mpd_add")
+
+    def test_cmd_play_forwards_duration_album_art(self, tmp_path):
+        """Provider duration/album/art must reach TrackStore so the FLAC
+        STREAMINFO patcher can read duration back out at stream time."""
+        tidal = _make_tidal_provider()
+        tidal.get_track_metadata.return_value = TrackMetadata(
+            title="Some Track",
+            artist="Some Artist",
+            album="Some Album",
+            duration_seconds=279,
+            art_url="https://example/cover.jpg",
+        )
+        daemon = _make_daemon(tmp_path, registry={"tidal": tidal})
+        daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
+        daemon.mpd_client._client = Mock()
+        daemon.mpd_client._client.addid.return_value = "1"
+        daemon._cmd_play("tidal", "100126918")
+        daemon.track_store.add_track.assert_called_once_with(
+            provider="tidal",
+            track_id="100126918",
+            stream_url=None,
+            title="Some Track",
+            artist="Some Artist",
+            album="Some Album",
+            duration_seconds=279,
+            art_url="https://example/cover.jpg",
+        )
+
+    def test_cmd_queue_forwards_duration_album_art(self, tmp_path):
+        """Same coverage for the queue path."""
+        tidal = _make_tidal_provider()
+        tidal.get_track_metadata.return_value = TrackMetadata(
+            title="Q",
+            artist="QA",
+            album="QAlb",
+            duration_seconds=312,
+            art_url="https://example/q.jpg",
+        )
+        daemon = _make_daemon(tmp_path, registry={"tidal": tidal})
+        daemon.proxy_config = {"enabled": True, "host": "localhost", "port": 6602}
+        daemon.mpd_client._client = Mock()
+        daemon.mpd_client._client.addid.return_value = "2"
+        daemon._cmd_queue("tidal", "200000000")
+        daemon.track_store.add_track.assert_called_once_with(
+            provider="tidal",
+            track_id="200000000",
+            stream_url=None,
+            title="Q",
+            artist="QA",
+            album="QAlb",
+            duration_seconds=312,
+            art_url="https://example/q.jpg",
+        )
 
 
 # ---------------------------------------------------------------------------
