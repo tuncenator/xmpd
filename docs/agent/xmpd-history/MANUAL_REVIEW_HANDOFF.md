@@ -260,6 +260,6 @@ Append one section per round:
 | This handoff doc | `docs/agent/xmpd-history/MANUAL_REVIEW_HANDOFF.md` |
 | Round-by-round log | `docs/agent/xmpd-history/MANUAL_REVIEW_LOG.md` (you create it on Round 1) |
 | Status (with the gate banner) | `docs/agent/xmpd-history/STATUS.md` |
-| Pre-commit hook redaction tags | `[LABEL]` form for hostnames in agent docs (see existing examples) |
+| Pre-commit hook redaction tags | `&lt;{LABEL:value}&gt;` form for hostnames in agent docs (see existing examples) |
 
 When in doubt, ask the user. When the user is in doubt, suggest reading a specific file and re-asking. Don't push until they say PASS.
