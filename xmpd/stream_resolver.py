@@ -10,11 +10,11 @@ import concurrent.futures
 import json
 import logging
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 import yt_dlp
 
@@ -51,12 +51,17 @@ class StreamResolver:
             print(f"Stream URL: {url}")
     """
 
-    def __init__(self, cache_hours: int = 5, should_stop_callback: Optional[callable] = None, cache_file: Optional[str] = None):
+    def __init__(
+        self,
+        cache_hours: int = 5,
+        should_stop_callback: Callable[[], bool] | None = None,
+        cache_file: str | None = None,
+    ):
         """Initialize resolver with cache duration.
 
         Args:
             cache_hours: How long to cache URLs before re-extraction (default: 5 hours)
-            should_stop_callback: Optional callback that returns True when resolution should be cancelled.
+            should_stop_callback: Callback returning True when resolution should be cancelled.
             cache_file: Optional path to JSON file for persistent cache storage.
         """
         self._cache: dict[str, CachedURL] = {}
@@ -71,7 +76,7 @@ class StreamResolver:
         logger.info(f"StreamResolver initialized with {cache_hours}h cache" +
                    (f", persistent cache at {self._cache_file}" if self._cache_file else ""))
 
-    def resolve_video_id(self, video_id: str) -> Optional[str]:
+    def resolve_video_id(self, video_id: str) -> str | None:
         """Get streamable audio URL for a YouTube video ID.
 
         This method first checks the cache for a valid (non-expired) URL. If not found
@@ -144,7 +149,9 @@ class StreamResolver:
             while pending_futures:
                 # Check if we should stop (e.g., daemon shutting down)
                 if self.should_stop():
-                    logger.info(f"Stream resolution cancelled after {completed}/{len(video_ids)} videos")
+                    logger.info(
+                        f"Stream resolution cancelled after {completed}/{len(video_ids)} videos"
+                    )
                     # Cancel all remaining futures
                     for f in pending_futures:
                         f.cancel()
@@ -183,7 +190,7 @@ class StreamResolver:
 
         return results
 
-    def _extract_url(self, video_id: str) -> Optional[str]:
+    def _extract_url(self, video_id: str) -> str | None:
         """Extract stream URL using yt-dlp.
 
         This method uses yt-dlp to fetch video information and extract the direct
@@ -199,7 +206,13 @@ class StreamResolver:
             # Prefer direct HTTPS URLs over HLS/DASH for proxy compatibility
             # Format priority: opus in webm (251) > m4a audio (140) > any audio
             # Explicitly exclude HLS/DASH manifests (m3u8_native, dash protocols)
-            'format': 'bestaudio[protocol^=https][protocol!=m3u8_native][protocol!=http_dash_segments][ext=webm]/bestaudio[protocol^=https][protocol!=m3u8_native][protocol!=http_dash_segments]/bestaudio[protocol!=m3u8_native]/bestaudio/best',
+            'format': (
+                'bestaudio[protocol^=https][protocol!=m3u8_native]'
+                '[protocol!=http_dash_segments][ext=webm]/'
+                'bestaudio[protocol^=https][protocol!=m3u8_native]'
+                '[protocol!=http_dash_segments]/'
+                'bestaudio[protocol!=m3u8_native]/bestaudio/best'
+            ),
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
@@ -208,6 +221,11 @@ class StreamResolver:
             'skip_download': True,
             # Prefer non-HLS formats for direct streaming
             'prefer_free_formats': True,
+            # Firefox cookies bypass YouTube's "not a bot" wall.
+            'cookiesfrombrowser': ('firefox',),
+            # Allow yt-dlp to fetch the EJS JS-challenge solver on demand;
+            # without it YouTube returns only image storyboards.
+            'remote_components': ['ejs:github'],
         }
 
         video_url = f'https://youtube.com/watch?v={video_id}'
@@ -311,7 +329,9 @@ class StreamResolver:
             Dict with cache_size and expired_count
         """
         total = len(self._cache)
-        expired = sum(1 for video_id in list(self._cache.keys()) if not self._is_cache_valid(video_id))
+        expired = sum(
+            1 for video_id in list(self._cache.keys()) if not self._is_cache_valid(video_id)
+        )
 
         return {
             'cache_size': total,
@@ -329,7 +349,7 @@ class StreamResolver:
             return
 
         try:
-            with open(self._cache_file, 'r') as f:
+            with open(self._cache_file) as f:
                 cache_data = json.load(f)
 
             loaded = 0
@@ -351,7 +371,10 @@ class StreamResolver:
                 )
                 loaded += 1
 
-            logger.info(f"Loaded {loaded} cached URLs from {self._cache_file} ({expired} expired entries discarded)")
+            logger.info(
+                f"Loaded {loaded} cached URLs from {self._cache_file} "
+                f"({expired} expired entries discarded)"
+            )
 
         except Exception as e:
             logger.warning(f"Failed to load cache from {self._cache_file}: {e}")
