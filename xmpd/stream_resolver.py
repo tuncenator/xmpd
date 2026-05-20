@@ -208,8 +208,6 @@ class StreamResolver:
             'skip_download': True,
             # Prefer non-HLS formats for direct streaming
             'prefer_free_formats': True,
-            # Use Android client to get direct URLs instead of HLS manifests
-            'extractor_args': {'youtube': {'player_client': ['android']}},
         }
 
         video_url = f'https://youtube.com/watch?v={video_id}'
