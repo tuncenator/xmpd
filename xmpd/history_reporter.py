@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from mpd import ConnectionError as MPDLibConnectionError
 from mpd import MPDClient as MPDClientBase
 
 from xmpd.exceptions import MPDConnectionError
@@ -48,6 +49,17 @@ class HistoryReporter:
         history_syncer: Optional HistorySyncer for bidirectional sync.
         executor: Optional ThreadPoolExecutor for background sync tasks.
     """
+
+    # Reconnect tuning for the reporter's dedicated MPD link. A missing or
+    # restarting MPD is an expected, transient condition (the daemon depends
+    # on an external MPD server), so failures back off exponentially from
+    # _RETRY_BASE_SECONDS up to _RETRY_MAX_SECONDS instead of hammering every
+    # few seconds.
+    _RETRY_BASE_SECONDS = 5.0
+    _RETRY_MAX_SECONDS = 60.0
+    # Re-emit a WARNING heartbeat every this many consecutive failures so a
+    # prolonged outage stays visible in the log without flooding it on each try.
+    _RETRY_REWARN_EVERY = 60
 
     def __init__(
         self,
@@ -88,17 +100,73 @@ class HistoryReporter:
     # ------------------------------------------------------------------
 
     def run(self, shutdown_event: threading.Event) -> None:
-        """Main idle loop.  Blocks until *shutdown_event* is set."""
+        """Main idle loop.  Blocks until *shutdown_event* is set.
+
+        A missing or restarting MPD is expected, not a crash: connection
+        failures are logged at WARNING once per outage (with a periodic
+        heartbeat), retried with exponential backoff up to
+        :attr:`_RETRY_MAX_SECONDS`, and a recovery is announced at INFO. Only
+        genuinely unexpected errors get a loud ERROR-level traceback.
+        """
+        consecutive_failures = 0
         while not shutdown_event.is_set():
             try:
                 self._connect()
+                if consecutive_failures:
+                    logger.info(
+                        "History reporter reconnected to MPD after %d failed attempt(s)",
+                        consecutive_failures,
+                    )
+                    consecutive_failures = 0
                 self._idle_loop(shutdown_event)
+            except (MPDConnectionError, MPDLibConnectionError, OSError) as e:
+                # MPD is down or restarting -- expected and transient. Keep the
+                # log readable and back off so a long outage doesn't flood it.
+                consecutive_failures += 1
+                self._log_connect_failure(e, consecutive_failures)
+                self._disconnect()
+                if shutdown_event.wait(timeout=self._retry_delay(consecutive_failures)):
+                    break
             except Exception as e:
                 logger.error("History reporter error: %s", e, exc_info=True)
                 self._disconnect()
-                if shutdown_event.wait(timeout=5):
+                if shutdown_event.wait(timeout=self._RETRY_BASE_SECONDS):
                     break
         self._disconnect()
+
+    def _log_connect_failure(self, exc: Exception, consecutive_failures: int) -> None:
+        """Log a reporter->MPD connection failure without flooding.
+
+        First failure of an outage is a WARNING; a heartbeat re-warns every
+        :attr:`_RETRY_REWARN_EVERY` attempts so long outages stay visible; the
+        retries in between are demoted to DEBUG.
+        """
+        if consecutive_failures == 1:
+            logger.warning(
+                "History reporter cannot reach MPD at %s (%s); "
+                "retrying in the background until it returns",
+                self._mpd_socket_path,
+                exc,
+            )
+        elif consecutive_failures % self._RETRY_REWARN_EVERY == 0:
+            logger.warning(
+                "History reporter still cannot reach MPD at %s after %d attempts (%s)",
+                self._mpd_socket_path,
+                consecutive_failures,
+                exc,
+            )
+        else:
+            logger.debug(
+                "History reporter MPD reconnect attempt %d failed: %s",
+                consecutive_failures,
+                exc,
+            )
+
+    def _retry_delay(self, consecutive_failures: int) -> float:
+        """Exponential backoff (doubling from the base) capped at the max."""
+        exp = min(consecutive_failures - 1, 20)  # cap the shift, avoid overflow
+        delay = self._RETRY_BASE_SECONDS * (2**exp)
+        return min(delay, self._RETRY_MAX_SECONDS)
 
     # ------------------------------------------------------------------
     # Connection helpers
