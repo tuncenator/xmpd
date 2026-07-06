@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.3.0] - 2026-07-06
+
+### Fixed
+
+- YouTube Music playlist and favorites sync was fully broken with `Unable to find 'twoColumnBrowseResultsRenderer'`. The Firefox cookie extractor concatenated every `*.youtube.com` cookie (~140 `ST-*` session tokens, ~97 KB) into the `browser.json` Cookie header, so YouTube replied HTTP 413 and served the logged-out single-column layout that ytmusicapi cannot parse. `build_browser_json` now emits only the ~18 auth-relevant cookies (~1.7 KB header).
+- `stream_resolver`: yt-dlp 2026.3 broke all YouTube resolves ("Sign in to confirm you're not a bot"). Dropped the android `player_client` pin and now require cookies plus the EJS challenge solver.
+- `history_reporter`: quieted and backed off the reporter's MPD reconnect attempts.
+
+### Added
+
+- YouTube auto-auth is wired back into the daemon (dropped in the 2.2.0 multi-provider refactor): it refreshes `browser.json` from the configured Firefox profile at startup, on a periodic loop (`yt.auto_auth.refresh_interval_hours`), and reactively before a sync when the session has died. Controlled by `yt.auto_auth`; the Tidal path is unaffected.
+
+### Changed
+
+- `is_authenticated()` now probes `get_account_info()` instead of `get_library_playlists()` (which returned an empty list for a rejected session, masking a logged-out state). A cookie refresh verifies the session is live before reporting success, so it can no longer write and accept a dead `browser.json`.
+
 ## [2.1.5] - 2026-05-14
 
 ### Fixed
@@ -25,7 +41,7 @@
 
 - `_probe_pulse_sink` now reports the resolved sink name (previously fell back to the system default sink, a latent bug exposed by the pulse-output architecture).
 
-## [Unreleased] - 2026-04-27
+## [2.2.0] - 2026-05-20
 
 ### Added
 

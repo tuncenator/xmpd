@@ -28,6 +28,35 @@ _INSTALL_IDS = {
 _REQUIRED_COOKIES = {"SID", "HSID", "SSID"}
 _SAPISID_COOKIES = {"SAPISID", "__Secure-3PAPISID"}
 
+# Only these cookies go into the browser.json Cookie header. A Firefox profile
+# accumulates hundreds of *.youtube.com cookies (~140 ST-* session tokens,
+# experiment flags, etc.); concatenating all of them yields a ~100 KB Cookie
+# header that YouTube rejects with HTTP 413 Request Entity Too Large, which
+# ytmusicapi later surfaces as an opaque JSON decode error. This is the minimal
+# set a real authenticated music.youtube.com request carries.
+_AUTH_COOKIE_NAMES = {
+    "SID",
+    "HSID",
+    "SSID",
+    "APISID",
+    "SAPISID",
+    "__Secure-1PSID",
+    "__Secure-3PSID",
+    "__Secure-1PAPISID",
+    "__Secure-3PAPISID",
+    "__Secure-1PSIDTS",
+    "__Secure-3PSIDTS",
+    "__Secure-1PSIDCC",
+    "__Secure-3PSIDCC",
+    "SIDCC",
+    "LOGIN_INFO",
+    "VISITOR_INFO1_LIVE",
+    "VISITOR_PRIVACY_METADATA",
+    "__Secure-YEC",
+    "PREF",
+    "YSC",
+}
+
 _ORIGIN = "https://music.youtube.com"
 
 
@@ -312,7 +341,19 @@ class FirefoxCookieExtractor:
                 "Cookie validation failed: required cookies missing or expired"
             )
 
-        cookie_string = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+        # Keep only auth-relevant cookies, deduped by name, so the Cookie header
+        # stays well under YouTube's request-size limit (see _AUTH_COOKIE_NAMES).
+        selected: dict[str, dict] = {}
+        for c in cookies:
+            if c["name"] in _AUTH_COOKIE_NAMES:
+                selected.setdefault(c["name"], c)
+        cookie_string = "; ".join(f"{c['name']}={c['value']}" for c in selected.values())
+        logger.info(
+            "Selected %d/%d cookies for browser.json auth header (%d bytes)",
+            len(selected),
+            len(cookies),
+            len(cookie_string),
+        )
 
         # Find SAPISID for authorization header
         sapisid = None

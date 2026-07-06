@@ -20,12 +20,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from xmpd.auth.ytmusic_cookie import FirefoxCookieExtractor
 from xmpd.config import get_config_dir, load_config
-from xmpd.exceptions import MPDConnectionError
+from xmpd.exceptions import CookieExtractionError, MPDConnectionError
 from xmpd.history_reporter import HistoryReporter
 from xmpd.history_store import HistoryStore
 from xmpd.history_syncer import HistorySyncer
 from xmpd.mpd_client import MPDClient
+from xmpd.notify import send_notification
 from xmpd.providers import build_registry
 from xmpd.providers.base import Provider
 from xmpd.rating import RatingAction, RatingManager, apply_to_provider
@@ -209,6 +211,25 @@ class XMPDaemon:
         self._proxy_loop: asyncio.AbstractEventLoop | None = None
         self._proxy_shutdown_event: asyncio.Event | None = None
 
+        # ----- Auto-auth (YouTube: pull cookies straight from Firefox) -----
+        yt_section = self.config.get("yt", {})
+        self.auto_auth_config: dict[str, Any] = (
+            yt_section.get("auto_auth", {}) if isinstance(yt_section, dict) else {}
+        )
+        self._auto_auth_enabled = bool(self.auto_auth_config.get("enabled", False))
+        self._auto_auth_thread: threading.Thread | None = None
+        self._auto_auth_shutdown = threading.Event()
+        self._last_reactive_refresh: float = 0.0
+        self._reactive_refresh_cooldown: float = 300.0  # 5 minutes
+        if self._auto_auth_enabled:
+            logger.info(
+                "Auto-auth enabled (browser: %s, refresh every %sh)",
+                self.auto_auth_config.get("browser", "firefox-dev"),
+                self.auto_auth_config.get("refresh_interval_hours", 12),
+            )
+        else:
+            logger.info("Auto-auth disabled")
+
         # Liked IDs cache for search-json like-state population
         self._liked_ids_cache: set[str] = set()
         self._liked_ids_cache_time: float = 0.0
@@ -317,6 +338,20 @@ class XMPDaemon:
             except Exception as e:
                 logger.warning("history startup_nudge failed: %s", e)
 
+        # Refresh YouTube auth straight from Firefox before the first sync, then
+        # keep it fresh on a schedule.
+        if self._auto_auth_enabled:
+            logger.info("Auto-auth: refreshing YouTube session from Firefox at startup...")
+            if self._attempt_auto_refresh():
+                logger.info("Auto-auth: startup refresh succeeded")
+            else:
+                logger.warning("Auto-auth: startup refresh failed")
+                self._notify_refresh_failed()
+            self._auto_auth_thread = threading.Thread(
+                target=self._auto_auth_loop, name="auto-auth", daemon=True
+            )
+            self._auto_auth_thread.start()
+
         logger.info("xmpd daemon started successfully")
 
         # Perform initial sync immediately
@@ -358,6 +393,13 @@ class XMPDaemon:
                 logger.info("history sync executor shutdown")
             except Exception as e:
                 logger.warning("history executor shutdown failed: %s", e)
+
+        # Signal auto-auth refresh thread to stop
+        self._auto_auth_shutdown.set()
+        if self._auto_auth_thread is not None and self._auto_auth_thread.is_alive():
+            self._auto_auth_thread.join(timeout=5)
+            if self._auto_auth_thread.is_alive():
+                logger.warning("Auto-auth thread did not stop in time")
 
         # Signal history reporter to stop
         if self._history_thread is not None:
@@ -535,12 +577,141 @@ class XMPDaemon:
         finally:
             logger.info("History reporting stopped")
 
+    # -----------------------------------------------------------------------
+    # Auto-auth: refresh YouTube's browser.json from the Firefox cookie store
+    # -----------------------------------------------------------------------
+
+    def _attempt_auto_refresh(self) -> bool:
+        """Extract fresh YouTube cookies from Firefox and re-init the yt client.
+
+        Writes browser.json atomically, reloads the provider, then verifies the
+        session is actually live (cookie presence alone does not prove YouTube
+        still honors the session). Returns True only on a verified live session.
+        """
+        yt = self.provider_registry.get("yt")
+        if yt is None or not hasattr(yt, "refresh_auth"):
+            logger.warning("Auto-auth: no yt provider available to refresh")
+            return False
+
+        browser_json = get_config_dir() / "browser.json"
+        try:
+            extractor = FirefoxCookieExtractor(
+                browser=self.auto_auth_config.get("browser", "firefox-dev"),
+                profile=self.auto_auth_config.get("profile"),
+                container=self.auto_auth_config.get("container"),
+            )
+            # Write to a temp file first, then rename for atomicity.
+            tmp_path = browser_json.with_suffix(".json.tmp")
+            extractor.build_browser_json(tmp_path)
+            tmp_path.rename(browser_json)
+        except CookieExtractionError as e:
+            logger.error("Auto-auth: cookie extraction failed: %s", e)
+            return self._record_refresh_failure()
+        except Exception as e:
+            logger.error("Auto-auth: cookie extraction crashed: %s", e, exc_info=True)
+            return self._record_refresh_failure()
+
+        if not yt.refresh_auth(browser_json):
+            logger.error("Auto-auth: client re-init failed after cookie refresh")
+            return self._record_refresh_failure()
+
+        # Cookies were written, but confirm YouTube accepts the session. A
+        # signed-out Firefox profile still yields present, unexpired cookies
+        # that validate locally yet are rejected server-side.
+        if hasattr(yt, "has_live_session") and not yt.has_live_session():
+            logger.error(
+                "Auto-auth: cookies refreshed but YouTube session is not signed in "
+                "(sign into music.youtube.com in Firefox)"
+            )
+            return self._record_refresh_failure()
+
+        self.state["last_auto_refresh"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        self.state["auto_refresh_failures"] = 0
+        self._save_state()
+        logger.info(
+            "Auto-auth: YouTube session refreshed from Firefox (%s)",
+            self.auto_auth_config.get("browser", "firefox-dev"),
+        )
+        return True
+
+    def _record_refresh_failure(self) -> bool:
+        """Increment the persisted failure counter and return False."""
+        self.state["auto_refresh_failures"] = self.state.get("auto_refresh_failures", 0) + 1
+        self._save_state()
+        return False
+
+    def _notify_refresh_failed(self) -> None:
+        """Desktop-notify the user that auto cookie refresh failed."""
+        send_notification(
+            "xmpd: YouTube auth refresh failed",
+            "Could not refresh cookies from Firefox. Open music.youtube.com in "
+            "Firefox Developer Edition and make sure you are signed in.",
+            urgency="normal",
+        )
+
+    def _auto_auth_loop(self) -> None:
+        """Background thread: periodically refresh cookies from Firefox."""
+        logger.info("Starting auto-auth refresh loop")
+        interval_hours = self.auto_auth_config.get("refresh_interval_hours", 12)
+        interval_seconds = max(1.0, float(interval_hours) * 3600)
+
+        try:
+            while self._running:
+                # Wait for the interval, waking early on shutdown.
+                if self._auto_auth_shutdown.wait(timeout=interval_seconds):
+                    break
+                if not self._running:
+                    break
+
+                logger.info("Proactive auto-auth refresh triggered")
+                if self._attempt_auto_refresh():
+                    logger.info("Proactive auto-auth refresh succeeded")
+                else:
+                    logger.warning("Proactive auto-auth refresh failed")
+                    self._notify_refresh_failed()
+        except Exception as e:
+            logger.error("Error in auto-auth loop: %s", e, exc_info=True)
+
+        logger.info("Auto-auth refresh loop stopped")
+
+    def _maybe_reactive_refresh(self) -> None:
+        """Refresh from Firefox if the YouTube session has gone dead mid-run.
+
+        Called before each sync. Rate-limited by a cooldown so a persistently
+        broken session does not hammer extraction every cycle.
+        """
+        if not self._auto_auth_enabled:
+            return
+        yt = self.provider_registry.get("yt")
+        if yt is None or not hasattr(yt, "has_live_session"):
+            return
+        now = time.time()
+        if now - self._last_reactive_refresh < self._reactive_refresh_cooldown:
+            return
+        try:
+            live = yt.has_live_session()
+        except Exception:
+            live = False
+        if live:
+            return
+
+        self._last_reactive_refresh = now
+        logger.info("Auto-auth: YouTube session is not live, refreshing from Firefox")
+        if self._attempt_auto_refresh():
+            logger.info("Auto-auth: reactive refresh succeeded")
+        else:
+            logger.warning("Auto-auth: reactive refresh failed")
+            self._notify_refresh_failed()
+
     def _perform_sync(self) -> None:
         """Execute sync and update state."""
         # Skip if sync already in progress
         if self._sync_in_progress:
             logger.warning("Sync already in progress, skipping")
             return
+
+        # Ensure the YouTube session is live before syncing (auto-auth only).
+        self._maybe_reactive_refresh()
 
         with self._sync_lock:
             self._sync_in_progress = True
@@ -838,8 +1009,7 @@ class XMPDaemon:
             "last_sync_success": last_sync_result.get("success", False),
             "auth_valid": auth_valid,
             "auth_error": auth_error,
-            # Legacy fields retained for backward compat (auto-auth removed)
-            "auto_auth_enabled": False,
+            "auto_auth_enabled": self._auto_auth_enabled,
             "last_auto_refresh": self.state.get("last_auto_refresh"),
             "auto_refresh_failures": self.state.get("auto_refresh_failures", 0),
         }

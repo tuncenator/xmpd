@@ -2,9 +2,11 @@
 
 import json
 import signal
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 from xmpd.daemon import XMPDaemon
+from xmpd.exceptions import CookieExtractionError
 from xmpd.providers.base import Playlist as ProviderPlaylist
 from xmpd.providers.base import Track, TrackMetadata
 from xmpd.sync_engine import SyncResult
@@ -221,7 +223,7 @@ class TestSocketCommands:
         assert response["last_sync"] == "2025-10-17T12:00:00Z"
         assert response["playlists_synced"] == 5
         assert response["auth_valid"] is True
-        assert response["auto_auth_enabled"] is False  # removed
+        assert response["auto_auth_enabled"] is False  # no yt.auto_auth in base config
 
     def test_cmd_list_returns_playlists(self, tmp_path):
         yt = _make_yt_provider()
@@ -1251,3 +1253,113 @@ class TestCmdHistoryJson:
         assert "last_played_at" in rows[0]
 
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# Auto-auth: refresh YouTube browser.json straight from Firefox
+# ---------------------------------------------------------------------------
+
+
+class TestAutoAuthRefresh:
+    _AUTO_AUTH_CFG = {
+        "yt": {"enabled": True, "auto_auth": {"enabled": True, "browser": "firefox-dev"}}
+    }
+
+    def _enabled_daemon(self, tmp_path, yt):
+        return _make_daemon(tmp_path, registry={"yt": yt}, config=self._AUTO_AUTH_CFG)
+
+    def test_enabled_flag_from_yt_config(self, tmp_path):
+        daemon = self._enabled_daemon(tmp_path, _make_yt_provider())
+        assert daemon._auto_auth_enabled is True
+
+    def test_attempt_refresh_success(self, tmp_path):
+        config_dir = tmp_path / "config"
+        yt = _make_yt_provider()
+        yt.refresh_auth.return_value = True
+        yt.has_live_session.return_value = True
+        daemon = self._enabled_daemon(tmp_path, yt)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.FirefoxCookieExtractor") as mock_ext_cls,
+        ):
+            mock_ext_cls.return_value.build_browser_json.side_effect = (
+                lambda p: Path(p).write_text("{}")
+            )
+            assert daemon._attempt_auto_refresh() is True
+
+        yt.refresh_auth.assert_called_once()
+        assert daemon.state["auto_refresh_failures"] == 0
+        assert daemon.state["last_auto_refresh"] is not None
+        assert (config_dir / "browser.json").exists()
+
+    def test_attempt_refresh_extraction_failure(self, tmp_path):
+        config_dir = tmp_path / "config"
+        yt = _make_yt_provider()
+        daemon = self._enabled_daemon(tmp_path, yt)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.FirefoxCookieExtractor") as mock_ext_cls,
+        ):
+            mock_ext_cls.return_value.build_browser_json.side_effect = CookieExtractionError(
+                "no cookies"
+            )
+            assert daemon._attempt_auto_refresh() is False
+
+        yt.refresh_auth.assert_not_called()
+        assert daemon.state["auto_refresh_failures"] == 1
+
+    def test_attempt_refresh_dead_session_counts_as_failure(self, tmp_path):
+        """Cookies extracted and client reinit OK, but YouTube rejects the
+        session -> must be treated as failure, not silently accepted."""
+        config_dir = tmp_path / "config"
+        yt = _make_yt_provider()
+        yt.refresh_auth.return_value = True
+        yt.has_live_session.return_value = False
+        daemon = self._enabled_daemon(tmp_path, yt)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.FirefoxCookieExtractor") as mock_ext_cls,
+        ):
+            mock_ext_cls.return_value.build_browser_json.side_effect = (
+                lambda p: Path(p).write_text("{}")
+            )
+            assert daemon._attempt_auto_refresh() is False
+
+        assert daemon.state["auto_refresh_failures"] == 1
+        assert daemon.state["last_auto_refresh"] is None
+
+    def test_reactive_refresh_skips_when_live(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.has_live_session.return_value = True
+        daemon = self._enabled_daemon(tmp_path, yt)
+        with patch.object(daemon, "_attempt_auto_refresh") as m:
+            daemon._maybe_reactive_refresh()
+            m.assert_not_called()
+
+    def test_reactive_refresh_triggers_when_dead(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.has_live_session.return_value = False
+        daemon = self._enabled_daemon(tmp_path, yt)
+        with patch.object(daemon, "_attempt_auto_refresh", return_value=True) as m:
+            daemon._maybe_reactive_refresh()
+            m.assert_called_once()
+
+    def test_reactive_refresh_respects_cooldown(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.has_live_session.return_value = False
+        daemon = self._enabled_daemon(tmp_path, yt)
+        with patch.object(daemon, "_attempt_auto_refresh", return_value=True) as m:
+            daemon._maybe_reactive_refresh()
+            daemon._maybe_reactive_refresh()  # within cooldown -> skipped
+            assert m.call_count == 1
+
+    def test_reactive_refresh_noop_when_disabled(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.has_live_session.return_value = False
+        daemon = _make_daemon(tmp_path, registry={"yt": yt})  # no yt.auto_auth
+        with patch.object(daemon, "_attempt_auto_refresh") as m:
+            daemon._maybe_reactive_refresh()
+            m.assert_not_called()

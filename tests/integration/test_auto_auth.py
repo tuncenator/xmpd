@@ -201,6 +201,29 @@ class TestFullExtractionPipeline:
         for name in _COOKIE_NAMES:
             assert f"{name}=" in cookie_str, f"Missing cookie: {name}"
 
+    def test_junk_cookies_excluded_from_header(self, tmp_path: Path) -> None:
+        """Non-auth cookies (ST-*, experiments) must be dropped so the Cookie
+        header stays small; dumping them all makes YouTube return HTTP 413."""
+        # A real profile carries ~140 large ST-* session-token cookies.
+        junk = [
+            {"name": f"ST-{i:04d}", "value": "x" * 1500, "host": ".youtube.com"}
+            for i in range(140)
+        ]
+        junk.append({"name": "CONSENT", "value": "y" * 200, "host": ".youtube.com"})
+        ff_dir = _setup_firefox_dir(tmp_path, dev_extra_cookies=junk)
+        ext = _make_extractor(ff_dir, browser="firefox-dev")
+
+        output = tmp_path / "browser.json"
+        ext.build_browser_json(output)
+        cookie_str = json.loads(output.read_text())["cookie"]
+
+        # Junk excluded, real auth cookies kept, header small enough for YouTube.
+        assert "ST-0000=" not in cookie_str
+        assert "CONSENT=" not in cookie_str
+        assert "SAPISID=" in cookie_str
+        assert "__Secure-3PSID=" in cookie_str
+        assert len(cookie_str) < 8192
+
     def test_pipeline_with_standard_firefox(self, tmp_path: Path) -> None:
         ff_dir = _setup_firefox_dir(tmp_path)
         ext = _make_extractor(ff_dir, browser="firefox")
@@ -536,11 +559,7 @@ class TestDaemonStatusAutoAuth:
     def test_status_includes_auto_auth_fields_when_enabled(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Verify the daemon's status response shape includes auto-auth fields.
-
-        Post-Phase-8: auto_auth_enabled is always False (auto-auth loop removed),
-        but the fields remain for backward compat.
-        """
+        """Verify the daemon reports auto-auth as enabled when yt.auto_auth is on."""
         from unittest.mock import MagicMock, patch
 
         mock_config = {
@@ -561,12 +580,15 @@ class TestDaemonStatusAutoAuth:
             "radio_playlist_limit": 25,
             "playlist_format": "m3u",
             "mpd_music_directory": "/tmp/music",
-            "auto_auth": {
+            "yt": {
                 "enabled": True,
-                "browser": "firefox-dev",
-                "container": None,
-                "profile": None,
-                "refresh_interval_hours": 12,
+                "auto_auth": {
+                    "enabled": True,
+                    "browser": "firefox-dev",
+                    "container": None,
+                    "profile": None,
+                    "refresh_interval_hours": 12,
+                },
             },
         }
 
@@ -590,8 +612,7 @@ class TestDaemonStatusAutoAuth:
             daemon = XMPDaemon()
             status = daemon._cmd_status()
 
-            # Fields present for backward compat
             assert "auto_auth_enabled" in status
-            assert status["auto_auth_enabled"] is False  # auto-auth removed in Phase 8
+            assert status["auto_auth_enabled"] is True
             assert "auto_refresh_failures" in status
             assert "last_auto_refresh" in status

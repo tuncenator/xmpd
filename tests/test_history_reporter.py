@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from xmpd.exceptions import MPDConnectionError
 from xmpd.history_reporter import PROXY_URL_RE, HistoryReporter
 from xmpd.history_store import HistoryStore
 from xmpd.history_syncer import HistorySyncer
@@ -705,3 +706,109 @@ class TestHistoryWriteBlock:
         played_at = rows[0][0]
         parsed = datetime.fromisoformat(played_at)
         assert parsed.tzinfo is not None
+
+
+# ---------------------------------------------------------------------------
+# Connection resiliency: MPD down / restarting (run loop)
+# ---------------------------------------------------------------------------
+
+
+def _stop_wait_after(n: int):
+    """Return a fake Event.wait that returns True (stop) on the *n*-th call."""
+    calls = {"n": 0}
+
+    def fake_wait(timeout=None):
+        calls["n"] += 1
+        return calls["n"] >= n
+
+    return fake_wait
+
+
+class TestRunConnectionResiliency:
+    def test_connect_failure_is_warning_not_error_traceback(self, caplog):
+        """A refused MPD connection is expected: WARNING once, no ERROR/traceback."""
+        reporter = _make_reporter()
+        reporter._connect = MagicMock(
+            side_effect=MPDConnectionError("connect failed: [Errno 111] Connection refused")
+        )
+        reporter._retry_delay = MagicMock(return_value=0)
+        ev = threading.Event()
+        ev.wait = _stop_wait_after(3)  # type: ignore[method-assign]
+
+        with caplog.at_level("DEBUG", logger="xmpd.history_reporter"):
+            reporter.run(ev)
+
+        assert reporter._connect.call_count == 3
+        # Exactly one human-facing WARNING for the outage, not one per retry.
+        warns = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert sum("cannot reach MPD" in r.message for r in warns) == 1
+        # No ERROR-level traceback for an expected connection failure.
+        assert not any(r.levelname == "ERROR" for r in caplog.records)
+        # Follow-up failures are demoted to DEBUG.
+        assert any(
+            r.levelname == "DEBUG" and "reconnect attempt" in r.message
+            for r in caplog.records
+        )
+
+    def test_recovery_logs_info_after_failures(self, caplog):
+        """After a streak of failures, a successful connect logs an INFO recovery."""
+        reporter = _make_reporter()
+        reporter._connect = MagicMock(
+            side_effect=[MPDConnectionError("x"), MPDConnectionError("x"), None]
+        )
+        reporter._retry_delay = MagicMock(return_value=0)
+        reporter._idle_loop = MagicMock(side_effect=lambda ev: ev.set())
+        ev = threading.Event()
+
+        with caplog.at_level("INFO", logger="xmpd.history_reporter"):
+            reporter.run(ev)
+
+        assert reporter._idle_loop.call_count == 1
+        assert any(
+            r.levelname == "INFO" and "reconnected" in r.message and "2" in r.message
+            for r in caplog.records
+        )
+
+    def test_unexpected_error_still_logs_traceback(self, caplog):
+        """A non-connection error keeps the loud ERROR + traceback."""
+        reporter = _make_reporter()
+        reporter._connect = MagicMock(side_effect=ValueError("boom"))
+        reporter._retry_delay = MagicMock(return_value=0)
+        ev = threading.Event()
+        ev.wait = _stop_wait_after(1)  # type: ignore[method-assign]
+
+        with caplog.at_level("DEBUG", logger="xmpd.history_reporter"):
+            reporter.run(ev)
+
+        errs = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert errs and errs[0].exc_info is not None
+        assert not any("cannot reach MPD" in r.message for r in caplog.records)
+
+    def test_retry_delay_is_capped_exponential_backoff(self):
+        reporter = _make_reporter()
+        assert reporter._retry_delay(1) == 5.0
+        assert reporter._retry_delay(2) == 10.0
+        assert reporter._retry_delay(3) == 20.0
+        assert reporter._retry_delay(4) == 40.0
+        assert reporter._retry_delay(5) == 60.0  # capped at _RETRY_MAX_SECONDS
+        assert reporter._retry_delay(99) == 60.0
+
+    def test_mid_session_drop_is_treated_as_transient(self, caplog):
+        """If the link drops during idle, it's quieted like a connect failure."""
+        reporter = _make_reporter()
+        reporter._connect = MagicMock(return_value=None)
+        reporter._idle_loop = MagicMock(
+            side_effect=MPDConnectionError("Lost connection to MPD")
+        )
+        reporter._retry_delay = MagicMock(return_value=0)
+        ev = threading.Event()
+        ev.wait = _stop_wait_after(2)  # type: ignore[method-assign]
+
+        with caplog.at_level("DEBUG", logger="xmpd.history_reporter"):
+            reporter.run(ev)
+
+        assert not any(r.levelname == "ERROR" for r in caplog.records)
+        assert any(
+            r.levelname == "WARNING" and "cannot reach MPD" in r.message
+            for r in caplog.records
+        )
