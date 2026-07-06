@@ -73,6 +73,25 @@ class YTMusicProvider:
             self._client = YTMusicClient()
         return self._client
 
+    def refresh_auth(self, auth_file: "Path | None" = None) -> bool:
+        """Reload the underlying client from a (freshly written) browser.json.
+
+        Returns True if the client re-initialized successfully. Used by the
+        daemon's auto-auth refresh after extracting fresh cookies from Firefox.
+        """
+        try:
+            return self._ensure_client().refresh_auth(auth_file)
+        except YTMusicAuthError as e:
+            logger.warning("refresh_auth failed: %s", e)
+            return False
+
+    def has_live_session(self) -> bool:
+        """Return True only if YouTube accepts the current session as signed in."""
+        try:
+            return self._ensure_client().has_live_session()
+        except YTMusicAuthError:
+            return False
+
     # -----------------------------------------------------------------------
     # Provider Protocol methods
     # -----------------------------------------------------------------------
@@ -517,18 +536,28 @@ class YTMusicClient:
             # Use cached result
             return self._auth_cache_valid, self._auth_cache_error
 
-        # Cache expired, check auth status
+        # Cache expired, check auth status.
+        # NOTE: get_library_playlists() returns an empty list (no exception)
+        # for a rejected/expired session, so it cannot distinguish
+        # signed-in-but-empty from signed-out. get_account_info() only yields
+        # a real accountName when YouTube accepts the cookies, so we probe that.
         try:
-            # Make a lightweight API call to test authentication
-            # get_library_playlists with limit=1 is fast and requires auth
-            self._client.get_library_playlists(limit=1)
+            info = self._client.get_account_info()
+            account_name = info.get("accountName") if isinstance(info, dict) else None
 
-            # Update cache
-            self._auth_cache_valid = True
-            self._auth_cache_error = ""
+            if account_name:
+                # Update cache
+                self._auth_cache_valid = True
+                self._auth_cache_error = ""
+                self._auth_cache_time = current_time
+                return True, ""
+
+            # Reached YouTube but no signed-in account -> session rejected
+            auth_error = "Not signed in (YouTube session expired); re-authentication needed"
+            self._auth_cache_valid = False
+            self._auth_cache_error = auth_error
             self._auth_cache_time = current_time
-
-            return True, ""
+            return False, auth_error
         except Exception as e:
             error_msg = str(e)
             # Check for common auth-related errors
@@ -547,6 +576,23 @@ class YTMusicClient:
             self._auth_cache_time = current_time
 
             return False, auth_error
+
+    def has_live_session(self) -> bool:
+        """Return True only if YouTube currently accepts the session as signed in.
+
+        Bypasses the is_authenticated() cache and does a fresh, uncached probe.
+        Used to decide whether a cookie refresh is needed: cookie presence and
+        local expiry (what the extractor validates) do not prove YouTube still
+        honors the session server-side.
+        """
+        if not self._client:
+            return False
+        try:
+            info = self._client.get_account_info()
+        except Exception as e:
+            logger.debug("has_live_session probe failed: %s", _truncate_error(e))
+            return False
+        return bool(isinstance(info, dict) and info.get("accountName"))
 
     def _rate_limit(self) -> None:
         """Enforce rate limiting between API requests."""
