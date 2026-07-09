@@ -1,10 +1,16 @@
-"""HTTP redirect proxy for provider-agnostic lazy stream URL resolution.
+"""HTTP proxy for provider-agnostic lazy stream URL resolution.
 
-Server serves GET /proxy/{provider}/{track_id}. For most providers it
-responds with HTTP 307 to a freshly-resolved direct CDN URL. For Tidal
-the resolved URL is a DASH manifest (.mpd) which MPD cannot consume
-directly, so we instead spawn ``ffmpeg`` to stitch the segments into a
-single FLAC stream that we proxy back to the client.
+Server serves GET /proxy/{provider}/{track_id} and picks a delivery mode
+from the resolved URL:
+
+  - Tidal DASH manifests (.mpd): MPD cannot consume these directly, so we
+    spawn ``ffmpeg`` to stitch the segments into a single FLAC stream that
+    we proxy back to the client.
+  - YouTube progressive audio: byte-proxied through ``ffmpeg`` with HTTP
+    reconnect flags. Redirecting MPD straight at the googlevideo CDN lets a
+    mid-song connection reset cut the track off; proxying keeps MPD on one
+    stable localhost connection while ffmpeg reconnects transparently.
+  - Everything else: HTTP 307 redirect to the freshly-resolved direct URL.
 
 Per-provider regex validates the track_id segment; per-provider TTL
 governs when a cached URL is refreshed.
@@ -47,6 +53,21 @@ DASH_STREAM_IDLE_TIMEOUT = 30
 # Chunk size for ffmpeg stdout reads when piping DASH-stitched FLAC to the
 # client. 64 KiB is a balance between latency and syscall overhead.
 FFMPEG_READ_CHUNK = 65536
+
+# ffmpeg HTTP-input options that let a single progressive stream survive a
+# mid-transfer CDN reset. YouTube's googlevideo edge routinely drops long-lived
+# direct connections (SABR throttling / URL expiry mid-song); redirecting MPD
+# straight at the CDN then means the reset hits EOF early and the track is cut
+# off. Byte-proxying with these flags makes ffmpeg transparently reconnect
+# (HTTP range resume) so MPD sees one continuous stream. Must precede -i.
+# Deliberately omits -reconnect_at_eof: a real end-of-track EOF must end the
+# stream cleanly, not trigger a reconnect loop.
+FFMPEG_HTTP_RECONNECT_OPTS: tuple[str, ...] = (
+    "-reconnect", "1",
+    "-reconnect_streamed", "1",
+    "-reconnect_on_network_error", "1",
+    "-reconnect_delay_max", "5",
+)
 
 TRACK_ID_PATTERNS: dict[str, re.Pattern[str]] = {
     "yt": re.compile(r"^[A-Za-z0-9_-]{11}$"),
@@ -173,19 +194,28 @@ async def _probe_best_audio_stream(manifest_url: str) -> int:
     return best_idx
 
 
-async def _stream_dash_via_ffmpeg(
+async def _stream_via_ffmpeg(
     request: web.Request,
-    manifest_url: str,
+    source_url: str,
     provider: str,
     track_id: str,
     stream_index: int = 0,
     duration_seconds: float | int | None = None,
+    input_opts: tuple[str, ...] = (),
 ) -> web.StreamResponse:
-    """Pipe ffmpeg's FLAC remux of a DASH manifest back to the client.
+    """Pipe ffmpeg's FLAC remux of ``source_url`` back to the client.
+
+    Handles both DASH manifests (Tidal ``.mpd``) and single progressive HTTP
+    audio streams (YouTube googlevideo URLs). ``input_opts`` are ffmpeg options
+    injected *before* ``-i`` -- pass ``FFMPEG_HTTP_RECONNECT_OPTS`` for a
+    progressive stream so a mid-song CDN reset reconnects instead of cutting
+    the track off. DASH inputs pass no extra opts (segment refetch is handled
+    by ffmpeg's demuxer).
 
     ``stream_index`` selects which audio adaptation set to map. Pass the value
     returned by ``_probe_best_audio_stream`` to get the highest-quality stream.
-    Defaults to 0 (safe fallback when probing is skipped).
+    Defaults to 0 (safe fallback when probing is skipped, e.g. single-stream
+    progressive audio).
 
     ``duration_seconds`` is patched into the FLAC STREAMINFO.total_samples
     field on the first chunk so MPD can show a real track length instead of
@@ -207,8 +237,9 @@ async def _stream_dash_via_ffmpeg(
         "-hide_banner",
         "-loglevel",
         "error",
+        *input_opts,
         "-i",
-        manifest_url,
+        source_url,
         "-map",
         f"0:a:{stream_index}",
         # Re-encode to FLAC (lossless) instead of -c copy. The DASH→raw-FLAC
@@ -585,8 +616,19 @@ class StreamRedirectProxy:
 
         # Streaming phase: runs outside the semaphore.
         if _is_dash_manifest(stream_url):
-            return await self._stream_dash_with_retry(
-                request, stream_url, provider, track_id, req_id, duration_seconds
+            return await self._stream_with_retry(
+                request, stream_url, provider, track_id, req_id, duration_seconds,
+                probe=True,
+            )
+
+        # YouTube progressive audio: byte-proxy through ffmpeg with reconnect
+        # flags instead of redirecting MPD at the googlevideo CDN. A direct
+        # redirect lets a mid-song connection reset cut the track off; proxying
+        # keeps MPD on one stable localhost connection while ffmpeg reconnects.
+        if provider == "yt":
+            return await self._stream_with_retry(
+                request, stream_url, provider, track_id, req_id, duration_seconds,
+                input_opts=FFMPEG_HTTP_RECONNECT_OPTS,
             )
 
         logger.debug(
@@ -595,7 +637,7 @@ class StreamRedirectProxy:
         )
         raise web.HTTPTemporaryRedirect(stream_url)
 
-    async def _stream_dash_with_retry(
+    async def _stream_with_retry(
         self,
         request: web.Request,
         stream_url: str,
@@ -603,26 +645,33 @@ class StreamRedirectProxy:
         track_id: str,
         req_id: str,
         duration_seconds: float | int | None = None,
+        *,
+        input_opts: tuple[str, ...] = (),
+        probe: bool = False,
     ) -> web.StreamResponse:
-        """Try DASH streaming with retries on ffmpeg failure.
+        """Byte-proxy a stream through ffmpeg with retries on ffmpeg failure.
 
-        Probes the manifest with ffprobe first to select the highest-quality
-        audio stream. If ffmpeg produces no audio data (network outage, expired
-        manifest), re-resolves the stream URL and retries up to DASH_MAX_RETRIES
-        times before returning 502.
+        Used for both DASH manifests (``probe=True`` to ffprobe-select the
+        highest-quality audio stream) and progressive HTTP audio
+        (``input_opts=FFMPEG_HTTP_RECONNECT_OPTS`` so a mid-song CDN reset
+        reconnects rather than cutting the track off). If ffmpeg produces no
+        audio data (network outage, expired/403 URL), re-resolves the stream
+        URL and retries up to DASH_MAX_RETRIES times before returning 502.
         """
-        stream_index = await _probe_best_audio_stream(stream_url)
-        logger.info(
-            "[PROXY:%s] DASH probe selected audio stream %d for %s/%s",
-            req_id, stream_index, provider, track_id,
-        )
+        stream_index = 0
+        if probe:
+            stream_index = await _probe_best_audio_stream(stream_url)
+            logger.info(
+                "[PROXY:%s] DASH probe selected audio stream %d for %s/%s",
+                req_id, stream_index, provider, track_id,
+            )
         last_err: DashStreamError | None = None
         for attempt in range(DASH_MAX_RETRIES + 1):
             await self._increment_counter("_active_streams")
             try:
-                return await _stream_dash_via_ffmpeg(
+                return await _stream_via_ffmpeg(
                     request, stream_url, provider, track_id, stream_index,
-                    duration_seconds,
+                    duration_seconds, input_opts=input_opts,
                 )
             except DashStreamError as e:
                 last_err = e
@@ -634,7 +683,7 @@ class StreamRedirectProxy:
 
             delay = DASH_RETRY_DELAYS[attempt]
             logger.warning(
-                f"[PROXY:{req_id}] DASH stream empty for {provider}/{track_id}, "
+                f"[PROXY:{req_id}] stream empty for {provider}/{track_id}, "
                 f"retrying in {delay}s (attempt {attempt + 1}/{DASH_MAX_RETRIES})"
             )
             await asyncio.sleep(delay)
@@ -645,11 +694,11 @@ class StreamRedirectProxy:
                 break
 
         logger.error(
-            f"[PROXY:{req_id}] DASH stream failed after {DASH_MAX_RETRIES} retries "
+            f"[PROXY:{req_id}] stream failed after {DASH_MAX_RETRIES} retries "
             f"for {provider}/{track_id}: {last_err}"
         )
         raise web.HTTPBadGateway(
-            text=f"DASH stream failed for {provider}/{track_id}"
+            text=f"Stream failed for {provider}/{track_id}"
         )
 
     async def _force_refresh_url(

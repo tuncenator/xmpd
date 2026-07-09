@@ -23,7 +23,11 @@ from xmpd.rating import RatingState
 
 @pytest.fixture
 def mock_client() -> MagicMock:
-    return MagicMock()
+    client = MagicMock()
+    # Transparently invoke the wrapped call so retry-wrapped code paths
+    # (e.g. get_radio) exercise the real function under test.
+    client._retry_on_failure.side_effect = lambda func, *a, **k: func(*a, **k)
+    return client
 
 
 @pytest.fixture

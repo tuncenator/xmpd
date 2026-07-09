@@ -60,6 +60,44 @@ def tidal_provider_mock():
     return m
 
 
+@pytest.fixture
+def fake_ffmpeg():
+    """Patch create_subprocess_exec so the ffmpeg byte-proxy path (YT / DASH)
+    returns a tiny canned FLAC stream instead of spawning real ffmpeg.
+
+    Yields ``(mock, fake_flac)`` so tests can inspect the args ffmpeg was
+    invoked with (e.g. the resolved URL, reconnect flags). A fresh fake proc
+    is built per call so tests that issue multiple requests work.
+    """
+    fake_flac = b"fLaC" + b"\x00" * 4096
+
+    def _make_proc():
+        reads = [fake_flac, b""]
+
+        async def _read(_size):
+            return reads.pop(0) if reads else b""
+
+        proc = Mock()
+        proc.returncode = 0
+        proc.stdout = Mock()
+        proc.stdout.read = _read
+        proc.stderr = AsyncMock()
+        proc.stderr.read = AsyncMock(return_value=b"")
+        proc.wait = AsyncMock(return_value=0)
+        proc.kill = Mock()
+        return proc
+
+    mock = AsyncMock(side_effect=lambda *a, **k: _make_proc())
+    with patch("xmpd.stream_proxy.asyncio.create_subprocess_exec", new=mock):
+        yield mock, fake_flac
+
+
+def _ffmpeg_source_url(mock):
+    """Return the URL passed to ffmpeg's -i in the most recent invocation."""
+    args = mock.call_args.args
+    return args[args.index("-i") + 1]
+
+
 # ---------------------------------------------------------------------------
 # 1. Health endpoint
 # ---------------------------------------------------------------------------
@@ -82,7 +120,8 @@ async def test_health_endpoint_200(track_store):
 
 
 @pytest.mark.asyncio
-async def test_route_yt_valid_id_307(track_store, yt_provider_mock):
+async def test_route_yt_valid_id_byte_proxies(track_store, yt_provider_mock, fake_ffmpeg):
+    mock, fake_flac = fake_ffmpeg
     track_store.add_track(
         "yt", "testvideoid",
         stream_url="https://googlevideo.com/abc",
@@ -96,8 +135,11 @@ async def test_route_yt_valid_id_307(track_store, yt_provider_mock):
     )
     async with TestClient(TestServer(proxy.app)) as client:
         resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
-        assert resp.status == 307
-        assert resp.headers["Location"] == "https://googlevideo.com/abc"
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "audio/flac"
+        assert await resp.read() == fake_flac
+    # Cache hit: fed the cached URL straight to ffmpeg, no re-resolve.
+    assert _ffmpeg_source_url(mock) == "https://googlevideo.com/abc"
     yt_provider_mock.resolve_stream.assert_not_called()
 
 
@@ -212,7 +254,8 @@ async def test_route_track_not_in_store_404(track_store):
 
 
 @pytest.mark.asyncio
-async def test_per_provider_ttl_yt_5h_no_refresh(track_store, yt_provider_mock):
+async def test_per_provider_ttl_yt_5h_no_refresh(track_store, yt_provider_mock, fake_ffmpeg):
+    mock, _ = fake_ffmpeg
     track_store.add_track(
         "yt", "testvideoid",
         stream_url="https://googlevideo.com/fresh",
@@ -233,7 +276,9 @@ async def test_per_provider_ttl_yt_5h_no_refresh(track_store, yt_provider_mock):
     )
     async with TestClient(TestServer(proxy.app)) as client:
         resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
-        assert resp.status == 307
+        assert resp.status == 200
+        await resp.read()
+    assert _ffmpeg_source_url(mock) == "https://googlevideo.com/fresh"
     yt_provider_mock.resolve_stream.assert_not_called()
 
 
@@ -243,7 +288,8 @@ async def test_per_provider_ttl_yt_5h_no_refresh(track_store, yt_provider_mock):
 
 
 @pytest.mark.asyncio
-async def test_per_provider_ttl_yt_5h_refresh(track_store, yt_provider_mock):
+async def test_per_provider_ttl_yt_5h_refresh(track_store, yt_provider_mock, fake_ffmpeg):
+    mock, _ = fake_ffmpeg
     track_store.add_track(
         "yt", "testvideoid",
         stream_url="https://googlevideo.com/old",
@@ -266,8 +312,10 @@ async def test_per_provider_ttl_yt_5h_refresh(track_store, yt_provider_mock):
     )
     async with TestClient(TestServer(proxy.app)) as client:
         resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
-        assert resp.status == 307
-        assert resp.headers["Location"] == "https://googlevideo.com/new"
+        assert resp.status == 200
+        await resp.read()
+    # Expired: refreshed URL is what gets streamed.
+    assert _ffmpeg_source_url(mock) == "https://googlevideo.com/new"
     yt_provider_mock.resolve_stream.assert_called_once_with("testvideoid")
 
     updated = track_store.get_track("yt", "testvideoid")
@@ -314,7 +362,8 @@ async def test_per_provider_ttl_tidal_1h_refresh(track_store, tidal_provider_moc
 
 
 @pytest.mark.asyncio
-async def test_per_provider_ttl_default_5h_when_unset(track_store, yt_provider_mock):
+async def test_per_provider_ttl_default_5h_when_unset(track_store, yt_provider_mock, fake_ffmpeg):
+    mock, _ = fake_ffmpeg
     for vid, hours_ago in [("testvideoid", 4), ("AAAAAAAAAAA", 6)]:
         track_store.add_track(
             "yt", vid,
@@ -338,12 +387,14 @@ async def test_per_provider_ttl_default_5h_when_unset(track_store, yt_provider_m
     async with TestClient(TestServer(proxy.app)) as client:
         # 4h old: no refresh
         resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
-        assert resp.status == 307
+        assert resp.status == 200
+        await resp.read()
         yt_provider_mock.resolve_stream.assert_not_called()
 
         # 6h old: refresh fires
         resp = await client.get("/proxy/yt/AAAAAAAAAAA", allow_redirects=False)
-        assert resp.status == 307
+        assert resp.status == 200
+        await resp.read()
         yt_provider_mock.resolve_stream.assert_called_once_with("AAAAAAAAAAA")
 
 
@@ -353,7 +404,8 @@ async def test_per_provider_ttl_default_5h_when_unset(track_store, yt_provider_m
 
 
 @pytest.mark.asyncio
-async def test_lazy_resolve_when_stream_url_none(track_store, yt_provider_mock):
+async def test_lazy_resolve_when_stream_url_none(track_store, yt_provider_mock, fake_ffmpeg):
+    mock, _ = fake_ffmpeg
     track_store.add_track(
         "yt", "testvideoid",
         stream_url=None,
@@ -365,8 +417,9 @@ async def test_lazy_resolve_when_stream_url_none(track_store, yt_provider_mock):
     proxy = _make_proxy(track_store, provider_registry={"yt": yt_provider_mock})
     async with TestClient(TestServer(proxy.app)) as client:
         resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
-        assert resp.status == 307
-        assert resp.headers["Location"] == "https://googlevideo.com/resolved"
+        assert resp.status == 200
+        await resp.read()
+    assert _ffmpeg_source_url(mock) == "https://googlevideo.com/resolved"
     yt_provider_mock.resolve_stream.assert_called_once_with("testvideoid")
 
 
@@ -392,12 +445,15 @@ async def test_resolver_failure_502_when_no_cached_url(track_store, yt_provider_
 
 
 # ---------------------------------------------------------------------------
-# 16. Resolver failure falls through to stale URL (WARNING logged, 307 returned)
+# 16. Resolver failure falls through to stale URL (WARNING logged, still streams)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_resolver_failure_falls_through_to_stale_url(track_store, yt_provider_mock):
+async def test_resolver_failure_falls_through_to_stale_url(
+    track_store, yt_provider_mock, fake_ffmpeg
+):
+    mock, _ = fake_ffmpeg
     track_store.add_track(
         "yt", "testvideoid",
         stream_url="https://old.example/x",
@@ -411,7 +467,7 @@ async def test_resolver_failure_falls_through_to_stale_url(track_store, yt_provi
     )
     track_store.conn.commit()
 
-    # Resolver returns None -> URLRefreshError -> stale fallback -> 307
+    # Resolver returns None -> URLRefreshError -> stale fallback -> stream stale URL
     yt_provider_mock.resolve_stream.return_value = None
 
     proxy = _make_proxy(
@@ -421,8 +477,9 @@ async def test_resolver_failure_falls_through_to_stale_url(track_store, yt_provi
     )
     async with TestClient(TestServer(proxy.app)) as client:
         resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
-        assert resp.status == 307
-        assert resp.headers["Location"] == "https://old.example/x"
+        assert resp.status == 200
+        await resp.read()
+    assert _ffmpeg_source_url(mock) == "https://old.example/x"
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +518,8 @@ async def test_concurrency_503_when_limit_exceeded(track_store):
 
 
 @pytest.mark.asyncio
-async def test_legacy_stream_resolver_fallback_for_yt(track_store):
+async def test_legacy_stream_resolver_fallback_for_yt(track_store, fake_ffmpeg):
+    mock, _ = fake_ffmpeg
     track_store.add_track(
         "yt", "AAAAAAAAAAA",
         stream_url=None,
@@ -478,8 +536,9 @@ async def test_legacy_stream_resolver_fallback_for_yt(track_store):
     )
     async with TestClient(TestServer(proxy.app)) as client:
         resp = await client.get("/proxy/yt/AAAAAAAAAAA", allow_redirects=False)
-        assert resp.status == 307
-        assert resp.headers["Location"] == "https://legacy.example/stream"
+        assert resp.status == 200
+        await resp.read()
+    assert _ffmpeg_source_url(mock) == "https://legacy.example/stream"
     mock_resolver.resolve_video_id.assert_called_once_with("AAAAAAAAAAA")
 
 
@@ -678,6 +737,40 @@ async def test_route_tidal_non_dash_still_redirects(track_store, tidal_provider_
         assert resp.headers["Location"] == "https://cdn.tidal.com/foo.flac"
 
 
+@pytest.mark.asyncio
+async def test_route_yt_ffmpeg_gets_reconnect_flags(track_store, yt_provider_mock, fake_ffmpeg):
+    """YT is byte-proxied through ffmpeg with HTTP reconnect flags (never a
+    307), so a mid-song googlevideo reset reconnects instead of cutting off.
+    """
+    mock, _ = fake_ffmpeg
+    track_store.add_track(
+        "yt", "testvideoid",
+        stream_url="https://googlevideo.example/abc",
+        title="Track",
+        artist="Artist",
+    )
+    proxy = _make_proxy(
+        track_store,
+        provider_registry={"yt": yt_provider_mock},
+        stream_cache_hours={"yt": 5},
+    )
+    async with TestClient(TestServer(proxy.app)) as client:
+        resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
+        assert resp.status == 200
+        await resp.read()
+
+    args = mock.call_args.args
+    assert args[0] == "ffmpeg"
+    # Reconnect flags must precede -i so they apply to the input.
+    i_idx = args.index("-i")
+    for flag in ("-reconnect", "-reconnect_streamed",
+                 "-reconnect_on_network_error", "-reconnect_delay_max"):
+        assert flag in args[:i_idx], f"{flag} missing before -i"
+    # Never reconnect at EOF (would loop at real end-of-track).
+    assert "-reconnect_at_eof" not in args
+    assert args[i_idx + 1] == "https://googlevideo.example/abc"
+
+
 # ---------------------------------------------------------------------------
 # Existing behaviour tests preserved
 # ---------------------------------------------------------------------------
@@ -861,7 +954,7 @@ class TestPerProviderStreamCacheHours:
 
 @pytest.mark.asyncio
 async def test_resolution_counter_returns_to_zero_after_normal_requests(
-    track_store, yt_provider_mock
+    track_store, yt_provider_mock, fake_ffmpeg
 ):
     """Multiple sequential requests leave counters at zero."""
     for i in range(5):
@@ -881,7 +974,8 @@ async def test_resolution_counter_returns_to_zero_after_normal_requests(
         for i in range(5):
             vid = f"vid{i:07d}AAAA"[:11]
             resp = await client.get(f"/proxy/yt/{vid}", allow_redirects=False)
-            assert resp.status == 307
+            assert resp.status == 200
+            await resp.read()
 
     assert proxy._active_resolutions == 0
     assert proxy._active_streams == 0
@@ -908,7 +1002,7 @@ async def test_resolution_counter_returns_to_zero_after_errors(track_store):
 
 
 @pytest.mark.asyncio
-async def test_resolution_limit_concurrent_requests(track_store, yt_provider_mock):
+async def test_resolution_limit_concurrent_requests(track_store, yt_provider_mock, fake_ffmpeg):
     """With limit=2, two concurrent resolutions succeed; third gets 503.
 
     Uses a slow resolver to hold slots during concurrent requests.
@@ -973,8 +1067,10 @@ async def test_resolution_limit_concurrent_requests(track_store, yt_provider_moc
 
         resp_a = await task_a
         resp_b = await task_b
-        assert resp_a.status == 307
-        assert resp_b.status == 307
+        assert resp_a.status == 200
+        assert resp_b.status == 200
+        await resp_a.read()
+        await resp_b.read()
 
     # All slots released
     assert proxy._resolution_semaphore._value == 2
@@ -982,7 +1078,7 @@ async def test_resolution_limit_concurrent_requests(track_store, yt_provider_moc
 
 
 @pytest.mark.asyncio
-async def test_resolution_counter_no_negative(track_store, yt_provider_mock):
+async def test_resolution_counter_no_negative(track_store, yt_provider_mock, fake_ffmpeg):
     """Rapid requests never drive counters below zero."""
     import asyncio as aio
 
@@ -1011,7 +1107,8 @@ async def test_resolution_counter_no_negative(track_store, yt_provider_mock):
             )
         results = await aio.gather(*tasks)
         for resp in results:
-            assert resp.status in (307, 503)
+            assert resp.status in (200, 503)
+            await resp.read()
 
     assert proxy._active_resolutions >= 0
     assert proxy._active_streams >= 0

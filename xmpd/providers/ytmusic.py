@@ -241,8 +241,11 @@ class YTMusicProvider:
             logger.warning("get_radio: YTMusic client not initialized for %s", seed_track_id)
             return []
         try:
-            response = yt.get_watch_playlist(
-                videoId=seed_track_id, radio=True, limit=limit
+            # Retry on transient failures: YTM's watch-playlist endpoint
+            # occasionally returns "No content returned by the server" under
+            # throttle for a valid, radio-capable track (see _retry_on_failure).
+            response = client._retry_on_failure(
+                yt.get_watch_playlist, videoId=seed_track_id, radio=True, limit=limit
             )
         except Exception as e:
             logger.warning("get_radio failed for %s: %s", seed_track_id, e)
