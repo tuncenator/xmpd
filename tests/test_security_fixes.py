@@ -297,7 +297,12 @@ class TestProxyURLValidation:
 
     @pytest.mark.asyncio
     async def test_proxy_accepts_valid_stream_url(self):
-        """Test that proxy accepts valid stream URLs."""
+        """Test that proxy accepts valid stream URLs.
+
+        Uses a non-yt provider so the redirect branch is exercised: yt now
+        byte-proxies progressive audio through ffmpeg instead of redirecting,
+        so only other providers' non-DASH URLs still return a 307.
+        """
         from aiohttp.test_utils import TestClient, TestServer
 
         from xmpd.stream_proxy import StreamRedirectProxy
@@ -305,7 +310,7 @@ class TestProxyURLValidation:
         # Create store with track that has valid stream_url
         store = TrackStore(":memory:")
         store.add_track(
-            "yt", "test1234567",
+            "tidal", "123456789",
             stream_url="https://example.com/stream",
             title="Test Track",
             artist="Test Artist",
@@ -315,7 +320,7 @@ class TestProxyURLValidation:
 
         async with TestClient(TestServer(proxy.app)) as client:
             # Don't follow redirects so we can verify the 307 response
-            resp = await client.get("/proxy/yt/test1234567", allow_redirects=False)
+            resp = await client.get("/proxy/tidal/123456789", allow_redirects=False)
             # Should be 307 redirect
             assert resp.status == 307
             assert resp.headers["Location"] == "https://example.com/stream"
