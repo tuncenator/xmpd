@@ -373,6 +373,19 @@ install_pipewire_bridge_pin() {
   # the default sink (pactl set-default-sink), not by per-stream moves,
   # and linking.follow-default-target keeps the local stream tracking
   # whichever sink the user selected.
+  #
+  # The padder (parec, application.name=mpd-owntone-padder) gets the same
+  # pin: its stream had a stale 'target.node = -1' metadata override on
+  # 2026-07-24 which relinked it to the analog sink's monitor - the FIFO
+  # was fed from an idle sink, OwnTone starved, and the AP2 receiver tore
+  # down the RTSP session. dont-move closes that hole for good.
+  #
+  # node.dont-fallback + node.linger on top: if owntone-bridge does not
+  # exist yet (pipewire still bringing up conf.d objects at login), the
+  # stream waits for its defined target instead of falling back to the
+  # default sink/source. A fallback link here is silently wrong - the
+  # padder would pump the wrong monitor (or even a mic) into the FIFO.
+  # Streams without target.object (MPD's local output) are unaffected.
   cat > "$PW_BRIDGE_PIN" <<'EOF'
 pulse.rules = [
     {
@@ -383,13 +396,32 @@ pulse.rules = [
         ]
         actions = {
             update-props = {
-                node.dont-move = true
+                node.dont-move     = true
+                node.dont-fallback = true
+                node.linger        = true
+            }
+        }
+    }
+    {
+        matches = [
+            {
+                application.name = "mpd-owntone-padder"
+            }
+        ]
+        actions = {
+            update-props = {
+                node.dont-move     = true
+                node.dont-fallback = true
+                node.linger        = true
             }
         }
     }
 ]
 EOF
   systemctl --user restart pipewire-pulse 2>/dev/null || true
+  # pulse.rules apply at stream creation; recreate the padder stream so the
+  # pin takes effect now, not on the next reboot.
+  systemctl --user try-restart mpd-owntone-padder 2>/dev/null || true
 }
 
 install_wireplumber_bridge_route() {
@@ -461,7 +493,14 @@ context.objects = [
             audio.rate                = 44100
             audio.channels            = 2
             audio.position            = [ FL FR ]
-            monitor.channel-volumes   = true
+            # false (the PipeWire default) so the monitor always carries
+            # unity-gain PCM no matter where the sink's volume slider sits.
+            # With true, the slider becomes a second, invisible attenuator
+            # in front of OwnTone: the receiver's own AirPlay volume reads
+            # high while the audio arriving at it is quiet AND quantization
+            # -degraded. OwnTone's per-output volume (the receiver's own
+            # AirPlay volume) is the one and only knob.
+            monitor.channel-volumes   = false
             node.always-process       = true
             adapter.auto-port-config  = {
                 mode     = dsp
