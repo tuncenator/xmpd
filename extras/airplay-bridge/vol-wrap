@@ -1,18 +1,30 @@
 #!/usr/bin/env bash
 # vol-wrap: route volume keys smartly.
-# - OwnTone playing AND >=1 AirPlay output selected  -> owntone API
-#     * single output  : simple +/- on that output
-#     * multi-room     : ratio-anchored scaling (Option C) using the baseline
-#                        captured by `speaker multi`
-# - Otherwise                                          -> pactl on default sink
+#
+# Governance ("which device do the volume keys drive?") has three modes:
+#   auto (default) - follow the active route:
+#       OwnTone playing AND >=1 AirPlay/Chromecast output selected -> owntone API
+#           * single output : simple +/- on that output
+#           * multi-room    : ratio-anchored scaling (Option C) using the
+#                             baseline captured by `speaker multi`
+#       otherwise -> pactl on the local sink
+#   local   - keys always drive the local sink, even mid-AirPlay-session
+#             (browser / notification / meeting audio needs a knob too)
+#   airplay - keys always drive the selected OwnTone outputs, playing or not
+#
+# The override is a runtime pin (gone after reboot), and `speaker` clears it
+# on every route change: picking a route is a statement of intent, so the
+# keys snap back to following it.
 #
 # Usage: vol-wrap {up|down|mute}
+#        vol-wrap target [auto|local|airplay|cycle|status]
 
 set -u -o pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/mpd-owntone-bridge/config.env"
 STATE="${XDG_CONFIG_HOME:-$HOME/.config}/mpd-owntone-bridge/state.json"
 MUTE_FILE="${XDG_RUNTIME_DIR:-/tmp}/vol-wrap.muted.json"
+TARGET_FILE="${XDG_RUNTIME_DIR:-/tmp}/vol-wrap.target"
 
 [[ -f "$CONFIG" ]] || { echo "missing config: $CONFIG" >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -20,12 +32,16 @@ MUTE_FILE="${XDG_RUNTIME_DIR:-/tmp}/vol-wrap.muted.json"
 
 CURL=(command curl --silent --max-time 0.4)
 
+owntone_selected_ids() {
+  "${CURL[@]}" "${OWNTONE_API}/outputs" 2>/dev/null \
+    | jq -r '.outputs[] | select(.selected==true and ((.type | startswith("AirPlay")) or (.type | startswith("Chromecast")))) | .id'
+}
+
 owntone_active_ids() {
   local resp
   resp=$("${CURL[@]}" "${OWNTONE_API}/player" 2>/dev/null) || return 1
   [[ "$(jq -r .state <<< "$resp" 2>/dev/null)" == "play" ]] || return 1
-  "${CURL[@]}" "${OWNTONE_API}/outputs" 2>/dev/null \
-    | jq -r '.outputs[] | select(.selected==true and (.type | startswith("AirPlay"))) | .id'
+  owntone_selected_ids
 }
 
 owntone_get_volume() {
@@ -42,6 +58,74 @@ owntone_set_volume() {
 }
 
 state_read() { [[ -f "$STATE" ]] && cat "$STATE" || echo '{}'; }
+
+# waybar's custom/volume module polls on an interval; poke it so the number
+# moves on the same keypress instead of up to one poll later. No-op when
+# waybar isn't running.
+waybar_refresh() { pkill -RTMIN+9 waybar 2>/dev/null || true; }
+
+# -------- local sink path --------
+
+# The owntone-bridge null sink is PCM transport for the AirPlay FIFO, not a
+# playback device. Its slider must never receive volume keys: with
+# monitor.channel-volumes=true it was a hidden second attenuator in front of
+# OwnTone, and this exact fallback branch walked it down to 15% (-49 dB)
+# whenever the bridge happened to be the default sink. Resolve the real
+# local sink instead; if the default IS the bridge, fall back to the
+# configured laptop sink or do nothing at all.
+local_sink() {
+  local sink
+  sink=$(pactl get-default-sink 2>/dev/null)
+  if [[ -z "$sink" || "$sink" == "owntone-bridge" ]]; then
+    sink="${PIPEWIRE_LAPTOP_SINK:-}"
+  fi
+  [[ -n "$sink" ]] && echo "$sink"
+}
+
+local_action() {
+  local sink
+  sink=$(local_sink) || return 0
+  case "$1" in
+    up)   pactl set-sink-volume "$sink" "+${VOL_STEP_PCT}%" ;;
+    down) pactl set-sink-volume "$sink" "-${VOL_STEP_PCT}%" ;;
+    mute) pactl set-sink-mute   "$sink" toggle ;;
+  esac
+}
+
+# -------- governance target (auto / local / airplay) --------
+
+target_get() {
+  local t
+  t=$(cat "$TARGET_FILE" 2>/dev/null)
+  case "$t" in local|airplay) echo "$t" ;; *) echo auto ;; esac
+}
+
+target_set() {
+  case "$1" in
+    auto)          rm -f "$TARGET_FILE" ;;
+    local|airplay) echo "$1" > "$TARGET_FILE" ;;
+  esac
+  waybar_refresh
+}
+
+target_cycle() {
+  local cur next
+  cur=$(target_get)
+  case "$cur" in
+    auto)
+      next=local ;;
+    local)
+      # Pinning to airplay is pointless with no airplay output selected;
+      # collapse the cycle to auto <-> local in that case.
+      if [[ -n "$(owntone_selected_ids)" ]]; then next=airplay; else next=auto; fi
+      ;;
+    *)
+      next=auto ;;
+  esac
+  target_set "$next"
+  notify-send -t 1500 "volume keys" "target: $next" 2>/dev/null || true
+  echo "$next"
+}
 
 # -------- single-speaker paths --------
 
@@ -124,16 +208,37 @@ multi_mute_toggle() {
 # -------- dispatch --------
 
 action="${1:-}"
-case "$action" in up|down|mute) ;; *) echo "usage: vol-wrap {up|down|mute}" >&2; exit 2 ;; esac
 
-mapfile -t ACTIVE < <(owntone_active_ids || true)
+if [[ "$action" == "target" ]]; then
+  sub="${2:-status}"
+  case "$sub" in
+    auto|local|airplay) target_set "$sub" ;;
+    cycle)              target_cycle >/dev/null ;;
+    status)             target_get ;;
+    *) echo "usage: vol-wrap target {auto|local|airplay|cycle|status}" >&2; exit 2 ;;
+  esac
+  exit 0
+fi
+
+case "$action" in
+  up|down|mute) ;;
+  *) echo "usage: vol-wrap {up|down|mute} | vol-wrap target {auto|local|airplay|cycle|status}" >&2; exit 2 ;;
+esac
+
+# Pick the governed outputs. An airplay pin uses the selected outputs even
+# when OwnTone is paused (the user asked for that knob explicitly); auto
+# additionally requires OwnTone to be playing, matching the route heuristic.
+mode=$(target_get)
+ACTIVE=()
+case "$mode" in
+  local)   ;; # never consult owntone; keys are pinned to the local sink
+  airplay) mapfile -t ACTIVE < <(owntone_selected_ids || true) ;;
+  auto)    mapfile -t ACTIVE < <(owntone_active_ids   || true) ;;
+esac
 
 if (( ${#ACTIVE[@]} == 0 )); then
-  case "$action" in
-    up)   pactl set-sink-volume @DEFAULT_SINK@ "+${VOL_STEP_PCT}%" ;;
-    down) pactl set-sink-volume @DEFAULT_SINK@ "-${VOL_STEP_PCT}%" ;;
-    mute) pactl set-sink-mute   @DEFAULT_SINK@ toggle ;;
-  esac
+  local_action "$action"
+  waybar_refresh
   exit 0
 fi
 
@@ -143,6 +248,7 @@ if (( ${#ACTIVE[@]} == 1 )); then
     down) single_change "${ACTIVE[0]}" "-${VOL_STEP_PCT}" ;;
     mute) single_mute_toggle "${ACTIVE[0]}" ;;
   esac
+  waybar_refresh
   exit 0
 fi
 
@@ -151,3 +257,4 @@ case "$action" in
   down) multi_change "-${VOL_STEP_PCT}" "${ACTIVE[@]}" ;;
   mute) multi_mute_toggle            "${ACTIVE[@]}" ;;
 esac
+waybar_refresh

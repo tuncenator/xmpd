@@ -16,6 +16,10 @@ set -u -o pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/mpd-owntone-bridge/config.env"
 STATE="${XDG_CONFIG_HOME:-$HOME/.config}/mpd-owntone-bridge/state.json"
+# vol-wrap's keyboard-governance pin (see vol-wrap header). Cleared on every
+# route change: picking a route is a statement of intent, so the volume keys
+# snap back to auto-follow.
+VOLWRAP_TARGET_FILE="${XDG_RUNTIME_DIR:-/tmp}/vol-wrap.target"
 
 [[ -f "$CONFIG" ]] || { echo "missing config: $CONFIG" >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -85,7 +89,7 @@ ensure_selected_all() {
 
 owntone_deselect_all_airplay() {
   local ids
-  ids=$(owntone_outputs_json | jq -r '.outputs[] | select(.type | startswith("AirPlay")) | .id')
+  ids=$(owntone_outputs_json | jq -r '.outputs[] | select((.type | startswith("AirPlay")) or (.type | startswith("Chromecast"))) | .id')
   while read -r id; do
     [[ -z "$id" ]] && continue
     owntone_set_selected "$id" false
@@ -124,6 +128,10 @@ resolve_speakers() {
 
 # -------- actions --------
 
+# Routing changes swap which volume waybar's custom/volume module should be
+# reporting (local sink vs OwnTone output), so poke it. No-op without waybar.
+waybar_refresh() { pkill -RTMIN+9 waybar 2>/dev/null || true; }
+
 nudge_bridge_reemit() {
   # Tell the metadata bridge to re-issue the current track's metadata into
   # the new RTSP session owntone just opened for the selected speaker(s).
@@ -132,6 +140,7 @@ nudge_bridge_reemit() {
 
 go_laptop() {
   info "routing: laptop speakers"
+  rm -f "$VOLWRAP_TARGET_FILE"
   owntone_deselect_all_airplay
   owntone_player_stop
   mpd_enable  "$MPD_OUT_LOCAL"
@@ -139,12 +148,14 @@ go_laptop() {
   if [[ -n "${PIPEWIRE_LAPTOP_SINK:-}" ]]; then
     pactl set-default-sink "$PIPEWIRE_LAPTOP_SINK" >/dev/null 2>&1 || true
   fi
+  waybar_refresh
 }
 
 go_airplay() {
   # $@: owntone output ids
   local ids=("$@")
   info "routing: airplay -> ${#ids[@]} speaker(s)"
+  rm -f "$VOLWRAP_TARGET_FILE"
   mpd_disable "$MPD_OUT_LOCAL"
   mpd_enable  "$MPD_OUT_AIRPLAY"
   owntone_deselect_all_airplay
@@ -167,6 +178,7 @@ go_airplay() {
   # (otherwise the receiver shows the pipe's default "mpd.pcm / Unknown
   # artist" until MPD changes tracks).
   nudge_bridge_reemit
+  waybar_refresh
 }
 
 capture_multi_baseline() {
@@ -199,6 +211,11 @@ cmd_status() {
   echo
   echo "--- PipeWire default sink ---"
   pactl info 2>/dev/null | grep "Default Sink" || true
+  echo
+  echo "--- Volume-key target (vol-wrap) ---"
+  local pin
+  pin=$(cat "$VOLWRAP_TARGET_FILE" 2>/dev/null)
+  case "$pin" in local|airplay) echo "  pinned: $pin" ;; *) echo "  auto (follows route)" ;; esac
   echo
   echo "--- Multi-room baseline ---"
   state_read | jq '.multi_baseline // "none"'
