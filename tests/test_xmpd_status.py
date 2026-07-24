@@ -345,6 +345,122 @@ class TestClassifyAudioQuality:
         assert ytmpd_status.classify_audio_quality("44100", "0", "tidal") is None
 
 
+class TestSourceInfoClassification:
+    """Quality badge driven by the proxy's /info source probe."""
+
+    OPUS_INFO = {
+        "status": "ok", "codec": "opus", "lossy": True,
+        "sample_rate": 48000, "bits": None,
+    }
+    FLAC_CD_INFO = {
+        "status": "ok", "codec": "flac", "lossy": False,
+        "sample_rate": 44100, "bits": 16,
+    }
+
+    def test_lossy_source_beats_lossless_mpd_format(self):
+        """Regression: the proxy re-encodes YT opus to 24-bit FLAC, so MPD
+        reports 48000:24:2 and the badge showed HiRes for plain YouTube."""
+        assert ytmpd_status.classify_audio_quality(
+            "48000:24:2", "0", "youtube", source_info=self.OPUS_INFO
+        ) == "Lossy"
+
+    def test_lossless_source_hifi(self):
+        assert ytmpd_status.classify_audio_quality(
+            "44100:16:2", "0", "tidal", source_info=self.FLAC_CD_INFO
+        ) == "HiFi"
+
+    def test_lossless_source_hires_by_bits(self):
+        info = dict(self.FLAC_CD_INFO, bits=24)
+        assert ytmpd_status.classify_audio_quality(
+            "44100:24:2", "0", "tidal", source_info=info
+        ) == "HiRes"
+
+    def test_lossless_source_hires_by_rate(self):
+        info = dict(self.FLAC_CD_INFO, bits=None, sample_rate=96000)
+        assert ytmpd_status.classify_audio_quality(
+            "96000:24:2", "0", "tidal", source_info=info
+        ) == "HiRes"
+
+    def test_hypothetical_lossless_youtube_badges_by_source(self):
+        """If YT ever serves lossless, the probe result wins over any
+        provider assumption."""
+        assert ytmpd_status.classify_audio_quality(
+            "44100:16:2", "0", "youtube", source_info=self.FLAC_CD_INFO
+        ) == "HiFi"
+
+    def test_pending_info_falls_back_to_provider_hint(self):
+        assert ytmpd_status.classify_audio_quality(
+            "48000:24:2", "0", "youtube", source_info={"status": "pending"}
+        ) == "Lossy"
+
+    def test_unknown_codec_falls_back_to_provider_hint(self):
+        info = dict(self.OPUS_INFO, codec="futurecodec", lossy=None)
+        assert ytmpd_status.classify_audio_quality(
+            "48000:24:2", "0", "youtube", source_info=info
+        ) == "Lossy"
+
+    def test_no_info_youtube_flac_reencode_is_lossy(self):
+        """Fallback hint: proxied YT badges Lossy even when the probe has
+        not answered yet."""
+        assert ytmpd_status.classify_audio_quality(
+            "48000:24:2", "0", "youtube"
+        ) == "Lossy"
+
+    def test_lossy_source_on_tidal_track(self):
+        """The source verdict must not be YouTube-scoped: a lossy source
+        badges Lossy regardless of provider."""
+        assert ytmpd_status.classify_audio_quality(
+            "44100:16:2", "0", "tidal", source_info=self.OPUS_INFO
+        ) == "Lossy"
+
+    def test_compact_lossy(self):
+        assert ytmpd_status.classify_audio_quality(
+            "48000:24:2", "0", "youtube", source_info=self.OPUS_INFO,
+            compact=True,
+        ) == "Lo"
+
+
+@pytest.mark.real_proxy_info
+class TestGetProxySourceInfo:
+    """Test the /info fetch helper."""
+
+    def test_non_proxy_path_returns_none(self):
+        assert ytmpd_status.get_proxy_source_info("music/song.flac") is None
+        assert ytmpd_status.get_proxy_source_info(
+            "https://example.com/stream"
+        ) is None
+
+    @patch("ytmpd_status.urllib.request.urlopen")
+    def test_parses_json_and_appends_info(self, mock_urlopen):
+        resp = MagicMock()
+        resp.read.return_value = b'{"status": "ok", "lossy": true}'
+        mock_urlopen.return_value.__enter__.return_value = resp
+
+        info = ytmpd_status.get_proxy_source_info(
+            "http://localhost:6602/proxy/yt/abc123def45"
+        )
+
+        assert info == {"status": "ok", "lossy": True}
+        url = mock_urlopen.call_args.args[0]
+        assert url == "http://localhost:6602/proxy/yt/abc123def45/info"
+
+    @patch("ytmpd_status.urllib.request.urlopen")
+    def test_proxy_down_returns_none(self, mock_urlopen):
+        mock_urlopen.side_effect = OSError("connection refused")
+        assert ytmpd_status.get_proxy_source_info(
+            "http://localhost:6602/proxy/yt/abc123def45"
+        ) is None
+
+    @patch("ytmpd_status.urllib.request.urlopen")
+    def test_garbage_json_returns_none(self, mock_urlopen):
+        resp = MagicMock()
+        resp.read.return_value = b"not json"
+        mock_urlopen.return_value.__enter__.return_value = resp
+        assert ytmpd_status.get_proxy_source_info(
+            "http://localhost:6602/proxy/yt/abc123def45"
+        ) is None
+
+
 class TestClassifyLocalLossy:
     """Test file-header-based local codec classification."""
 

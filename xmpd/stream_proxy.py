@@ -34,6 +34,7 @@ from typing import Any
 
 from aiohttp import web
 
+from xmpd.audio_flow import _LOSSLESS_CODECS, _LOSSY_CODECS
 from xmpd.exceptions import DashStreamError, URLRefreshError
 from xmpd.track_store import TrackStore
 
@@ -53,6 +54,11 @@ DASH_STREAM_IDLE_TIMEOUT = 30
 # Chunk size for ffmpeg stdout reads when piping DASH-stitched FLAC to the
 # client. 64 KiB is a balance between latency and syscall overhead.
 FFMPEG_READ_CHUNK = 65536
+
+# Source-info probe cache: how long a failed probe result is served before a
+# /info request triggers a re-probe, and how many entries are kept.
+SOURCE_INFO_ERROR_RETRY_SECONDS = 60
+SOURCE_INFO_CACHE_MAX = 64
 
 # ffmpeg HTTP-input options that let a single progressive stream survive a
 # mid-transfer CDN reset. YouTube's googlevideo edge routinely drops long-lived
@@ -148,13 +154,13 @@ async def _kill_ffmpeg(proc: asyncio.subprocess.Process) -> bytes:
     return stderr_bytes
 
 
-async def _probe_best_audio_stream(manifest_url: str) -> int:
-    """Return the index of the highest-bitrate audio stream in the manifest.
+async def _ffprobe_audio_streams(url: str) -> list[dict[str, Any]]:
+    """Return ffprobe ``-show_streams`` audio entries for ``url``.
 
-    Runs ``ffprobe`` against ``manifest_url`` and picks the audio stream with
-    the highest ``bit_rate`` value. Falls back to index 0 on any error or when
-    the manifest contains only one audio stream.
+    Returns an empty list on any failure (ffprobe missing, network error,
+    expired URL, unparsable output).
     """
+    proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffprobe",
@@ -162,7 +168,7 @@ async def _probe_best_audio_stream(manifest_url: str) -> int:
             "-print_format", "json",
             "-show_streams",
             "-select_streams", "a",
-            manifest_url,
+            url,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -170,8 +176,64 @@ async def _probe_best_audio_stream(manifest_url: str) -> int:
         data = json.loads(stdout)
         streams = data.get("streams", [])
     except Exception as e:
-        logger.debug("ffprobe failed for DASH manifest, using stream 0: %s", e)
-        return 0
+        logger.debug("ffprobe failed for %s...: %s", url[:60], e)
+        return []
+    finally:
+        # wait_for cancels communicate() on timeout but leaves ffprobe
+        # running; a stalled CDN read has no rw timeout and would hang the
+        # process forever. Same on task cancellation (daemon shutdown).
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            try:
+                await asyncio.shield(proc.wait())
+            except (asyncio.CancelledError, Exception):
+                pass
+    return streams if isinstance(streams, list) else []
+
+
+def _source_info_from_streams(streams: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a source-info payload from ffprobe audio stream entries.
+
+    Picks the highest-bitrate stream (what the proxy actually serves, see
+    ``_probe_best_audio_stream``) and classifies its codec as lossy/lossless
+    via the shared codec tables in ``xmpd.audio_flow``. ``lossy`` is None for
+    codecs in neither table so consumers can distinguish "unknown codec"
+    from a real verdict.
+    """
+    def _as_int(v: Any) -> int | None:
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return None
+
+    best = max(streams, key=lambda s: _as_int(s.get("bit_rate")) or 0)
+    codec = str(best.get("codec_name", "")).lower()
+    lossy: bool | None = None
+    if codec in _LOSSY_CODECS:
+        lossy = True
+    elif codec in _LOSSLESS_CODECS:
+        lossy = False
+    return {
+        "status": "ok",
+        "codec": codec,
+        "lossy": lossy,
+        "sample_rate": _as_int(best.get("sample_rate")),
+        "bits": _as_int(best.get("bits_per_raw_sample"))
+        or _as_int(best.get("bits_per_sample"))
+        or None,  # ffprobe reports 0 for "not applicable" (e.g. opus)
+        "channels": _as_int(best.get("channels")),
+        "bitrate": _as_int(best.get("bit_rate")),
+    }
+
+
+async def _probe_best_audio_stream(manifest_url: str) -> int:
+    """Return the index of the highest-bitrate audio stream in the manifest.
+
+    Runs ``ffprobe`` against ``manifest_url`` and picks the audio stream with
+    the highest ``bit_rate`` value. Falls back to index 0 on any error or when
+    the manifest contains only one audio stream.
+    """
+    streams = await _ffprobe_audio_streams(manifest_url)
 
     if len(streams) <= 1:
         return 0
@@ -437,8 +499,22 @@ class StreamRedirectProxy:
         self._active_connections = 0
         self._connection_lock = asyncio.Lock()
 
+        # Source-info cache: (provider, track_id) -> probe result dict.
+        # Populated by background ffprobe tasks spawned at stream start and
+        # on /info cache misses; served by _handle_source_info so widgets can
+        # badge from the actual source codec instead of provider assumptions.
+        # Task entries carry the URL being probed so a re-resolved stream URL
+        # cancels and replaces an in-flight probe of the superseded one.
+        self._source_info: dict[tuple[str, str], dict[str, Any]] = {}
+        self._source_info_tasks: dict[
+            tuple[str, str], tuple[asyncio.Task[None], str]
+        ] = {}
+
         # Setup routes
         self.app.router.add_get("/proxy/{provider}/{track_id}", self._handle_proxy_request)
+        self.app.router.add_get(
+            "/proxy/{provider}/{track_id}/info", self._handle_source_info
+        )
         self.app.router.add_get("/health", self._handle_health_check)
 
     async def start(self) -> None:
@@ -461,6 +537,15 @@ class StreamRedirectProxy:
 
     async def stop(self) -> None:
         """Stop the aiohttp server gracefully."""
+        if self._source_info_tasks:
+            for task, _url in self._source_info_tasks.values():
+                task.cancel()
+            await asyncio.gather(
+                *(t for t, _ in self._source_info_tasks.values()),
+                return_exceptions=True,
+            )
+            self._source_info_tasks.clear()
+
         if self.site:
             await self.site.stop()
             logger.info("[PROXY] Server site stopped")
@@ -556,6 +641,124 @@ class StreamRedirectProxy:
             "resolution_semaphore_free": self._resolution_semaphore._value,
         })
 
+    def _spawn_source_probe(
+        self, provider: str, track_id: str, stream_url: str
+    ) -> None:
+        """Start a background ffprobe of ``stream_url`` for the info cache.
+
+        No-op when a probe of the same URL is already in flight, or when the
+        cache holds a result for the same URL that is either good or a
+        still-fresh error (avoids hammering ffprobe from widget polls).
+        An in-flight probe of a different (superseded) URL is cancelled and
+        replaced.
+        """
+        key = (provider, track_id)
+        entry = self._source_info_tasks.get(key)
+        if entry is not None:
+            task, in_flight_url = entry
+            if not task.done():
+                if in_flight_url == stream_url:
+                    return
+                task.cancel()
+        cached = self._source_info.get(key)
+        if (
+            cached is not None
+            and cached.get("stream_url") == stream_url
+            and (
+                cached["status"] == "ok"
+                or time.time() - cached["ts"] < SOURCE_INFO_ERROR_RETRY_SECONDS
+            )
+        ):
+            return
+        self._source_info_tasks[key] = (
+            asyncio.create_task(
+                self._probe_source_info(provider, track_id, stream_url)
+            ),
+            stream_url,
+        )
+
+    async def _probe_source_info(
+        self, provider: str, track_id: str, stream_url: str
+    ) -> None:
+        """ffprobe ``stream_url`` and cache the classified result."""
+        key = (provider, track_id)
+        try:
+            streams = await _ffprobe_audio_streams(stream_url)
+            if streams:
+                entry = _source_info_from_streams(streams)
+            else:
+                entry = {
+                    "status": "error",
+                    "error": "ffprobe returned no audio streams",
+                }
+        except Exception as e:  # never let a probe task die silently
+            entry = {"status": "error", "error": str(e)}
+        entry["stream_url"] = stream_url
+        entry["ts"] = time.time()
+        self._source_info[key] = entry
+        current = self._source_info_tasks.get(key)
+        if current is not None and current[0] is asyncio.current_task():
+            self._source_info_tasks.pop(key)
+        if len(self._source_info) > SOURCE_INFO_CACHE_MAX:
+            oldest = min(self._source_info, key=lambda k: self._source_info[k]["ts"])
+            del self._source_info[oldest]
+
+    async def _handle_source_info(self, request: web.Request) -> web.Response:
+        """Serve cached source-stream info for a track.
+
+        URL format: /proxy/{provider}/{track_id}/info
+
+        Responses (JSON, always with provider/track_id/status):
+          - ok: codec, lossy, sample_rate, bits, channels, bitrate of the
+            stream the proxy serves (pre re-encode), from ffprobe.
+          - pending: probe spawned (or in flight); poll again.
+          - unknown: no cached stream URL to probe yet.
+          - error: last probe failed; re-probed automatically after
+            SOURCE_INFO_ERROR_RETRY_SECONDS.
+
+        Never resolves stream URLs itself (that would turn widget polls into
+        provider API calls); probes only what is already cached.
+        """
+        provider = request.match_info["provider"]
+        track_id = request.match_info["track_id"]
+
+        if provider not in self.provider_registry and provider not in TRACK_ID_PATTERNS:
+            raise web.HTTPNotFound(text=f"Unknown provider: {provider}")
+        pattern = TRACK_ID_PATTERNS.get(provider)
+        if pattern is None:
+            raise web.HTTPNotFound(text=f"No regex configured for provider: {provider}")
+        if not pattern.match(track_id):
+            raise web.HTTPBadRequest(text=f"Invalid {provider} track_id: {track_id}")
+
+        key = (provider, track_id)
+        base: dict[str, Any] = {"provider": provider, "track_id": track_id}
+        cached = self._source_info.get(key)
+        if cached is not None:
+            fresh_error = (
+                cached["status"] == "error"
+                and time.time() - cached["ts"] < SOURCE_INFO_ERROR_RETRY_SECONDS
+            )
+            if cached["status"] == "ok" or fresh_error:
+                payload = {
+                    k: v for k, v in cached.items() if k not in ("stream_url", "ts")
+                }
+                return web.json_response(base | payload)
+            # Stale error: fall through and re-probe with the current URL.
+
+        # Executor: get_track takes the TrackStore lock shared with sync
+        # threads; a widget polls this endpoint every second and must not
+        # stall the loop that byte-proxies audio to MPD.
+        track = await asyncio.get_running_loop().run_in_executor(
+            None, self.track_store.get_track, provider, track_id
+        )
+        if not track:
+            raise web.HTTPNotFound(text=f"Track not found: {provider}/{track_id}")
+        stream_url = track.get("stream_url")
+        if not stream_url:
+            return web.json_response(base | {"status": "unknown"})
+        self._spawn_source_probe(provider, track_id, stream_url)
+        return web.json_response(base | {"status": "pending"})
+
     async def _handle_proxy_request(
         self, request: web.Request
     ) -> web.Response | web.StreamResponse:
@@ -613,6 +816,10 @@ class StreamRedirectProxy:
         stream_url, duration_seconds = await self._resolve_stream_url(
             provider, track_id, req_id
         )
+
+        # Populate the source-info cache in the background so /info answers
+        # by the time a status widget polls it.
+        self._spawn_source_probe(provider, track_id, stream_url)
 
         # Streaming phase: runs outside the semaphore.
         if _is_dash_manifest(stream_url):
@@ -692,6 +899,8 @@ class StreamRedirectProxy:
                 stream_url = await self._force_refresh_url(provider, track_id, req_id)
             except (web.HTTPException, URLRefreshError):
                 break
+            # Keep the info cache in step with the refreshed URL.
+            self._spawn_source_probe(provider, track_id, stream_url)
 
         logger.error(
             f"[PROXY:{req_id}] stream failed after {DASH_MAX_RETRIES} retries "

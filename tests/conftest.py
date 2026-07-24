@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -74,3 +75,44 @@ def mock_ssh_bidir(monkeypatch: pytest.MonkeyPatch) -> Callable[..., MagicMock]:
         return popen_mock
 
     return _install
+
+
+@pytest.fixture(autouse=True)
+def _no_real_ffprobe(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep background source-info probes from spawning real ffprobe.
+
+    Any test that drives StreamRedirectProxy spawns a background ffprobe of
+    the (fake) stream URL for the /info cache; without this, tests leak real
+    subprocesses making real network requests. Tests that need probe results
+    re-patch ``_ffprobe_audio_streams`` themselves (see ``_patch_probe`` in
+    test_stream_proxy.py); tests that exercise the real function opt out via
+    ``@pytest.mark.real_ffprobe``.
+    """
+    if request.node.get_closest_marker("real_ffprobe"):
+        return
+    if "xmpd.stream_proxy" not in sys.modules:
+        return
+
+    async def _no_streams(_url: str) -> list:
+        return []
+
+    monkeypatch.setattr(
+        sys.modules["xmpd.stream_proxy"], "_ffprobe_audio_streams", _no_streams
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_live_proxy_info(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep xmpd-status tests from querying a live daemon's /info endpoint.
+
+    Display paths call get_proxy_source_info whenever --show-quality is on
+    (the default), which opens a TCP connection to the proxy port; on a dev
+    machine a real daemon may be listening there. Tests that exercise the
+    helper itself opt out via ``@pytest.mark.real_proxy_info``.
+    """
+    if request.node.get_closest_marker("real_proxy_info"):
+        return
+    mod = sys.modules.get("ytmpd_status")
+    if mod is None:
+        return
+    monkeypatch.setattr(mod, "get_proxy_source_info", lambda _fp: None)

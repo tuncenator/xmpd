@@ -9,9 +9,11 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from xmpd.proxy_url import build_proxy_url
 from xmpd.stream_proxy import (
+    SOURCE_INFO_ERROR_RETRY_SECONDS,
     StreamRedirectProxy,
     _is_dash_manifest,
     _patch_flac_streaminfo_total_samples,
+    _source_info_from_streams,
     resolve_stream_cache_hours,
 )
 from xmpd.track_store import TrackStore
@@ -92,9 +94,19 @@ def fake_ffmpeg():
         yield mock, fake_flac
 
 
+def _calls_for_bin(mock, binary):
+    """Return the argv tuples of ``mock`` calls whose argv[0] is ``binary``.
+
+    The subprocess mock intercepts both ffmpeg (streaming) and ffprobe
+    (background source-info probes), so tests must filter by binary instead
+    of assuming the most recent call is theirs.
+    """
+    return [c.args for c in mock.call_args_list if c.args and c.args[0] == binary]
+
+
 def _ffmpeg_source_url(mock):
     """Return the URL passed to ffmpeg's -i in the most recent invocation."""
-    args = mock.call_args.args
+    args = _calls_for_bin(mock, "ffmpeg")[-1]
     return args[args.index("-i") + 1]
 
 
@@ -644,8 +656,7 @@ async def test_route_tidal_dash_pipes_through_ffmpeg(track_store, tidal_provider
             assert body == fake_flac_bytes
 
     # ffmpeg invocation sanity: receives the manifest URL and emits FLAC
-    args, _ = mock_spawn.call_args
-    assert args[0] == "ffmpeg"
+    args = _calls_for_bin(mock_spawn, "ffmpeg")[-1]
     assert "https://im-fa.manifest.tidal.com/abc.mpd?token=xyz" in args
     assert "flac" in args
     # No redirect should have been attempted
@@ -759,8 +770,7 @@ async def test_route_yt_ffmpeg_gets_reconnect_flags(track_store, yt_provider_moc
         assert resp.status == 200
         await resp.read()
 
-    args = mock.call_args.args
-    assert args[0] == "ffmpeg"
+    args = _calls_for_bin(mock, "ffmpeg")[-1]
     # Reconnect flags must precede -i so they apply to the input.
     i_idx = args.index("-i")
     for flag in ("-reconnect", "-reconnect_streamed",
@@ -1271,6 +1281,7 @@ async def test_cancellation_releases_resolution_slot(track_store):
 
 
 @pytest.mark.asyncio
+@pytest.mark.real_ffprobe
 async def test_probe_best_audio_stream_picks_highest_bitrate():
     """_probe_best_audio_stream selects the stream index with the highest bitrate."""
     import json as _json
@@ -1297,6 +1308,7 @@ async def test_probe_best_audio_stream_picks_highest_bitrate():
 
 
 @pytest.mark.asyncio
+@pytest.mark.real_ffprobe
 async def test_probe_best_audio_stream_single_stream_returns_zero():
     """Falls back to index 0 when only one audio stream exists."""
     import json as _json
@@ -1322,6 +1334,7 @@ async def test_probe_best_audio_stream_single_stream_returns_zero():
 
 
 @pytest.mark.asyncio
+@pytest.mark.real_ffprobe
 async def test_probe_best_audio_stream_ffprobe_failure_returns_zero():
     """Falls back to index 0 when ffprobe raises an exception."""
     from xmpd.stream_proxy import _probe_best_audio_stream
@@ -1336,6 +1349,7 @@ async def test_probe_best_audio_stream_ffprobe_failure_returns_zero():
 
 
 @pytest.mark.asyncio
+@pytest.mark.real_ffprobe
 async def test_route_tidal_dash_ffmpeg_receives_map_flag(track_store, tidal_provider_mock):
     """ffmpeg command must include -map 0:a:{index} to select the probed audio stream."""
     track_store.add_track(
@@ -1540,3 +1554,203 @@ async def test_route_tidal_dash_patches_first_chunk_with_track_duration(
     # Body must start with the patched header and preserve the trailing payload.
     assert body.endswith(b"PAYLOAD")
     assert _read_total_samples(body[: len(first_chunk)]) == 200 * 44100
+
+
+# ---------------------------------------------------------------------------
+# Source-info endpoint (/proxy/{provider}/{track_id}/info)
+# ---------------------------------------------------------------------------
+
+OPUS_STREAM = {
+    "index": 0, "codec_name": "opus", "sample_fmt": "fltp",
+    "sample_rate": "48000", "channels": 2, "bit_rate": "130000",
+}
+FLAC_HIRES_STREAM = {
+    "index": 0, "codec_name": "flac", "sample_fmt": "s32",
+    "sample_rate": "44100", "channels": 2, "bits_per_raw_sample": "24",
+    "bit_rate": "2000000", "tags": {"id": "FLAC_HIRES,44100,24"},
+}
+
+
+def _patch_probe(monkeypatch, streams):
+    async def fake_probe(_url):
+        return streams
+
+    monkeypatch.setattr("xmpd.stream_proxy._ffprobe_audio_streams", fake_probe)
+
+
+async def _await_probe_tasks(proxy):
+    tasks = [t for t, _url in proxy._source_info_tasks.values()]
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
+def test_source_info_from_streams_lossy_opus():
+    info = _source_info_from_streams([OPUS_STREAM])
+    assert info["status"] == "ok"
+    assert info["codec"] == "opus"
+    assert info["lossy"] is True
+    assert info["sample_rate"] == 48000
+    assert info["bits"] is None
+    assert info["bitrate"] == 130000
+
+
+def test_source_info_from_streams_lossless_hires_flac():
+    info = _source_info_from_streams([FLAC_HIRES_STREAM])
+    assert info["lossy"] is False
+    assert info["bits"] == 24
+    assert info["sample_rate"] == 44100
+
+
+def test_source_info_from_streams_picks_highest_bitrate():
+    low = dict(FLAC_HIRES_STREAM, bit_rate="800000", codec_name="aac")
+    info = _source_info_from_streams([low, FLAC_HIRES_STREAM])
+    assert info["codec"] == "flac"
+
+
+def test_source_info_from_streams_unknown_codec_lossy_none():
+    info = _source_info_from_streams([dict(OPUS_STREAM, codec_name="futurecodec")])
+    assert info["status"] == "ok"
+    assert info["lossy"] is None
+
+
+@pytest.mark.asyncio
+async def test_info_pending_then_ok(track_store, monkeypatch):
+    """First /info hit spawns a probe and returns pending; once the probe
+    lands, /info serves the classified source data."""
+    _patch_probe(monkeypatch, [OPUS_STREAM])
+    track_store.add_track(
+        "yt", "testvideoid",
+        stream_url="https://googlevideo.example/abc",
+        title="Track", artist="Artist",
+    )
+    proxy = _make_proxy(track_store)
+    async with TestClient(TestServer(proxy.app)) as client:
+        resp = await client.get("/proxy/yt/testvideoid/info")
+        assert resp.status == 200
+        assert (await resp.json())["status"] == "pending"
+
+        await _await_probe_tasks(proxy)
+
+        data = await (await client.get("/proxy/yt/testvideoid/info")).json()
+        assert data["status"] == "ok"
+        assert data["codec"] == "opus"
+        assert data["lossy"] is True
+        assert data["sample_rate"] == 48000
+        assert data["bits"] is None
+        assert "stream_url" not in data
+
+
+@pytest.mark.asyncio
+async def test_info_populated_by_stream_start(
+    track_store, yt_provider_mock, fake_ffmpeg, monkeypatch
+):
+    """Serving /proxy/yt/{id} populates the info cache in the background,
+    so the first /info poll after playback starts is already ok."""
+    _patch_probe(monkeypatch, [OPUS_STREAM])
+    track_store.add_track(
+        "yt", "testvideoid",
+        stream_url="https://googlevideo.example/abc",
+        title="Track", artist="Artist",
+    )
+    proxy = _make_proxy(track_store, provider_registry={"yt": yt_provider_mock})
+    async with TestClient(TestServer(proxy.app)) as client:
+        resp = await client.get("/proxy/yt/testvideoid", allow_redirects=False)
+        assert resp.status == 200
+        await resp.read()
+        await _await_probe_tasks(proxy)
+
+        data = await (await client.get("/proxy/yt/testvideoid/info")).json()
+        assert data["status"] == "ok"
+        assert data["lossy"] is True
+
+
+@pytest.mark.asyncio
+async def test_info_unknown_when_no_cached_url(track_store):
+    track_store.add_track(
+        "yt", "testvideoid", stream_url=None, title="Track", artist="Artist",
+    )
+    proxy = _make_proxy(track_store)
+    async with TestClient(TestServer(proxy.app)) as client:
+        data = await (await client.get("/proxy/yt/testvideoid/info")).json()
+        assert data["status"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_info_track_not_in_store_404(track_store):
+    proxy = _make_proxy(track_store)
+    async with TestClient(TestServer(proxy.app)) as client:
+        resp = await client.get("/proxy/yt/testvideoid/info")
+        assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_info_bad_track_id_400(track_store):
+    proxy = _make_proxy(track_store)
+    async with TestClient(TestServer(proxy.app)) as client:
+        resp = await client.get("/proxy/yt/bad!id/info")
+        assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_info_unknown_provider_404(track_store):
+    proxy = _make_proxy(track_store)
+    async with TestClient(TestServer(proxy.app)) as client:
+        resp = await client.get("/proxy/spotify/whatever/info")
+        assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_info_probe_failure_cached_as_error(track_store, monkeypatch):
+    """A failed probe is served as error (no re-probe storm) until the
+    retry window elapses, then a fresh probe is spawned."""
+    _patch_probe(monkeypatch, [])
+    track_store.add_track(
+        "yt", "testvideoid",
+        stream_url="https://googlevideo.example/abc",
+        title="Track", artist="Artist",
+    )
+    proxy = _make_proxy(track_store)
+    async with TestClient(TestServer(proxy.app)) as client:
+        assert (await (await client.get("/proxy/yt/testvideoid/info")).json())[
+            "status"
+        ] == "pending"
+        await _await_probe_tasks(proxy)
+
+        data = await (await client.get("/proxy/yt/testvideoid/info")).json()
+        assert data["status"] == "error"
+        assert not proxy._source_info_tasks  # fresh error: no new probe
+
+        # Age the error entry past the retry window: next hit re-probes.
+        key = ("yt", "testvideoid")
+        proxy._source_info[key]["ts"] -= SOURCE_INFO_ERROR_RETRY_SECONDS + 1
+        _patch_probe(monkeypatch, [OPUS_STREAM])
+        data = await (await client.get("/proxy/yt/testvideoid/info")).json()
+        assert data["status"] == "pending"
+        await _await_probe_tasks(proxy)
+        data = await (await client.get("/proxy/yt/testvideoid/info")).json()
+        assert data["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_info_reprobes_when_stream_url_changes(track_store, monkeypatch):
+    """A cached result for an old URL is replaced when the stream URL is
+    re-resolved (spawn keyed on URL, not just track)."""
+    _patch_probe(monkeypatch, [OPUS_STREAM])
+    track_store.add_track(
+        "yt", "testvideoid",
+        stream_url="https://googlevideo.example/old",
+        title="Track", artist="Artist",
+    )
+    proxy = _make_proxy(track_store)
+    proxy._spawn_source_probe("yt", "testvideoid", "https://googlevideo.example/old")
+    await _await_probe_tasks(proxy)
+    assert proxy._source_info[("yt", "testvideoid")]["codec"] == "opus"
+
+    _patch_probe(monkeypatch, [FLAC_HIRES_STREAM])
+    # Same URL: cached ok result stands, no probe spawned.
+    proxy._spawn_source_probe("yt", "testvideoid", "https://googlevideo.example/old")
+    assert not proxy._source_info_tasks
+    # New URL: re-probe replaces the entry.
+    proxy._spawn_source_probe("yt", "testvideoid", "https://googlevideo.example/new")
+    await _await_probe_tasks(proxy)
+    assert proxy._source_info[("yt", "testvideoid")]["codec"] == "flac"

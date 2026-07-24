@@ -51,6 +51,7 @@ import signal  # noqa: E402
 import socket  # noqa: E402
 import sqlite3  # noqa: E402
 import time  # noqa: E402
+import urllib.request  # noqa: E402
 from contextlib import closing  # noqa: E402
 
 from mpd import ConnectionError as MPDConnectionError  # noqa: E402
@@ -129,6 +130,16 @@ def get_mpd_client(host: str = "localhost", port: int = 6601) -> MPDClient | Non
         return None
 
 
+# xmpd proxy URL as MPD reports it, any port (proxy_port is configurable,
+# default 8080). Restricted to loopback so the widget never treats arbitrary
+# http streams in the playlist as proxy tracks or sends them /info requests.
+# The id segment is optional: legacy pre-provider URLs are /proxy/<video_id>.
+PROXY_URL_RE = re.compile(
+    r"^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?"
+    r"/proxy/(?P<provider>[^/?#]+)(?:/(?P<id>[^/?#]+))?$"
+)
+
+
 def get_track_type(file_path: str) -> str:
     """Determine track provider from file path.
 
@@ -138,10 +149,9 @@ def get_track_type(file_path: str) -> str:
     Returns:
         'youtube', 'tidal', 'local', or 'unknown'
     """
-    proxy_prefix = "http://localhost:6602/proxy/"
-    if file_path.startswith(proxy_prefix):
-        remainder = file_path[len(proxy_prefix):]
-        if remainder.startswith("tidal/"):
+    m = PROXY_URL_RE.match(file_path)
+    if m:
+        if m.group("provider") == "tidal" and m.group("id"):
             return "tidal"
         return "youtube"
 
@@ -216,6 +226,31 @@ def classify_local_lossy(file_path: str, music_dir: str) -> bool | None:
     return None
 
 
+PROXY_INFO_TIMEOUT_SECONDS = 0.8
+
+
+def get_proxy_source_info(file_path: str) -> dict | None:
+    """Fetch source-stream info from the xmpd proxy's /info endpoint.
+
+    ``file_path`` is MPD's file field; only proxy URLs are queried. The
+    proxy serves cached ffprobe results, so this is a fast localhost hit.
+    Returns the parsed JSON dict, or None on any failure (proxy down,
+    timeout, non-proxy track). Legacy /proxy/<id> URLs (no provider segment)
+    predate the /info endpoint and are skipped.
+    """
+    m = PROXY_URL_RE.match(file_path)
+    if not m or not m.group("id"):
+        return None
+    try:
+        with urllib.request.urlopen(
+            file_path + "/info", timeout=PROXY_INFO_TIMEOUT_SECONDS
+        ) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def classify_audio_quality(
     audio_str: str,
     bitrate: str,
@@ -223,12 +258,16 @@ def classify_audio_quality(
     file_path: str = "",
     music_dir: str = "",
     compact: bool = False,
+    source_info: dict | None = None,
 ) -> str | None:
     """Return a short quality badge, or None.
 
-    Uses MPD's 'audio' field (samplerate:bits:channels) for bit-depth tier.
-    Source codec is inferred from MPD's float bit format for streaming tracks,
-    and from the local file header for ``track_type == "local"``.
+    ``source_info`` (from the proxy's /info endpoint) is authoritative when
+    present: it reflects the actual source codec before the proxy's lossless
+    FLAC re-encode, which MPD's 'audio' field cannot see. Without it, falls
+    back to MPD's 'audio' field (samplerate:bits:channels): float bit format
+    means a lossy decode, YouTube tracks are assumed lossy (all YT serves
+    today), and local files are sniffed via their header.
     Compact mode returns shorter labels (Lo/HF/HR).
     """
     if not audio_str:
@@ -243,6 +282,21 @@ def classify_audio_quality(
     except (ValueError, IndexError):
         return None
 
+    if (
+        source_info
+        and source_info.get("status") == "ok"
+        and isinstance(source_info.get("lossy"), bool)
+    ):
+        if source_info["lossy"]:
+            return "Lo" if compact else "Lossy"
+        src_bits = source_info.get("bits")
+        src_rate = source_info.get("sample_rate")
+        if (isinstance(src_bits, int) and src_bits >= 24) or (
+            isinstance(src_rate, int) and src_rate > 48000
+        ):
+            return "HR" if compact else "HiRes"
+        return "HF" if compact else "HiFi"
+
     is_lossy: bool | None = None
     if track_type == "local":
         is_lossy = classify_local_lossy(
@@ -251,6 +305,11 @@ def classify_audio_quality(
         if is_lossy is None:
             return None
     elif bit_fmt == "f":
+        is_lossy = True
+    elif track_type == "youtube":
+        # Proxy re-encodes YT to 24-bit FLAC, so MPD's bit depth reflects
+        # the re-encode, not the lossy source. Provider hint until the
+        # source probe answers; source_info overrides once available.
         is_lossy = True
 
     if is_lossy:
@@ -428,16 +487,15 @@ def get_sync_status(file_path: str) -> str:
     Returns:
         Status string: 'resolved', 'unresolved', 'local', or 'unknown'
     """
-    proxy_prefix = "http://localhost:6602/proxy/"
-    if not file_path.startswith(proxy_prefix):
+    m = PROXY_URL_RE.match(file_path)
+    if not m:
         return "local"
 
-    # Proxy URL form: <prefix><provider>/<track_id>
-    remainder = file_path[len(proxy_prefix):]
-    if "/" in remainder:
-        provider, track_id = remainder.split("/", 1)
+    # /proxy/<provider>/<track_id>, or legacy /proxy/<track_id> (yt implied)
+    if m.group("id"):
+        provider, track_id = m.group("provider"), m.group("id")
     else:
-        provider, track_id = "yt", remainder
+        provider, track_id = "yt", m.group("provider")
 
     db_path = Path.home() / ".config" / "xmpd" / "track_mapping.db"
     if not db_path.exists():
@@ -1177,6 +1235,7 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
 
         # Classify track type
         track_type = get_track_type(file_path)
+        source_info = get_proxy_source_info(file_path) if args.show_quality else None
 
         # Choose icon and color based on state and track type
         if state == "play":
@@ -1268,6 +1327,7 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                         file_path=file_path,
                         music_dir=args.music_dir,
                         compact=True,
+                        source_info=source_info,
                     )
                     if quality:
                         quality_suffix = f" [{quality}]"
@@ -1313,6 +1373,7 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                         file_path=file_path,
                         music_dir=args.music_dir,
                         compact=compact_mode,
+                        source_info=source_info,
                     )
                     if quality:
                         context_suffix += f" [{quality}]"
@@ -1360,6 +1421,7 @@ def display_status(client: MPDClient, args, persist_mode: bool = False) -> None:
                 file_path=file_path,
                 music_dir=args.music_dir,
                 compact=True,
+                source_info=source_info,
             )
             if short_quality:
                 short_quality_suffix = f" [{short_quality}]"
@@ -1578,6 +1640,7 @@ def _compute_status_triple(client: MPDClient, args) -> tuple[str, str, str, str]
     position_str = format_time(elapsed)
     duration_str = format_time(duration)
     track_type = get_track_type(file_path)
+    source_info = get_proxy_source_info(file_path) if args.show_quality else None
 
     if state == "play":
         icon = args.icon_playing
@@ -1645,6 +1708,7 @@ def _compute_status_triple(client: MPDClient, args) -> tuple[str, str, str, str]
             file_path=file_path,
             music_dir=args.music_dir,
             compact=args.compact,
+            source_info=source_info,
         )
         if quality:
             context_suffix += f" [{quality}]"
@@ -1712,6 +1776,7 @@ def _compute_status_triple(client: MPDClient, args) -> tuple[str, str, str, str]
             file_path=file_path,
             music_dir=args.music_dir,
             compact=True,
+            source_info=source_info,
         )
         if sq:
             short_quality_suffix = f" [{sq}]"
@@ -1957,6 +2022,7 @@ def main() -> None:
 
         # Classify track type
         track_type = get_track_type(file_path)
+        source_info = get_proxy_source_info(file_path) if args.show_quality else None
 
         # Choose icon and color based on state and track type
         if state == "play":
@@ -2047,6 +2113,7 @@ def main() -> None:
                     file_path=file_path,
                     music_dir=args.music_dir,
                     compact=True,
+                    source_info=source_info,
                 )
                 if quality:
                     quality_suffix = f" [{quality}]"
@@ -2098,6 +2165,7 @@ def main() -> None:
                     file_path=file_path,
                     music_dir=args.music_dir,
                     compact=compact_mode,
+                    source_info=source_info,
                 )
                 if quality:
                     context_suffix += f" [{quality}]"
@@ -2145,6 +2213,7 @@ def main() -> None:
                 file_path=file_path,
                 music_dir=args.music_dir,
                 compact=True,
+                source_info=source_info,
             )
             if short_quality:
                 short_quality_suffix = f" [{short_quality}]"

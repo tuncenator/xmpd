@@ -66,6 +66,8 @@ asyncio_mode = "auto"
 norecursedirs = ["tests/research"]
 markers = [
     "tidal_integration: live tests against the user's real Tidal account; requires XMPD_TIDAL_TEST=1",
+    "real_ffprobe: opt out of the autouse _ffprobe_audio_streams stub in conftest.py",
+    "real_proxy_info: opt out of the autouse get_proxy_source_info stub in conftest.py",
 ]
 
 [dependency-groups]
