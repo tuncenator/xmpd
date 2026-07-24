@@ -1,15 +1,1 @@
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/home/tunc/.claude/hooks/spark-worktree-guard.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
+{}
