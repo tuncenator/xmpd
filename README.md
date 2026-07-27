@@ -289,6 +289,14 @@ track-store DB (`~/.config/xmpd/track_mapping.db`). The YT path is unchanged
 (iTunes/MusicBrainz fallback). Install the bridge after Tidal tracks have
 been synced at least once so the DB is populated.
 
+`mpd-owntone-watchdog.service` keeps the route alive: `speaker` records the
+routing intent in `state.json`, and the watchdog re-selects any intended
+receiver that OwnTone has dropped (a Wi-Fi blip makes it deselect a speaker
+whose FLUSH timed out and pause). It only acts while MPD is playing into the
+bridge, never touches volumes, and gives up with one notification after three
+failed bursts so a speaker switched off on purpose is left alone. Poll interval:
+`WATCHDOG_POLL_SECS` in `config.env`.
+
 ```bash
 cd extras/airplay-bridge
 ./install.sh --check     # report what's missing, no changes
@@ -456,6 +464,7 @@ xmpd/
 |       +-- speaker               # Atomic routing tool
 |       +-- speaker-rofi          # rofi speaker picker
 |       +-- vol-wrap              # Smart volume key router
+|       +-- mpd-owntone-watchdog  # Auto-reheal for a dropped AirPlay route
 |       +-- mpd_owntone_metadata.py  # Metadata pipe bridge (Tidal art aware)
 +-- examples/
 |   +-- config.yaml               # Documented full config (multi-source layout)

@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# mpd-owntone-watchdog: re-arm the AirPlay route when OwnTone silently drops it.
+#
+# Why this exists: on 2026-07-24 a 2 s Wi-Fi blip made OwnTone reset its
+# outputs; the FLUSH to the JBL Boombox 3 timed out, so OwnTone deselected the
+# speaker and paused. /etc/owntone.conf has reconnect=true for that receiver,
+# but OwnTone 29.3 only honours it in device_streaming_cb (player.c:1516) - the
+# flush-failure path (player.c:1576) just logs "flush failed" and gives up.
+# Nothing re-armed the speaker, and recovery meant re-running `speaker` by hand
+# while the music kept playing into the void.
+#
+# So: poll the routing *intent* that `speaker` records in state.json (`speaker`
+# is the only writer; this script only reads it) and, when reality has drifted
+# away from it while music is playing, put the intended outputs back.
+#
+# Deliberately narrow. It re-arms only when ALL of these hold:
+#   * state.json says route=airplay (a `speaker laptop` disarms it)
+#   * MPD is [playing]
+#   * MPD's bridge output is enabled (audio really is aimed at OwnTone)
+#   * at least one intended OwnTone output is no longer selected
+# and it never writes a volume - loudness belongs to vol-wrap / speaker.
+#
+# A speaker that is simply switched off must not be fought forever: after
+# WATCHDOG_MAX_BURSTS failed bursts inside WATCHDOG_BURST_WINDOW_SECS it
+# notifies once and then waits for a fresh intent (another `speaker` run) or
+# for the route to come back on its own.
+#
+# Usage:
+#   mpd-owntone-watchdog              # run forever (systemd user unit)
+#   mpd-owntone-watchdog --once       # one check, then exit
+#   mpd-owntone-watchdog --ticks N    # N checks, then exit (debugging/tests)
+
+set -u -o pipefail
+
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/mpd-owntone-bridge/config.env"
+STATE="${XDG_CONFIG_HOME:-$HOME/.config}/mpd-owntone-bridge/state.json"
+
+[[ -f "$CONFIG" ]] || { echo "missing config: $CONFIG" >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$CONFIG"
+
+POLL_SECS="${WATCHDOG_POLL_SECS:-5}"
+MAX_BURSTS="${WATCHDOG_MAX_BURSTS:-3}"
+BURST_WINDOW_SECS="${WATCHDOG_BURST_WINDOW_SECS:-300}"
+[[ "$POLL_SECS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || POLL_SECS=5
+[[ "$MAX_BURSTS" =~ ^[0-9]+$ ]] || MAX_BURSTS=3
+[[ "$BURST_WINDOW_SECS" =~ ^[0-9]+$ ]] || BURST_WINDOW_SECS=300
+
+CURL=(command curl --silent --max-time 2)
+MPC=(mpc -p "$MPD_PORT" -h "$MPD_HOST")
+
+# Journal-facing, so no colour and no interactive flourishes.
+log()  { printf '[watchdog] %s\n' "$*"; }
+warn() { printf '[watchdog] %s\n' "$*" >&2; }
+
+# Failure bookkeeping. Lives in memory only: the intent file belongs to
+# `speaker`, and a restart of this unit is a legitimate fresh start.
+LAST_SIG=''
+BURSTS=0
+WINDOW_START=0
+GAVE_UP=0
+
+# -------- owntone --------
+
+owntone_outputs_json() { "${CURL[@]}" "${OWNTONE_API}/outputs"; }
+
+owntone_is_selected() {
+  "${CURL[@]}" "${OWNTONE_API}/outputs/$1" | jq -r '.selected // false'
+}
+
+owntone_set_selected() {
+  "${CURL[@]}" -X PUT "${OWNTONE_API}/outputs/$1" \
+    -H 'Content-Type: application/json' \
+    -d "{\"selected\": $2}" >/dev/null
+}
+
+owntone_player_play() { "${CURL[@]}" -X PUT "${OWNTONE_API}/player/play" >/dev/null; }
+
+# Mirrors ensure_selected_all in `speaker`, with backoff instead of a flat
+# poll: a receiver whose Wi-Fi just came back needs a moment before it accepts
+# an RTSP handshake, and OwnTone flips `selected` back to false when it does
+# not. Sleeps 1 s, 2 s, 4 s between checks.
+ensure_selected_all() {
+  local ids=("$@") attempt id any_missing backoff=1
+  for attempt in 1 2 3; do
+    sleep "$backoff"
+    any_missing=0
+    for id in "${ids[@]}"; do
+      if [[ "$(owntone_is_selected "$id")" != "true" ]]; then
+        any_missing=1
+        log "output $id not ready (attempt $attempt/3), re-selecting"
+        owntone_set_selected "$id" true
+      fi
+    done
+    (( any_missing == 0 )) && return 0
+    backoff=$(( backoff * 2 ))
+  done
+  return 1
+}
+
+# -------- intent (written by `speaker`, read-only here) --------
+
+# Tolerate a half-written or hand-mangled file: an unreadable intent means
+# "no intent", never "airplay".
+state_json() {
+  local raw
+  raw=$(cat "$STATE" 2>/dev/null) || raw=''
+  [[ -n "$raw" ]] && jq -ec . <<< "$raw" 2>/dev/null || echo '{}'
+}
+
+# What the user last asked for. Any change (route, target set, or simply
+# re-running `speaker` for the same speakers) re-arms a watchdog that gave up.
+intent_signature() {
+  jq -cS '{route: (.route // ""), ids: (.route_ids // []), at: (.route_changed_at // 0)}' <<< "$1"
+}
+
+# -------- reality --------
+
+mpd_is_playing() { "${MPC[@]}" status 2>/dev/null | grep -q '^\[playing\]'; }
+
+mpd_bridge_enabled() {
+  "${MPC[@]}" outputs 2>/dev/null | grep -qF -- "($MPD_OUT_AIRPLAY) is enabled"
+}
+
+# Intended ids that OwnTone no longer reports as selected. An id that vanished
+# from /outputs entirely (receiver off the network) counts as missing too.
+missing_ids() {
+  local outputs="$1"; shift
+  local id
+  for id in "$@"; do
+    jq -e --arg id "$id" \
+      'any(.outputs[]; (.id | tostring) == $id and .selected == true)' \
+      >/dev/null 2>&1 <<< "$outputs" || echo "$id"
+  done
+}
+
+any_selected() {
+  local id
+  for id in "$@"; do
+    [[ "$(owntone_is_selected "$id")" == "true" ]] && return 0
+  done
+  return 1
+}
+
+# "JBL Boombox 3 (84025535625755), Kitchen (111...)" for the journal and the
+# notification; bare ids for receivers that have dropped off the network.
+labels_for() {
+  local outputs="$1"; shift
+  local out='' id name
+  for id in "$@"; do
+    name=$(jq -r --arg id "$id" \
+      'first(.outputs[] | select((.id | tostring) == $id) | .name) // ""' <<< "$outputs")
+    [[ -n "$name" ]] && name="$name ($id)" || name="$id"
+    out+="${out:+, }$name"
+  done
+  printf '%s' "$out"
+}
+
+# -------- the reheal --------
+
+nudge_bridge_reemit() {
+  # The re-selected output opened a fresh RTSP session, which starts out with
+  # the pipe's default "mpd.pcm / Unknown artist"; re-emit the real track.
+  systemctl --user kill -s USR1 mpd-owntone-metadata.service 2>/dev/null || true
+}
+
+waybar_refresh() { pkill -RTMIN+9 waybar 2>/dev/null || true; }
+
+# -------- one pass --------
+
+tick() {
+  local st sig route
+  st=$(state_json)
+  sig=$(intent_signature "$st")
+  if [[ "$sig" != "$LAST_SIG" ]]; then
+    [[ -n "$LAST_SIG" ]] && log "routing intent changed: $sig (re-arming)"
+    LAST_SIG="$sig"
+    BURSTS=0
+    WINDOW_START=0
+    GAVE_UP=0
+  fi
+
+  route=$(jq -r '.route // ""' <<< "$st")
+  [[ "$route" == "airplay" ]] || return 0
+
+  local ids=()
+  mapfile -t ids < <(jq -r '(.route_ids // [])[]' <<< "$st")
+  (( ${#ids[@]} )) || return 0
+
+  mpd_is_playing || return 0
+  mpd_bridge_enabled || return 0
+
+  local outputs
+  outputs=$(owntone_outputs_json) || { warn "owntone API unreachable; skipping check"; return 0; }
+  jq -e '.outputs' >/dev/null 2>&1 <<< "$outputs" \
+    || { warn "owntone /outputs unparseable; skipping check"; return 0; }
+
+  local missing=() labels
+  mapfile -t missing < <(missing_ids "$outputs" "${ids[@]}")
+  if (( ${#missing[@]} == 0 )); then
+    if (( BURSTS > 0 || GAVE_UP )); then
+      log "airplay route healthy again (${ids[*]})"
+    fi
+    BURSTS=0
+    WINDOW_START=0
+    GAVE_UP=0
+    return 0
+  fi
+
+  # Gave up on this exact intent: the speaker is off on purpose until the user
+  # says otherwise. Do not touch OwnTone again.
+  (( GAVE_UP )) && return 0
+
+  local now
+  now=$(date +%s)
+  if (( WINDOW_START == 0 || now - WINDOW_START > BURST_WINDOW_SECS )); then
+    WINDOW_START=$now
+    BURSTS=0
+  fi
+
+  labels=$(labels_for "$outputs" "${missing[@]}")
+
+  if (( BURSTS >= MAX_BURSTS )); then
+    GAVE_UP=1
+    warn "giving up on $labels after $BURSTS bursts; run 'speaker' to re-arm"
+    notify-send -u critical -t 10000 "AirPlay bridge" \
+      "Could not re-arm $labels after $BURSTS bursts. Powered off? Re-run 'speaker' once it is back." \
+      2>/dev/null || true
+    return 0
+  fi
+
+  BURSTS=$(( BURSTS + 1 ))
+  log "airplay route drifted: $labels not selected; re-arm burst $BURSTS/$MAX_BURSTS"
+
+  local id rc=0
+  for id in "${missing[@]}"; do
+    owntone_set_selected "$id" true
+  done
+  ensure_selected_all "${ids[@]}" || rc=1
+
+  if ! any_selected "${ids[@]}"; then
+    warn "$labels did not accept the re-select; leaving the player alone"
+    return 0
+  fi
+  (( rc )) && warn "only part of the intended set came back"
+
+  # OwnTone paused itself when the flush failed; resume, then re-send the
+  # metadata into the new session and poke waybar's volume module.
+  owntone_player_play
+  nudge_bridge_reemit
+  waybar_refresh
+  log "re-armed ${ids[*]} and resumed playback"
+}
+
+# -------- main --------
+
+usage() {
+  echo "usage: mpd-owntone-watchdog [--once | --ticks N]" >&2
+  exit 2
+}
+
+main() {
+  local max_ticks=0 ticks=0
+  case "${1:-}" in
+    '')      ;;
+    --once)  max_ticks=1 ;;
+    --ticks) max_ticks="${2:-}"; [[ "$max_ticks" =~ ^[1-9][0-9]*$ ]] || usage ;;
+    *)       usage ;;
+  esac
+
+  trap 'exit 0' TERM INT
+  log "watching (poll ${POLL_SECS}s, intent from $STATE, ${MAX_BURSTS} bursts per ${BURST_WINDOW_SECS}s)"
+  [[ "$POLL_SECS" == 0 || "$POLL_SECS" == 0.0 ]] \
+    && warn "WATCHDOG_POLL_SECS=0 polls MPD and OwnTone as fast as it can; debugging only"
+  while :; do
+    tick
+    ticks=$(( ticks + 1 ))
+    (( max_ticks > 0 && ticks >= max_ticks )) && break
+    sleep "$POLL_SECS"
+  done
+}
+
+main "$@"

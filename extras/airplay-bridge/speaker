@@ -35,7 +35,31 @@ err()    { printf '\033[0;31m[speaker]\033[0m %s\n' "$*" >&2; exit 1; }
 # -------- low-level helpers --------
 
 state_read()  { [[ -f "$STATE" ]] && cat "$STATE" || echo '{}'; }
-state_write() { echo "$1" > "$STATE"; }
+# Written atomically: mpd-owntone-watchdog polls this file every few seconds
+# and a torn read would look like "no route intent" (or fail to parse).
+state_write() {
+  local tmp="${STATE}.tmp.$$"
+  printf '%s\n' "$1" > "$tmp" && mv -f "$tmp" "$STATE"
+}
+
+# Record the routing *intent* (as opposed to what OwnTone currently reports).
+# `speaker` is the single writer of these keys; mpd-owntone-watchdog only reads
+# them, and re-arms the AirPlay outputs when reality drifts from the intent
+# (OwnTone deselects a receiver whose FLUSH timed out after a network blip and
+# only honours reconnect= in device_streaming_cb, never on the flush-failure
+# path). Merged into the existing object so multi_baseline & co. survive.
+#   $1        = laptop|airplay
+#   $2.. $n   = intended owntone output ids (airplay only)
+state_set_route() {
+  local route="$1"; shift
+  local ids_json merged
+  ids_json=$(printf '%s\n' "$@" | jq -Rsc 'split("\n") | map(select(length > 0))')
+  merged=$(state_read | jq \
+    --arg route "$route" \
+    --argjson ids "$ids_json" \
+    '.route = $route | .route_ids = $ids | .route_changed_at = (now | floor)')
+  state_write "$merged"
+}
 
 owntone_outputs_json() { "${CURL[@]}" "${OWNTONE_API}/outputs"; }
 
@@ -141,6 +165,9 @@ nudge_bridge_reemit() {
 go_laptop() {
   info "routing: laptop speakers"
   rm -f "$VOLWRAP_TARGET_FILE"
+  # Disarm the watchdog first: deselecting the AirPlay outputs below is a
+  # deliberate teardown, not the drift it exists to repair.
+  state_set_route laptop
   owntone_deselect_all_airplay
   owntone_player_stop
   mpd_enable  "$MPD_OUT_LOCAL"
@@ -156,6 +183,10 @@ go_airplay() {
   local ids=("$@")
   info "routing: airplay -> ${#ids[@]} speaker(s)"
   rm -f "$VOLWRAP_TARGET_FILE"
+  # Record intent up front, so a watchdog tick that lands mid-route (or after
+  # this script dies partway) still knows what the target set is meant to be.
+  # Writing it also re-arms the watchdog if it had given up on these ids.
+  state_set_route airplay "${ids[@]}"
   mpd_disable "$MPD_OUT_LOCAL"
   mpd_enable  "$MPD_OUT_AIRPLAY"
   owntone_deselect_all_airplay
@@ -203,6 +234,11 @@ clear_multi_baseline() {
 # -------- commands --------
 
 cmd_status() {
+  echo "--- Routing intent (what the watchdog re-arms) ---"
+  state_read | jq -r '
+    if .route then "  route: \(.route) ids: \((.route_ids // []) | join(", ") | if . == "" then "-" else . end)"
+    else "  none recorded yet (run a route command)" end'
+  echo
   echo "--- MPD outputs ---"
   "${MPC[@]}" outputs
   echo

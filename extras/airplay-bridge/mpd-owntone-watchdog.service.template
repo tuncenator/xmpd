@@ -1,0 +1,17 @@
+[Unit]
+Description=Re-arm the OwnTone AirPlay route when a network blip drops it
+After=mpd.service network-online.target mpd-owntone-metadata.service
+Wants=mpd.service
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+ExecStart=@SCRIPT_DIR@/mpd-owntone-watchdog
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

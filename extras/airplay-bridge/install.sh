@@ -32,6 +32,7 @@ I3_CONF="${HOME}/.i3/config"
 SWAY_CONF="${HOME}/.config/sway/config"
 SYSTEMD_UNIT="${HOME}/.config/systemd/user/mpd-owntone-metadata.service"
 PADDER_UNIT="${HOME}/.config/systemd/user/mpd-owntone-padder.service"
+WATCHDOG_UNIT="${HOME}/.config/systemd/user/mpd-owntone-watchdog.service"
 PW_DROPIN="${HOME}/.config/pipewire/pipewire-pulse.conf.d/20-raop-discover.conf"
 PW_BRIDGE_PIN="${HOME}/.config/pipewire/pipewire-pulse.conf.d/30-mpd-bridge-pin.conf"
 PW_NULLSINK="${HOME}/.config/pipewire/pipewire.conf.d/30-owntone-bridge.conf"
@@ -115,6 +116,12 @@ check_service() {
   else
     miss "mpd-owntone-metadata not enabled"
   fi
+  if [[ -f "$WATCHDOG_UNIT" ]]; then ok "systemd unit: $WATCHDOG_UNIT"; else miss "watchdog systemd unit missing"; fi
+  if systemctl --user is-enabled --quiet mpd-owntone-watchdog 2>/dev/null; then
+    ok "mpd-owntone-watchdog enabled"
+  else
+    miss "mpd-owntone-watchdog not enabled"
+  fi
 }
 
 run_checks() {
@@ -165,6 +172,7 @@ run_checks() {
   if systemctl is-active --quiet owntone; then ok "owntone.service running"; else miss "owntone.service not running"; fi
   if systemctl --user is-active --quiet mpd-owntone-metadata; then ok "mpd-owntone-metadata running"; else miss "mpd-owntone-metadata not running"; fi
   if systemctl --user is-active --quiet mpd-owntone-padder; then ok "mpd-owntone-padder running"; else miss "mpd-owntone-padder not running"; fi
+  if systemctl --user is-active --quiet mpd-owntone-watchdog; then ok "mpd-owntone-watchdog running"; else miss "mpd-owntone-watchdog not running"; fi
   if pactl list short sinks 2>/dev/null | grep -q '^\S*\s*owntone-bridge\s'; then ok "owntone-bridge null sink loaded"; else miss "owntone-bridge null sink not loaded"; fi
   if command curl --silent --max-time 1 "$OWNTONE_API/outputs" >/dev/null; then
     ok "owntone API reachable"
@@ -280,6 +288,18 @@ install_systemd_unit() {
   sed -e "s|@SCRIPT_DIR@|$SCRIPT_DIR|g" "$SCRIPT_DIR/mpd-owntone-metadata.service.template" > "$SYSTEMD_UNIT"
   systemctl --user daemon-reload
   systemctl --user enable --now mpd-owntone-metadata
+}
+
+install_watchdog_unit() {
+  # Re-arms the AirPlay route after OwnTone drops a receiver whose FLUSH timed
+  # out (a Wi-Fi blip): OwnTone 29.3 only honours reconnect= in
+  # device_streaming_cb, never on the flush-failure path, so nothing else does.
+  # Reads the routing intent `speaker` records in state.json.
+  info "installing systemd user unit -> $WATCHDOG_UNIT"
+  mkdir -p "$(dirname "$WATCHDOG_UNIT")"
+  sed -e "s|@SCRIPT_DIR@|$SCRIPT_DIR|g" "$SCRIPT_DIR/mpd-owntone-watchdog.service.template" > "$WATCHDOG_UNIT"
+  systemctl --user daemon-reload
+  systemctl --user enable --now mpd-owntone-watchdog
 }
 
 patch_mpd_conf() {
@@ -546,7 +566,8 @@ make_executable() {
   chmod +x "$SCRIPT_DIR"/mpd_owntone_metadata.py \
            "$SCRIPT_DIR"/vol-wrap \
            "$SCRIPT_DIR"/speaker \
-           "$SCRIPT_DIR"/speaker-rofi
+           "$SCRIPT_DIR"/speaker-rofi \
+           "$SCRIPT_DIR"/mpd-owntone-watchdog
 }
 
 # -------- main --------
@@ -572,6 +593,7 @@ install_wireplumber_bridge_route
 install_pipewire_nullsink
 install_systemd_unit
 install_padder_unit
+install_watchdog_unit
 patch_mpd_conf
 patch_wm_confs
 
