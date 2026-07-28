@@ -189,6 +189,17 @@ def test_reheal_retries_a_receiver_that_rejects_the_first_handshake(drifted: Bri
     assert any(c.startswith("PUT /player/play") for c in drifted.calls())
 
 
+def test_a_receiver_off_the_network_does_not_spam_the_journal(drifted: Bridge) -> None:
+    """OwnTone answers 400/HTML for a vanished output id; jq must not shout."""
+    drifted.env["FAKE_OUTPUTS"] = f"{KITCHEN_ID}|Kitchen|AirPlay"
+
+    result = drifted.run(WATCHDOG, "--once")
+
+    assert result.returncode == 0
+    assert "jq:" not in result.stderr
+    assert "parse error" not in result.stderr
+
+
 def test_a_receiver_that_never_comes_back_is_not_played_into(drifted: Bridge) -> None:
     """Nothing got selected, so do not order OwnTone to play into a void."""
     drifted.env["FAKE_ACCEPT"] = ""

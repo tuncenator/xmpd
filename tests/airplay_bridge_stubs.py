@@ -76,6 +76,8 @@ CURL_STUB = textwrap.dedent("""\
         while IFS= read -r line; do
           [[ "$line" == "$id|"* ]] && { emit_output "$line"; exit 0; }
         done <<< "$FAKE_OUTPUTS"
+        # Unknown id: OwnTone answers 400 with an HTML body, not JSON.
+        printf '<html>\\n<head>\\n<title>400 Bad Request</title>\\n</head>\\n</html>\\n'
         ;;
       "PUT /outputs/"*)
         id="${path##*/}"

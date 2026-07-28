@@ -65,7 +65,9 @@ GAVE_UP=0
 owntone_outputs_json() { "${CURL[@]}" "${OWNTONE_API}/outputs"; }
 
 owntone_is_selected() {
-  "${CURL[@]}" "${OWNTONE_API}/outputs/$1" | jq -r '.selected // false'
+  # An id that has left the network answers 400 with an HTML body, so jq's
+  # parse error is expected here and must not reach the journal.
+  "${CURL[@]}" "${OWNTONE_API}/outputs/$1" | jq -r '.selected // false' 2>/dev/null
 }
 
 owntone_set_selected() {

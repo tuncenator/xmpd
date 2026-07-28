@@ -76,12 +76,14 @@ owntone_set_volume() {
     -d "{\"volume\": $2}" >/dev/null
 }
 
+# An output id that is not on the network answers 400 with an HTML body, so
+# jq's parse error is expected on these two and must not reach the terminal.
 owntone_get_volume() {
-  "${CURL[@]}" "${OWNTONE_API}/outputs/$1" | jq -r '.volume // empty'
+  "${CURL[@]}" "${OWNTONE_API}/outputs/$1" | jq -r '.volume // empty' 2>/dev/null
 }
 
 owntone_is_selected() {
-  "${CURL[@]}" "${OWNTONE_API}/outputs/$1" | jq -r '.selected // false'
+  "${CURL[@]}" "${OWNTONE_API}/outputs/$1" | jq -r '.selected // false' 2>/dev/null
 }
 
 # Cold receivers (e.g., an AVR waking from standby) often reject the first RTSP
