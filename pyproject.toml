@@ -10,7 +10,10 @@ requires-python = ">=3.11"
 license = {text = "MIT"}
 
 dependencies = [
-    "ytmusicapi>=1.0.0",
+    # 1.12.1 replaced get_watch_playlist's hardcoded "Related" tab index with a
+    # scan over all tabs. YouTube inserted a "Comments" tab at index 2, which
+    # made every radio call raise KeyError: 'endpoint' on older releases.
+    "ytmusicapi>=1.12.1",
     "pyyaml>=6.0",
     "python-mpd2>=3.1.0",
     "yt-dlp>=2023.0.0",
