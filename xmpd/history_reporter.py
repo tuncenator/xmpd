@@ -166,7 +166,7 @@ class HistoryReporter:
         """Exponential backoff (doubling from the base) capped at the max."""
         exp = min(consecutive_failures - 1, 20)  # cap the shift, avoid overflow
         delay = self._RETRY_BASE_SECONDS * (2**exp)
-        return min(delay, self._RETRY_MAX_SECONDS)
+        return float(min(delay, self._RETRY_MAX_SECONDS))
 
     # ------------------------------------------------------------------
     # Connection helpers

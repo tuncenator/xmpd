@@ -118,13 +118,13 @@ def _patch_xspf_file(
 
     changed = False
 
-    def patch_track_block(m: re.Match) -> str:
+    def patch_track_block(m: re.Match[str]) -> str:
         nonlocal changed
         block = m.group(1)
         if proxy_url not in block:
             return block
 
-        def patch_title(tm: re.Match) -> str:
+        def patch_title(tm: re.Match[str]) -> str:
             nonlocal changed
             open_tag, title_text, close_tag = tm.group(1), tm.group(2), tm.group(3)
             has_indicator = indicator in title_text

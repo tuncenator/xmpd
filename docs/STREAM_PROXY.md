@@ -1,115 +1,113 @@
 # Stream Proxy
 
-## What it does
+## Delivery modes
 
-`xmpd/stream_proxy.py` implements a lightweight aiohttp HTTP server (default
-`localhost:8080`) that MPD talks to instead of a CDN directly. When MPD fetches
-a playlist entry, it hits this proxy with a GET request. The proxy looks up the
-track in the TrackStore, resolves a fresh direct CDN URL if needed, and replies
-with HTTP 307 Temporary Redirect so MPD streams directly from the CDN. The proxy
-itself never buffers audio data.
+`xmpd/stream_proxy.py` serves HTTP on `localhost:8080` by default. Playlists
+contain stable local URLs; expiring upstream URLs live in TrackStore and are
+resolved lazily when MPD requests a track.
 
-Key properties:
-- Lazy: stream URLs are only resolved when MPD actually requests a track.
-- Auto-refresh: cached URLs older than the per-provider TTL are re-resolved on
-  demand before the redirect is issued.
-- No ICY metadata injected -- the old "ICY proxy" name was a misnomer inherited
-  from an earlier design; this module never implemented ICY metadata injection.
+| Resolved source | Delivery to MPD |
+|---|---|
+| YouTube progressive audio | HTTP 200, FLAC streamed through ffmpeg with HTTP reconnect options |
+| DASH manifest (`.mpd`, including Tidal) | HTTP 200, ffmpeg selects the highest-bitrate audio stream and assembles it as FLAC |
+| Other direct audio URL | HTTP 307 redirect; MPD streams directly from the CDN |
 
-## Route shape
+`xmpd/stream_transport.py` owns ffmpeg/ffprobe subprocesses, FLAC header handling,
+and stream read timeouts. The proxy owns HTTP routing, URL resolution, caches,
+and retry policy. Audio is piped in memory; there is no on-disk audio cache or
+ICY metadata injection.
 
-```
-GET /proxy/{provider}/{track_id}  ->  307 Temporary Redirect to CDN URL
-GET /health                       ->  200 JSON  {"status": "ok", "service": "stream-proxy"}
-```
+Encoding YouTube's lossy audio as FLAC does not restore lost information.
+Quality indicators use the original source codec and properties, rather than
+mistaking the FLAC transport for a lossless source.
 
-`provider` is the canonical short name (`yt`, `tidal`).
-`track_id` is the provider-native track identifier.
+## Routes
 
-## Provider validation
-
-Each provider has a per-provider track_id regex enforced before any store lookup:
-
-| Provider | Pattern              | Example          |
-|----------|----------------------|------------------|
-| `yt`     | `^[A-Za-z0-9_-]{11}$` | `dQw4w9WgXcQ`   |
-| `tidal`  | `^\d{1,20}$`          | `12345678`       |
-
-A request for an unknown provider (one not in the registry and not in
-`TRACK_ID_PATTERNS`) returns 404 immediately.
-
-## Status code semantics
-
-| Code | Meaning                                                        |
-|------|----------------------------------------------------------------|
-| 200  | `/health` response                                             |
-| 307  | Redirect to CDN URL (cache hit or fresh resolve)               |
-| 400  | `track_id` fails per-provider regex                            |
-| 404  | Unknown provider, OR valid provider+id but track not in store  |
-| 502  | URL resolver failed and no cached URL to fall back to          |
-| 503  | Concurrency cap (`MAX_CONCURRENT_STREAMS = 10`) reached        |
-
-On a resolve failure where a (stale) cached URL already exists, the proxy logs
-a WARNING and falls through to the stale URL, returning 307.
-
-## Per-provider TTL
-
-Cached stream URLs are considered fresh for `stream_cache_hours[provider]`
-hours. When a request arrives for a URL older than the TTL, the proxy calls
-the provider's `resolve_stream(track_id)` in a thread-pool executor before
-redirecting. The refreshed URL is persisted to TrackStore immediately.
-
-Default TTL: 5 hours (matches YouTube URL expiry). After Phase 11, Tidal
-default will be overridden to 1 hour via the `tidal:` config section.
-
-Constructor arg: `stream_cache_hours: dict[str, int] | None`. Example:
-
-```python
-StreamRedirectProxy(
-    track_store=store,
-    provider_registry={"yt": yt_prov},
-    stream_cache_hours={"yt": 5, "tidal": 1},
-)
+```text
+GET /proxy/{provider}/{track_id}       -> 200 audio/flac or 307 redirect
+GET /proxy/{provider}/{track_id}/info  -> 200 JSON source information
+GET /health                          -> 200 JSON health and counters
 ```
 
-## `build_proxy_url` helper
+Providers have validated track identifiers:
 
-`xmpd/proxy_url.py` provides a small helper that builds the proxy URL without
-importing aiohttp. Use this wherever an MPD playlist entry needs a proxy URL:
+| Provider | Pattern | Example |
+|---|---|---|
+| `yt` | `^[A-Za-z0-9_-]{11}$` | `dQw4w9WgXcQ` |
+| `tidal` | `^\d{1,20}$` | `12345678` |
+
+Unknown providers return 404. Invalid identifiers return 400. A valid track
+must already be registered in TrackStore by sync, playback, queueing, or radio.
+Legacy `/proxy/<video_id>` URLs have no server route; run `xmpctl sync` and reload
+the playlist in MPD to replace them with provider-qualified URLs.
+
+## Resolution and errors
+
+The daemon passes per-provider cache lifetimes: YouTube defaults to 5 hours,
+Tidal to 1 hour. The proxy constructor's fallback is 5 hours when an override is
+absent. Refreshes run in an executor, and new URLs are persisted immediately.
+If refresh fails, a cached URL can still be attempted; without one, resolution
+returns 502.
+
+| Status | Meaning |
+|---|---|
+| 200 | Audio stream, source-info response, or health response |
+| 307 | Direct non-YouTube, non-DASH audio URL |
+| 400 | Invalid track identifier |
+| 404 | Unknown provider or unregistered track |
+| 502 | Resolution failed without fallback, or streaming failed before audio started |
+| 503 | All URL-resolution slots are occupied |
+
+The default concurrency limit is 10 **URL resolutions**, not 10 playing tracks.
+Each slot is released before streaming starts, so a playing track does not hold
+up another resolution. `/health` exposes resolution and active-stream counters.
+
+## Streaming recovery
+
+ffmpeg must produce its first chunk within 15 seconds before the proxy commits
+HTTP 200. An empty/failed start permits up to three retries, with delays of
+2, 4, and 8 seconds and a fresh URL resolution before each retry. Failure to
+refresh ends the retry sequence early.
+
+YouTube inputs use ffmpeg's HTTP reconnect options for interrupted connections.
+The options intentionally omit reconnect-at-EOF so a completed track ends
+normally. A 30-second mid-stream idle timeout terminates a stalled subprocess.
+After HTTP 200 has started, a failure ends the response; the proxy cannot replace
+it with an HTTP error or restart the song transparently. Client disconnection
+also cleans up the subprocess.
+
+The first FLAC header is patched with the provider's track duration when known,
+using the sample rate in that header. This lets MPD display duration despite
+ffmpeg writing to a non-seekable pipe.
+
+## Source information
+
+The `/info` route reports `provider`, `track_id`, and a `status`:
+
+- `ok`: source codec, lossy/lossless classification, sample rate, bit depth,
+  channels, and bitrate from ffprobe.
+- `pending`: a background probe is running.
+- `unknown`: there is no cached stream URL to probe.
+- `error`: the last probe failed; another request can retry after 60 seconds.
+
+Probes have a 10-second timeout. The cache holds at most 64 entries and follows
+URL changes. The info route does not resolve URLs or call provider APIs, so
+status-widget polling does not repeatedly authenticate or fetch streams.
+
+## Constructing playlist URLs
+
+Use `xmpd/proxy_url.py` without importing aiohttp:
 
 ```python
 from xmpd.proxy_url import build_proxy_url
 
-url = build_proxy_url("yt", "dQw4w9WgXcQ")
-# -> "http://localhost:8080/proxy/yt/dQw4w9WgXcQ"
+build_proxy_url("yt", "dQw4w9WgXcQ")
+# http://localhost:8080/proxy/yt/dQw4w9WgXcQ
 
-url = build_proxy_url("tidal", "12345678", host="localhost", port=6602)
-# -> "http://localhost:6602/proxy/tidal/12345678"
+build_proxy_url("tidal", "12345678", host="localhost", port=6602)
+# http://localhost:6602/proxy/tidal/12345678
 ```
 
-`xmpd/mpd_client.py` uses this helper at both playlist-generation call sites
-(M3U and XSPF paths), hardcoding provider `"yt"` until Phase 6 makes sync
-engine multi-provider aware.
-
-## Migration note
-
-Existing MPD playlists generated before Phase 4 contain URLs with the old
-shape `http://localhost:<port>/proxy/<video_id>` (no provider segment). After
-Phase 4 those URLs match no route and return 404 when MPD tries to play them.
-
-The next sync run (Phase 6) rewrites every playlist with the new URL shape,
-restoring playback. Until that sync runs, existing playlists are non-functional.
-
-## Internal notes
-
-`provider_registry` is currently passed as `{}` (empty dict) from `daemon.py`
-as a Phase 8 placeholder. The proxy falls back to the legacy `stream_resolver`
-(a `StreamResolver` instance) for `yt` tracks in this interim state, preserving
-the exact resolver behaviour that existed before Phase 4.
-
-After Phase 8:
-- `provider_registry` will be populated with real Provider instances.
-- `stream_resolver` kwarg will be removed from `StreamRedirectProxy`.
-
-The `# TODO(phase-8)` comment in `xmpd/daemon.py` above the `StreamRedirectProxy`
-construction marks the exact line that Phase 8 must update.
+Both M3U and XSPF writers use the track's provider. The daemon registers enabled
+providers and injects them into the proxy. A legacy YT-only StreamResolver
+fallback remains available when no YT provider is registered.

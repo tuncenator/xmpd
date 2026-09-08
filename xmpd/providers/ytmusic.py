@@ -3,7 +3,7 @@
 This module provides a wrapper around ytmusicapi that handles authentication
 and provides clean interfaces for search, playback, and song info retrieval.
 
-YTMusicProvider implements the full Provider Protocol (Phase 3):
+YTMusicProvider implements the full Provider Protocol:
   - list_playlists, get_playlist_tracks, get_favorites
   - resolve_stream, get_track_metadata
   - search, get_radio
@@ -13,9 +13,10 @@ YTMusicProvider implements the full Provider Protocol (Phase 3):
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from ytmusicapi import YTMusic
 
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
     from xmpd.stream_resolver import StreamResolver
 
 logger = logging.getLogger(__name__)
+
+_Result = TypeVar("_Result")
 
 
 class YTMusicProvider:
@@ -229,13 +232,11 @@ class YTMusicProvider:
     def get_radio(self, seed_track_id: str, limit: int = 25) -> list[ProviderTrack]:
         """Return a radio/watch-playlist seeded from seed_track_id.
 
-        NOTE: This is the only place in YTMusicProvider that breaches the
-        YTMusicClient abstraction by accessing ``self._client._client`` directly.
-        get_watch_playlist is not exposed on YTMusicClient and adding it would be
-        a Phase 3-scope-creep; a future cleanup can wrap it properly.
+        Uses the underlying ytmusicapi watch-playlist endpoint through the
+        client retry helper; YTMusicClient has no dedicated radio wrapper.
         """
         client = self._ensure_client()
-        # Access underlying ytmusicapi client directly (see NOTE above)
+        # Access the underlying ytmusicapi watch-playlist endpoint.
         yt = client._client
         if yt is None:
             logger.warning("get_radio: YTMusic client not initialized for %s", seed_track_id)
@@ -604,7 +605,9 @@ class YTMusicClient:
             time.sleep(self._min_request_interval - elapsed)
         self._last_request_time = time.time()
 
-    def _retry_on_failure(self, func: Any, *args: Any, max_retries: int = 3, **kwargs: Any) -> Any:
+    def _retry_on_failure(
+        self, func: Callable[..., _Result], *args: Any, max_retries: int = 3, **kwargs: Any
+    ) -> _Result:
         """Retry a function call on transient failures.
 
         Args:
@@ -619,7 +622,9 @@ class YTMusicClient:
         Raises:
             YTMusicAPIError: If all retry attempts fail.
         """
-        last_error = None
+        if max_retries < 1:
+            raise ValueError("max_retries must be at least 1")
+        last_error: Exception | None = None
 
         for attempt in range(max_retries):
             try:
@@ -642,7 +647,8 @@ class YTMusicClient:
                     logger.info(f"Retrying in {sleep_time} seconds...")
                     time.sleep(sleep_time)
 
-        # All retries failed
+        # At least one attempt ran and every attempt raised.
+        assert last_error is not None
         logger.error(f"API call failed after {max_retries} attempts: {_truncate_error(last_error)}")
         raise YTMusicAPIError(
             f"API call failed: {_truncate_error(last_error, max_length=300)}"
@@ -662,14 +668,15 @@ class YTMusicClient:
             YTMusicAPIError: If the search fails.
             YTMusicNotFoundError: If no results are found.
         """
-        if not self._client:
+        client = self._client
+        if client is None:
             raise YTMusicAuthError("Client not initialized")
 
         logger.info(f"Searching for: {query}")
         self._rate_limit()
 
         def _search() -> list[dict[str, Any]]:
-            results = self._client.search(query, filter="songs", limit=limit)
+            results = client.search(query, filter="songs", limit=limit)
             return results
 
         try:
@@ -727,14 +734,15 @@ class YTMusicClient:
             YTMusicAPIError: If retrieving song info fails.
             YTMusicNotFoundError: If the song is not found.
         """
-        if not self._client:
+        client = self._client
+        if client is None:
             raise YTMusicAuthError("Client not initialized")
 
         logger.info(f"Getting song info for video_id: {video_id}")
         self._rate_limit()
 
         def _get_song() -> dict[str, Any]:
-            return self._client.get_song(video_id)
+            return client.get_song(video_id)
 
         try:
             raw_info = self._retry_on_failure(_get_song)
@@ -781,14 +789,15 @@ class YTMusicClient:
             YTMusicAuthError: If client is not authenticated.
             YTMusicAPIError: If fetching playlists fails.
         """
-        if not self._client:
+        client = self._client
+        if client is None:
             raise YTMusicAuthError("Client not initialized")
 
         logger.info("Fetching user playlists")
         self._rate_limit()
 
         def _get_playlists() -> list[dict[str, Any]]:
-            return self._client.get_library_playlists(limit=None)
+            return client.get_library_playlists(limit=None)
 
         try:
             raw_playlists = self._retry_on_failure(_get_playlists)
@@ -851,14 +860,15 @@ class YTMusicClient:
             YTMusicAPIError: If fetching tracks fails.
             YTMusicNotFoundError: If playlist is not found.
         """
-        if not self._client:
+        client = self._client
+        if client is None:
             raise YTMusicAuthError("Client not initialized")
 
         logger.info(f"Fetching tracks for playlist: {playlist_id}")
         self._rate_limit()
 
         def _get_tracks() -> dict[str, Any]:
-            return self._client.get_playlist(playlist_id, limit=None)
+            return client.get_playlist(playlist_id, limit=None)
 
         try:
             raw_playlist = self._retry_on_failure(_get_tracks)
@@ -949,14 +959,17 @@ class YTMusicClient:
             YTMusicAuthError: If client is not authenticated.
             YTMusicAPIError: If fetching liked songs fails.
         """
-        if not self._client:
+        client = self._client
+        if client is None:
             raise YTMusicAuthError("Client not initialized")
 
         logger.info("Fetching liked songs")
         self._rate_limit()
 
         def _get_liked() -> dict[str, Any]:
-            return self._client.get_liked_songs(limit=limit)
+            # Upstream annotates int, but forwards None unchanged to get_playlist
+            # where None disables pagination limits (fetch all favorites).
+            return client.get_liked_songs(limit=limit)  # type: ignore[arg-type]
 
         try:
             raw_response = self._retry_on_failure(_get_liked)
@@ -1051,7 +1064,8 @@ class YTMusicClient:
             YTMusicNotFoundError: If track is not found.
             YTMusicAuthError: If client is not authenticated.
         """
-        if not self._client:
+        client = self._client
+        if client is None:
             raise YTMusicAuthError("Client not initialized")
 
         logger.info(f"Getting rating for video_id: {video_id}")
@@ -1059,7 +1073,7 @@ class YTMusicClient:
 
         def _get_rating() -> str:
             # Use get_watch_playlist with limit=1 to get track info including likeStatus
-            response = self._client.get_watch_playlist(videoId=video_id, limit=1)
+            response = client.get_watch_playlist(videoId=video_id, limit=1)
 
             # Extract likeStatus from the first track
             tracks = response.get("tracks", [])
@@ -1067,6 +1081,8 @@ class YTMusicClient:
                 raise YTMusicNotFoundError(f"Track not found: {video_id}")
 
             track = tracks[0]
+            if not isinstance(track, dict):
+                raise YTMusicAPIError("Invalid track in watch playlist response")
             like_status = track.get("likeStatus")
 
             # Some tracks (e.g., MUSIC_VIDEO_TYPE_ATV) return likeStatus=None
@@ -1078,6 +1094,8 @@ class YTMusicClient:
                 )
                 return "INDIFFERENT"
 
+            if not isinstance(like_status, str):
+                raise YTMusicAPIError("Invalid likeStatus in watch playlist response")
             return like_status
 
         try:
@@ -1105,7 +1123,8 @@ class YTMusicClient:
             YTMusicAPIError: If setting rating fails.
             YTMusicAuthError: If not authenticated.
         """
-        if not self._client:
+        client = self._client
+        if client is None:
             raise YTMusicAuthError("Client not initialized")
 
         logger.info(f"Setting rating for {video_id} to {rating.value}")
@@ -1122,7 +1141,7 @@ class YTMusicClient:
             }
 
             api_rating = like_status_map[rating]
-            self._client.rate_song(videoId=video_id, rating=api_rating)
+            client.rate_song(videoId=video_id, rating=api_rating)
 
         try:
             self._retry_on_failure(_set_rating)
@@ -1151,14 +1170,15 @@ class YTMusicClient:
             YTMusicNotFoundError: If video_id doesn't exist.
             YTMusicAPIError: On other API failures.
         """
-        if not self._client:
+        client = self._client
+        if client is None:
             raise YTMusicAuthError("Client not initialized")
 
         logger.debug("Getting song for history reporting: %s", video_id)
         self._rate_limit()
 
         def _get() -> dict[str, Any]:
-            return self._client.get_song(video_id)
+            return client.get_song(video_id)
 
         try:
             result = self._retry_on_failure(_get)

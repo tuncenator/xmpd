@@ -1,15 +1,14 @@
 """Shared types for the provider abstraction.
 
 Every provider (YT Music, Tidal, ...) implements the `Provider` Protocol
-defined in this module. The Protocol is `runtime_checkable` so a provider
-instance can be validated with `isinstance(obj, Provider)` -- this is used by
-`xmpd/providers/__init__.py::build_registry` once the concrete provider
-classes land in Phase 2 (yt) and Phase 9 (tidal).
+defined in this module. The Protocol is `runtime_checkable` so callers can
+validate the presence of its members with `isinstance(obj, Provider)`. Static
+type checking verifies provider method signatures at registry construction.
 
 The dataclasses (`TrackMetadata`, `Track`, `Playlist`) are the cross-provider
 exchange shape; concrete providers must convert their library-native objects
 into these before returning them. They are frozen to keep them hashable and
-to make accidental mutation a TypeError at runtime.
+to reject accidental attribute assignment at runtime.
 """
 
 from __future__ import annotations
@@ -57,10 +56,9 @@ class Playlist:
 class Provider(Protocol):
     """Protocol every concrete provider class must satisfy.
 
-    Method bodies are `...` per Python Protocol convention. Concrete classes
-    in `xmpd/providers/ytmusic.py` (Phase 3) and `xmpd/providers/tidal.py`
-    (Phase 10) implement the bodies. Provider canonical names (`yt`, `tidal`)
-    are exposed via the module-level `name` attribute, not a method.
+    Concrete classes in `xmpd/providers/ytmusic.py` and
+    `xmpd/providers/tidal.py` implement these methods. Canonical provider
+    names (`yt`, `tidal`) are exposed through the instance attribute `name`.
     """
 
     name: str  # canonical short name, e.g. "yt" or "tidal"

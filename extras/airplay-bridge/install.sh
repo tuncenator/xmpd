@@ -32,6 +32,7 @@ I3_CONF="${HOME}/.i3/config"
 SWAY_CONF="${HOME}/.config/sway/config"
 SYSTEMD_UNIT="${HOME}/.config/systemd/user/mpd-owntone-metadata.service"
 PADDER_UNIT="${HOME}/.config/systemd/user/mpd-owntone-padder.service"
+WATCHDOG_UNIT="${HOME}/.config/systemd/user/mpd-owntone-watchdog.service"
 PW_DROPIN="${HOME}/.config/pipewire/pipewire-pulse.conf.d/20-raop-discover.conf"
 PW_BRIDGE_PIN="${HOME}/.config/pipewire/pipewire-pulse.conf.d/30-mpd-bridge-pin.conf"
 PW_NULLSINK="${HOME}/.config/pipewire/pipewire.conf.d/30-owntone-bridge.conf"
@@ -115,6 +116,12 @@ check_service() {
   else
     miss "mpd-owntone-metadata not enabled"
   fi
+  if [[ -f "$WATCHDOG_UNIT" ]]; then ok "systemd unit: $WATCHDOG_UNIT"; else miss "watchdog systemd unit missing"; fi
+  if systemctl --user is-enabled --quiet mpd-owntone-watchdog 2>/dev/null; then
+    ok "mpd-owntone-watchdog enabled"
+  else
+    miss "mpd-owntone-watchdog not enabled"
+  fi
 }
 
 run_checks() {
@@ -165,6 +172,7 @@ run_checks() {
   if systemctl is-active --quiet owntone; then ok "owntone.service running"; else miss "owntone.service not running"; fi
   if systemctl --user is-active --quiet mpd-owntone-metadata; then ok "mpd-owntone-metadata running"; else miss "mpd-owntone-metadata not running"; fi
   if systemctl --user is-active --quiet mpd-owntone-padder; then ok "mpd-owntone-padder running"; else miss "mpd-owntone-padder not running"; fi
+  if systemctl --user is-active --quiet mpd-owntone-watchdog; then ok "mpd-owntone-watchdog running"; else miss "mpd-owntone-watchdog not running"; fi
   if pactl list short sinks 2>/dev/null | grep -q '^\S*\s*owntone-bridge\s'; then ok "owntone-bridge null sink loaded"; else miss "owntone-bridge null sink not loaded"; fi
   if command curl --silent --max-time 1 "$OWNTONE_API/outputs" >/dev/null; then
     ok "owntone API reachable"
@@ -282,6 +290,18 @@ install_systemd_unit() {
   systemctl --user enable --now mpd-owntone-metadata
 }
 
+install_watchdog_unit() {
+  # Re-arms the AirPlay route after OwnTone drops a receiver whose FLUSH timed
+  # out (a Wi-Fi blip): OwnTone 29.3 only honours reconnect= in
+  # device_streaming_cb, never on the flush-failure path, so nothing else does.
+  # Reads the routing intent `speaker` records in state.json.
+  info "installing systemd user unit -> $WATCHDOG_UNIT"
+  mkdir -p "$(dirname "$WATCHDOG_UNIT")"
+  sed -e "s|@SCRIPT_DIR@|$SCRIPT_DIR|g" "$SCRIPT_DIR/mpd-owntone-watchdog.service.template" > "$WATCHDOG_UNIT"
+  systemctl --user daemon-reload
+  systemctl --user enable --now mpd-owntone-watchdog
+}
+
 patch_mpd_conf() {
   info "patching $MPD_CONF (adding Owntone Bridge output)"
   [[ -f "$MPD_CONF" ]] || fatal "$MPD_CONF not found; create your MPD config first"
@@ -373,6 +393,19 @@ install_pipewire_bridge_pin() {
   # the default sink (pactl set-default-sink), not by per-stream moves,
   # and linking.follow-default-target keeps the local stream tracking
   # whichever sink the user selected.
+  #
+  # The padder (parec, application.name=mpd-owntone-padder) gets the same
+  # pin: its stream had a stale 'target.node = -1' metadata override on
+  # 2026-07-24 which relinked it to the analog sink's monitor - the FIFO
+  # was fed from an idle sink, OwnTone starved, and the AP2 receiver tore
+  # down the RTSP session. dont-move closes that hole for good.
+  #
+  # node.dont-fallback + node.linger on top: if owntone-bridge does not
+  # exist yet (pipewire still bringing up conf.d objects at login), the
+  # stream waits for its defined target instead of falling back to the
+  # default sink/source. A fallback link here is silently wrong - the
+  # padder would pump the wrong monitor (or even a mic) into the FIFO.
+  # Streams without target.object (MPD's local output) are unaffected.
   cat > "$PW_BRIDGE_PIN" <<'EOF'
 pulse.rules = [
     {
@@ -383,13 +416,32 @@ pulse.rules = [
         ]
         actions = {
             update-props = {
-                node.dont-move = true
+                node.dont-move     = true
+                node.dont-fallback = true
+                node.linger        = true
+            }
+        }
+    }
+    {
+        matches = [
+            {
+                application.name = "mpd-owntone-padder"
+            }
+        ]
+        actions = {
+            update-props = {
+                node.dont-move     = true
+                node.dont-fallback = true
+                node.linger        = true
             }
         }
     }
 ]
 EOF
   systemctl --user restart pipewire-pulse 2>/dev/null || true
+  # pulse.rules apply at stream creation; recreate the padder stream so the
+  # pin takes effect now, not on the next reboot.
+  systemctl --user try-restart mpd-owntone-padder 2>/dev/null || true
 }
 
 install_wireplumber_bridge_route() {
@@ -461,7 +513,14 @@ context.objects = [
             audio.rate                = 44100
             audio.channels            = 2
             audio.position            = [ FL FR ]
-            monitor.channel-volumes   = true
+            # false (the PipeWire default) so the monitor always carries
+            # unity-gain PCM no matter where the sink's volume slider sits.
+            # With true, the slider becomes a second, invisible attenuator
+            # in front of OwnTone: the receiver's own AirPlay volume reads
+            # high while the audio arriving at it is quiet AND quantization
+            # -degraded. OwnTone's per-output volume (the receiver's own
+            # AirPlay volume) is the one and only knob.
+            monitor.channel-volumes   = false
             node.always-process       = true
             adapter.auto-port-config  = {
                 mode     = dsp
@@ -507,7 +566,8 @@ make_executable() {
   chmod +x "$SCRIPT_DIR"/mpd_owntone_metadata.py \
            "$SCRIPT_DIR"/vol-wrap \
            "$SCRIPT_DIR"/speaker \
-           "$SCRIPT_DIR"/speaker-rofi
+           "$SCRIPT_DIR"/speaker-rofi \
+           "$SCRIPT_DIR"/mpd-owntone-watchdog
 }
 
 # -------- main --------
@@ -533,6 +593,7 @@ install_wireplumber_bridge_route
 install_pipewire_nullsink
 install_systemd_unit
 install_padder_unit
+install_watchdog_unit
 patch_mpd_conf
 patch_wm_confs
 

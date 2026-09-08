@@ -20,7 +20,9 @@ from __future__ import annotations
 import logging
 import re
 import socket
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Any, TypedDict
 
 from xmpd.exceptions import XMPDError
 from xmpd.history_store import HistoryStore
@@ -83,7 +85,7 @@ _BLOCKLISTED_TRACKS: frozenset[tuple[str, str]] = frozenset(
 )
 
 
-def _is_placeholder_stub(track: dict | None) -> bool:
+def _is_placeholder_stub(track: Mapping[str, Any] | None) -> bool:
     """Return True when *track* is the explicit unresolved-track stub."""
     if not track:
         return False
@@ -147,9 +149,18 @@ def _parse_played_at(timestamp_str: str, log_mtime: float) -> str:
     raise ValueError(f"unrecognized timestamp: {timestamp_str!r}")
 
 
+class _LocalTrackMetadata(TypedDict):
+    title: str | None
+    artist: str | None
+    album: str | None
+    duration_seconds: int | None
+    art_url: str | None
+    quality: str | None
+
+
 def _enrich_local_tracks(
     paths: set[str], mpd_socket_path: str | None
-) -> dict[str, dict[str, object]]:
+) -> dict[str, _LocalTrackMetadata]:
     """Look up tags for a set of MPD-relative paths via a transient connection.
 
     Returns ``{path: {"title", "artist", "album", "duration_seconds"}}``.
@@ -180,7 +191,7 @@ def _enrich_local_tracks(
         )
         return {}
 
-    out: dict[str, dict[str, object]] = {}
+    out: dict[str, _LocalTrackMetadata] = {}
     try:
         for path in paths:
             try:
@@ -386,6 +397,7 @@ def run_backfill(
         # Local plays bypass track_store and read tags from the MPD enrichment
         # map; they never count as orphans because the live MPD library is the
         # source of truth for local files.
+        track: Mapping[str, Any] | None
         if provider == "local":
             track = local_meta.get(track_id)
             is_orphan = False

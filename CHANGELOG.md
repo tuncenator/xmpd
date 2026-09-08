@@ -1,5 +1,48 @@
 # Changelog
 
+## [Unreleased]
+
+## [2.4.0] - 2026-09-08
+
+### Maintenance
+
+- Refresh the README with current setup and usage instructions, architecture
+  diagrams, and the xmpd logo with light and dark variants. Move detailed
+  listening-history setup into its own guide.
+- Extract playback, rating, and query command handlers from the daemon, and
+  move ffmpeg streaming, source probes, and FLAC framing into `stream_transport`.
+  Socket commands and audio delivery retain their existing behavior.
+- Fix package type errors, add development type stubs, and consolidate the
+  development dependencies into the locked `dev` extra.
+- Add `scripts/check.sh` and GitHub Actions checks for lint, types, version
+  consistency, and the regression suite on Python 3.11 and 3.13. Pre-commit uses
+  the same locked lint and type tools.
+- Refresh streaming and development documentation, remove obsolete implementation
+  phase comments, and update test fixtures for the current schema, local
+  favorites lookup, and UI behavior. Doctor tests use a fixed clock.
+
+### Fixed
+
+- Importing `xmpctl` or `xmpd-status` no longer replaces the caller's interpreter
+  with the repository venv. Automatic venv selection only runs for direct CLI
+  execution, so alternate Python environments can safely import the scripts.
+- Search's local favorites lookup now reads M3U files from the MPD playlist
+  directory, while XSPF files remain under the music directory's `_xmpd` folder.
+  Configured favorites names are honored when looking up those files.
+- `providers/ytmusic`: every YouTube radio command failed with "No tracks found in radio playlist" (`xmpctl radio` exiting 1, including the `ctrl-r` binds in `xmpd-search` and `xmpd-history`). Not a track-level problem: YouTube inserted a "Comments" tab into the `next` response's `watchNextTabbedResultsRenderer`, so the tabs became `Up next, Lyrics, Comments, Related`. ytmusicapi <= 1.12.0 read the Related tab at hardcoded index 2, hit Comments (which carries `content`, not `endpoint`) and raised `KeyError: 'endpoint'` before parsing a single track, even though the queue itself held all 50. `get_radio`'s `except Exception` swallowed it into an empty list, and `_retry_on_failure` burned three attempts on a deterministic parse error. ytmusicapi 1.12.1 replaced the index lookup with a scan over all tabs (`get_tab_browse_ids`), so the dependency floor is now `>=1.12.1`.
+- `xmpd-status`: the waybar/i3blocks quality badge showed HiRes for plain YouTube tracks. Since 2.3.1's byte-proxy fix, the proxy re-encodes YT audio to FLAC without pinning a sample format, so ffmpeg upconverts opus float output to 24-bit and MPD reports `48000:24:2`; the badge classifier only detected lossy sources via MPD's float bit format and read the 24-bit re-encode as HiRes. The badge now asks the proxy's new `/proxy/{provider}/{track_id}/info` endpoint for the actual source codec (see below) and falls back to a provider hint (YT = lossy) only while the probe is pending or the daemon predates the endpoint.
+- `extras/airplay-bridge`: the `owntone-bridge` null sink was a second, invisible attenuator in front of OwnTone. The installer created it with `monitor.channel-volumes = true` (PipeWire's own default is `false`), so the sink's volume slider scaled the monitor the padder captures. Found at 15% (-49.44 dB): the receiver's AirPlay volume read 80 while the PCM arriving at it peaked at -58.94 dBFS, inaudible and down to roughly 5 effective bits. New installs now write `false`, so OwnTone's per-output volume (which *is* the receiver's own AirPlay volume) is the single knob. Existing installs migrate with `apply-single-knob`; note that removing the attenuation is a step up of whatever the slider sits at, and AirPlay volume only reaches down to about -30 dB.
+- `extras/airplay-bridge`: the padder capture stream could be relinked away from `owntone-bridge.monitor`. A stale `target.node = -1` metadata override on its node made WirePlumber's `find-defined-target` ignore the stream's own `target.object`, so the FIFO was fed from an idle analog monitor, OwnTone starved ("Source is not providing sufficient data") and the AP2 receiver tore down the RTSP session. The 2.1.4/2.1.5 pulse rules matched `application.name="Music Player Daemon"` only, which never covered the padder (`pacat`, `application.name="mpd-owntone-padder"`); it now has its own rule, and both gain `node.dont-fallback` + `node.linger` so a stream whose target does not exist yet at login waits instead of landing on the default sink.
+- `extras/airplay-bridge`: `vol-wrap`'s no-AirPlay fallback ran `pactl set-sink-volume @DEFAULT_SINK@`, which walked the bridge sink down whenever the bridge happened to be the default sink. It now resolves the real local sink and hard-excludes `owntone-bridge`, falling back to `PIPEWIRE_LAPTOP_SINK`.
+- `extras/airplay-bridge`: `mpd_owntone_metadata.py` opened the metadata FIFO `O_NONBLOCK` and ignored `os.write`'s return value, truncating any block larger than the 64 KiB pipe buffer mid-`<item>`. OwnTone hit the malformed tail, logged "Could not parse pipe metadata item" and permanently stopped reading the pipe, so artwork and track metadata died until the next route change. Writes now loop against a 10 s drain deadline and, on timeout, read the partial block back out of the FIFO so the stream stays well-formed. Embedded art is capped at 640 KB, above which base64 can exceed OwnTone's 1 MiB `PIPE_METADATA_BUFLEN_MAX` and produce the same poison from the far end.
+
+### Added
+
+- `extras/airplay-bridge`: `mpd-owntone-watchdog.service` re-arms a dropped AirPlay route by itself. On 2026-07-24 a 2 s Wi-Fi blip made OwnTone reset its outputs; the FLUSH to the JBL Boombox 3 timed out, so OwnTone deselected the receiver and paused, and the music kept playing into nothing until `speaker` was re-run by hand. `owntone.conf` has `reconnect=true` for that output, but OwnTone 29.3 only honours it in `device_streaming_cb` (`player.c:1516`) - the flush-failure path (`player.c:1576`) logs and gives up. `speaker` now records the routing *intent* in `state.json` (`route`, `route_ids`, `route_changed_at`; existing keys such as `multi_baseline` are merged, and the file is written atomically since the watchdog is a concurrent reader), and it stays the only writer of those keys. The watchdog polls every `WATCHDOG_POLL_SECS` (default 5) and re-selects the intended outputs only when all of route=airplay, MPD `[playing]`, MPD's bridge output enabled, and at least one intended output no longer selected hold; then it resumes OwnTone playback, re-emits the track metadata into the fresh RTSP session (SIGUSR1 to `mpd-owntone-metadata`) and pokes waybar. It never writes a volume. Three failed bursts inside `WATCHDOG_BURST_WINDOW_SECS` (300) earn one `notify-send` and a hard stop until the next `speaker` run or until the route recovers on its own, so a speaker switched off on purpose is never fought. `speaker status` prints the recorded intent.
+- `stream_proxy`: `GET /proxy/{provider}/{track_id}/info` serves source-stream info (codec, lossy/lossless, sample rate, bit depth, channels, bitrate) from a background ffprobe of the cached stream URL, spawned at stream start and on first request. Provider-agnostic: if YT ever serves lossless or a new provider is added, badges follow the probed truth instead of hardcoded provider assumptions.
+- `extras/airplay-bridge`: `vol-wrap target {auto|local|airplay|cycle|status}` chooses which device the volume keys drive. With audio on AirPlay every keypress went to OwnTone, leaving the laptop's own sink (browser, notifications, meetings) with no keyboard control at all. Default `auto` is the previous behaviour, follow the route; a manual pin lives in `$XDG_RUNTIME_DIR` so it dies at reboot, and `speaker` clears it on every route change. `speaker status` prints the pin. Intended to be driven from the waybar volume widget's left-click, whose tooltip lists the options.
+- `extras/airplay-bridge`: `apply-single-knob` migrates an existing install to `monitor.channel-volumes = false`. It prints the per-output arithmetic first (bridge gain plus the AirPlay mapping, `-30 + 0.3*V` dB per `outputs/airplay.c`), pre-drops the receiver to `--volume N` to bound the loudness step, backs up and rewrites the drop-in, restarts the stack, parks the now-inert slider at unity, re-routes via `speaker`, and verifies both the prop and the padder link.
+
 ## [2.3.1] - 2026-07-09
 
 ### Fixed

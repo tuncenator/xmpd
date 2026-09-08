@@ -63,6 +63,12 @@ ART_HTTP_USER_AGENT = "xmpd-airplay-bridge/1.0 (+https://github.com/tuncenator/x
 # MPD-local resolvers (embedded + folder art) stay active regardless.
 ONLINE_ART_DISABLED = bool(os.environ.get("XMPD_AIRPLAY_NO_ONLINE_ART"))
 
+# Largest raw art blob we will put in a PICT frame. OwnTone's pipe.c buffers
+# at most 1 MiB (PIPE_METADATA_BUFLEN_MAX) of a pending <item>; base64
+# inflates 4/3, so raw art must stay well under 768 KiB or the item can never
+# be parsed and the metadata pipe wedges. See make_track_payload.
+ART_MAX_BYTES = 640_000
+
 # DMAP type codes (4 ASCII bytes, hex-encoded for the XML wire format)
 TYPE_CORE = "636f7265"  # 'core' - DAAP standard codes
 TYPE_SSNC = "73736e63"  # 'ssnc' - Shairport Sync Native Codes
@@ -519,6 +525,19 @@ def make_track_payload(song: dict, art: bytes | None) -> bytes:
         len(art) if art else "n/a",
     )
 
+    # OwnTone's pipe.c accumulates at most PIPE_METADATA_BUFLEN_MAX (1 MiB,
+    # owntone 29.2) while waiting for a complete <item>; a bigger one gets
+    # the whole buffer discarded mid-item and the tail then fails to parse,
+    # which stops metadata reading for good. Base64 inflates 4/3, so cap the
+    # raw art well below 768 KiB. Oversized art (large embedded covers from
+    # MPD readpicture) is dropped; the text metadata still goes out.
+    if art and len(art) > ART_MAX_BYTES:
+        log.warning(
+            "Album art too large for OwnTone's metadata pipe (%d > %d bytes), dropping art",
+            len(art), ART_MAX_BYTES,
+        )
+        art = None
+
     chunks = [make_item(TYPE_SSNC, CODE_MDST)]
     if track_id:
         chunks.append(make_item(TYPE_CORE, CODE_MPER, str(track_id).encode("utf-8")))
@@ -534,15 +553,60 @@ def make_track_payload(song: dict, art: bytes | None) -> bytes:
     return b"".join(chunks)
 
 
+def _drain_own_fifo(fd: int) -> None:
+    """Discard whatever is queued in the FIFO (we hold O_RDWR, so we can read
+    our own unconsumed bytes back out). Only called when a block could not be
+    written completely and OwnTone is provably not draining the pipe: leaving
+    a truncated <item> in the FIFO poisons the XML stream and makes OwnTone's
+    pipe.c stop reading metadata permanently ("Could not parse pipe metadata
+    item"). Dropping the whole backlog keeps the stream well-formed instead.
+    """
+    try:
+        while os.read(fd, 65536):
+            pass
+    except (BlockingIOError, OSError):
+        pass
+
+
+def write_all(fd: int, payload: bytes, timeout: float = 10.0) -> bool:
+    """Write payload completely to the non-blocking FIFO.
+
+    os.write on a non-blocking FIFO does PARTIAL writes for payloads larger
+    than the 64 KiB pipe buffer (a PICT block easily is), and the old code
+    ignored the return value - the truncated <item> then wedged OwnTone's
+    metadata parser for the rest of the session. Loop until every byte is
+    out; between attempts OwnTone drains the pipe at its own pace. If it is
+    not reading at all, give up after `timeout` and flush our own partial
+    garbage back out of the FIFO so the next block starts on a clean stream.
+    """
+    off = 0
+    deadline = time.monotonic() + timeout
+    while off < len(payload):
+        try:
+            off += os.write(fd, payload[off:])
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                log.warning(
+                    "Metadata pipe not drained after %.0fs (%d/%d bytes written), "
+                    "dropping block and flushing FIFO",
+                    timeout, off, len(payload),
+                )
+                if off:
+                    _drain_own_fifo(fd)
+                return False
+            time.sleep(0.05)
+        except OSError as e:
+            log.error("Metadata pipe write failed at %d/%d bytes: %s", off, len(payload), e)
+            if off:
+                _drain_own_fifo(fd)
+            return False
+    return True
+
+
 def safe_write(fd: int, lock: threading.Lock, payload: bytes) -> None:
     """Write to the metadata FIFO under a lock; log and swallow non-fatal errors."""
     with lock:
-        try:
-            os.write(fd, payload)
-        except BlockingIOError:
-            log.warning("Metadata pipe write would block, dropping update")
-        except OSError as e:
-            log.error("Metadata pipe write failed: %s", e)
+        write_all(fd, payload)
 
 
 class ArtWorker:
@@ -601,10 +665,7 @@ class ArtWorker:
                         song_key,
                     )
                     continue
-                try:
-                    os.write(self._fd, make_track_payload(song, art))
-                except (BlockingIOError, OSError) as e:
-                    log.warning("art worker: pipe write failed: %s", e)
+                write_all(self._fd, make_track_payload(song, art))
 
 
 class MPDClient:

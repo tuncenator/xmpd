@@ -126,10 +126,6 @@ class SyncEngine:
     ) -> None:
         """Initialize sync engine with a provider registry.
 
-        NOTE: Phase 8 wires this constructor into XMPDaemon. Until Phase 8 lands,
-        `python -m xmpd` may fail to start; only `pytest -q tests/test_sync_engine.py`
-        is the live verification surface for this phase.
-
         Args:
             provider_registry: Dict of canonical provider name -> Provider instance.
             mpd_client: Client for MPD playlist management.

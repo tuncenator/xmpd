@@ -46,7 +46,8 @@ class TestIntegrationScenarios:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE tracks (
-                video_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT 'yt',
+                track_id TEXT PRIMARY KEY,
                 title TEXT,
                 artist TEXT,
                 stream_url TEXT,
@@ -129,7 +130,7 @@ class TestIntegrationScenarios:
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO tracks"
-            " (video_id, title, artist, stream_url, updated_at)"
+            " (track_id, title, artist, stream_url, updated_at)"
             " VALUES (?, ?, ?, ?, ?)",
             (video_id, title, artist, stream_url, 1234567890),
         )
@@ -188,7 +189,7 @@ class TestIntegrationScenarios:
         assert "Test Artist" in lines[0], "Should show artist"
         # Title might be truncated due to default max length, just check partial match
         assert (
-            "Never Gonna" in lines[0] or "Give You Up" in lines[0]
+            "Test Track" in lines[0]
         ), "Should show title (or part of it)"
 
         # Check timing (elapsed time might be truncated, but duration should be there)
@@ -338,7 +339,10 @@ class TestIntegrationScenarios:
 
         captured_output = StringIO()
 
-        with patch("sys.stdout", captured_output):
+        with (
+            patch("sys.stdout", captured_output),
+            patch("sys.argv", ["xmpd-status", "--show-position"]),
+        ):
             ytmpd_status.main()
 
         output = captured_output.getvalue()
@@ -382,7 +386,10 @@ class TestIntegrationScenarios:
 
         captured_output = StringIO()
 
-        with patch("sys.stdout", captured_output):
+        with (
+            patch("sys.stdout", captured_output),
+            patch("sys.argv", ["xmpd-status", "--show-position"]),
+        ):
             ytmpd_status.main()
 
         output = captured_output.getvalue()
@@ -663,7 +670,8 @@ class TestEnvironmentVariableIntegration:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE tracks (
-                video_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT 'yt',
+                track_id TEXT PRIMARY KEY,
                 title TEXT,
                 artist TEXT,
                 stream_url TEXT,

@@ -87,6 +87,17 @@ _DEFAULTS: dict[str, Any] = {
 _VALID_QUALITY_CEILINGS = ("LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS")
 
 
+def get_playlist_prefixes(config: dict[str, Any]) -> dict[str, str]:
+    """Normalise ``playlist_prefix`` into a per-provider dict.
+
+    A bare string in a legacy configuration is treated as the ``yt`` prefix.
+    """
+    raw = config.get("playlist_prefix", "YT: ")
+    if isinstance(raw, dict):
+        return raw
+    return {"yt": str(raw)}
+
+
 def get_config_dir() -> Path:
     """Get the xmpd configuration directory.
 

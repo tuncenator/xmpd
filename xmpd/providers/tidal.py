@@ -1,8 +1,7 @@
 """Tidal provider implementation.
 
-Phase 9 scaffolded this class with auth wiring (name, is_enabled,
-is_authenticated, _ensure_session). Phase 10 implements all 14 Provider
-Protocol methods backed by ``tidalapi>=0.8.11,<0.9``.
+Implements the Provider Protocol using tidalapi, including authentication,
+library sync, search, ratings, playback reporting, and stream resolution.
 
 Stream resolution uses the openapi.tidal.com v2 ``trackManifests``
 endpoint to obtain a DASH manifest with FLAC/FLAC_HIRES variants. The
