@@ -11,34 +11,10 @@ xmpd brings YouTube Music and Tidal playlists into the music tools you already
 use. Search from a terminal, queue tracks with `mpc` or `ncmpcpp`, keep listening
 history across machines, and optionally send audio to AirPlay speakers.
 
-```mermaid
-flowchart LR
-    yt([YouTube Music]):::youtube
-    td([Tidal]):::tidal
-    subgraph daemon["xmpd"]
-        sync["Library sync<br/>playlists + metadata"]:::core
-        proxy["Stream proxy<br/>resolve + deliver audio"]:::core
-    end
-    mpd["MPD<br/>queue + playback"]:::player
-    control["mpc · ncmpcpp<br/>mobile clients · keybindings"]:::neutral
-    local["Local audio output"]:::neutral
-    airplay["OwnTone bridge<br/>AirPlay speakers"]:::neutral
-    yt --> sync
-    td --> sync
-    yt --> proxy
-    td --> proxy
-    sync -->|playlists| mpd
-    proxy -->|audio| mpd
-    control -. controls .-> mpd
-    mpd --> local
-    mpd -->|optional| airplay
-    classDef youtube fill:#ffe4ed,stroke:#db527a,color:#432033
-    classDef tidal fill:#d8f5ec,stroke:#30987a,color:#163e34
-    classDef core fill:#e7eaff,stroke:#737fd1,color:#272e58
-    classDef player fill:#233044,stroke:#6e91c4,color:#ffffff
-    classDef neutral fill:#edf1f6,stroke:#8e9cad,color:#263445
-    style daemon fill:transparent,stroke:#8e9cad,stroke-dasharray:5 5
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.png">
+  <img src="docs/assets/architecture-light.png" alt="Streaming sources feed xmpd library sync and stream proxy, then MPD for local playback or optional AirPlay output.">
+</picture>
 
 - **One queue, multiple sources.** Sync playlists and favorites from either or
   both providers. A provider error is handled independently during sync.
@@ -302,16 +278,10 @@ for the network. Enabling history also starts sync attempts; the
 `history.watchtower.enabled` key is currently not consulted by the daemon.
 Without a reachable aggregator, local records remain available.
 
-```mermaid
-flowchart LR
-    laptop["Laptop<br/>local history.db"]:::client
-    hub[("History aggregator<br/>merged plays")]:::hub
-    desktop["Desktop<br/>local history.db"]:::client
-    laptop <-->|SSH over Tailscale| hub
-    hub <-->|SSH over Tailscale| desktop
-    classDef client fill:#e7eaff,stroke:#737fd1,color:#272e58
-    classDef hub fill:#d8f5ec,stroke:#30987a,color:#163e34
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/history-sync-dark.png">
+  <img src="docs/assets/history-sync-light.png" alt="Laptop and desktop each synchronize their local listening history with a shared aggregator over SSH through Tailscale.">
+</picture>
 
 See [History setup](docs/HISTORY.md) for the receiver, restricted SSH key,
 configuration, and `xmpd-doctor` diagnostics.

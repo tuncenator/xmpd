@@ -1,0 +1,26 @@
+flowchart LR
+    yt([YouTube Music]):::youtube
+    td([Tidal]):::tidal
+    subgraph daemon["xmpd"]
+        sync["Library sync<br/>playlists + metadata"]:::core
+        proxy["Stream proxy<br/>resolve + deliver audio"]:::core
+    end
+    mpd["MPD<br/>queue + playback"]:::player
+    control["mpc · ncmpcpp<br/>mobile clients · keybindings"]:::neutral
+    local["Local audio output"]:::neutral
+    airplay["OwnTone bridge<br/>AirPlay speakers"]:::neutral
+    yt --> sync
+    td --> sync
+    yt --> proxy
+    td --> proxy
+    sync -->|playlists| mpd
+    proxy -->|audio| mpd
+    control -. controls .-> mpd
+    mpd --> local
+    mpd -->|optional| airplay
+    classDef youtube fill:#ffe4ed,stroke:#db527a,color:#432033
+    classDef tidal fill:#d8f5ec,stroke:#30987a,color:#163e34
+    classDef core fill:#e7eaff,stroke:#737fd1,color:#272e58
+    classDef player fill:#233044,stroke:#6e91c4,color:#ffffff
+    classDef neutral fill:#edf1f6,stroke:#8e9cad,color:#263445
+    style daemon fill:transparent,stroke:#8e9cad,stroke-dasharray:5 5

@@ -1,0 +1,8 @@
+flowchart LR
+    laptop["Laptop<br/>local history.db"]:::client
+    hub[("History aggregator<br/>merged plays")]:::hub
+    desktop["Desktop<br/>local history.db"]:::client
+    laptop <-->|SSH over Tailscale| hub
+    hub <-->|SSH over Tailscale| desktop
+    classDef client fill:#e7eaff,stroke:#737fd1,color:#272e58
+    classDef hub fill:#d8f5ec,stroke:#30987a,color:#163e34
