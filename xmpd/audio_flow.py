@@ -260,6 +260,7 @@ def _parse_mpd_audio_field(audio: str) -> tuple[int | None, int | None, int | No
     if len(parts) != 3:
         return None, None, None
     rate = _safe_int(parts[0])
+    bits: int | None
     if parts[1] == "f":
         bits = 32
     elif parts[1].startswith("dsd"):

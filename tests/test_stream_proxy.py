@@ -12,9 +12,11 @@ from xmpd.stream_proxy import (
     SOURCE_INFO_ERROR_RETRY_SECONDS,
     StreamRedirectProxy,
     _is_dash_manifest,
+    resolve_stream_cache_hours,
+)
+from xmpd.stream_transport import (
     _patch_flac_streaminfo_total_samples,
     _source_info_from_streams,
-    resolve_stream_cache_hours,
 )
 from xmpd.track_store import TrackStore
 
@@ -90,7 +92,7 @@ def fake_ffmpeg():
         return proc
 
     mock = AsyncMock(side_effect=lambda *a, **k: _make_proc())
-    with patch("xmpd.stream_proxy.asyncio.create_subprocess_exec", new=mock):
+    with patch("xmpd.stream_transport.asyncio.create_subprocess_exec", new=mock):
         yield mock, fake_flac
 
 
@@ -645,7 +647,7 @@ async def test_route_tidal_dash_pipes_through_ffmpeg(track_store, tidal_provider
     fake_proc.kill = Mock()
 
     with patch(
-        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        "xmpd.stream_transport.asyncio.create_subprocess_exec",
         new=AsyncMock(return_value=fake_proc),
     ) as mock_spawn:
         async with TestClient(TestServer(proxy.app)) as client:
@@ -672,7 +674,7 @@ async def test_route_tidal_dash_terminates_on_idle_ffmpeg(
     silent hang where a stalled CDN segment left MPD with a half-buffered
     stream and no recovery path.
     """
-    monkeypatch.setattr("xmpd.stream_proxy.DASH_STREAM_IDLE_TIMEOUT", 0.2)
+    monkeypatch.setattr("xmpd.stream_transport.DASH_STREAM_IDLE_TIMEOUT", 0.2)
 
     track_store.add_track(
         "tidal",
@@ -712,7 +714,7 @@ async def test_route_tidal_dash_terminates_on_idle_ffmpeg(
     fake_proc.kill = Mock(side_effect=kill_impl)
 
     with patch(
-        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        "xmpd.stream_transport.asyncio.create_subprocess_exec",
         new=AsyncMock(return_value=fake_proc),
     ):
         async with TestClient(TestServer(proxy.app)) as client:
@@ -1186,7 +1188,7 @@ async def test_dash_stream_does_not_hold_resolution_slot(
     fake_proc.kill = Mock()
 
     with patch(
-        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        "xmpd.stream_transport.asyncio.create_subprocess_exec",
         new=AsyncMock(return_value=fake_proc),
     ):
         async with TestClient(TestServer(proxy.app)) as client:
@@ -1286,7 +1288,7 @@ async def test_probe_best_audio_stream_picks_highest_bitrate():
     """_probe_best_audio_stream selects the stream index with the highest bitrate."""
     import json as _json
 
-    from xmpd.stream_proxy import _probe_best_audio_stream
+    from xmpd.stream_transport import _probe_best_audio_stream
 
     ffprobe_output = _json.dumps({
         "streams": [
@@ -1299,7 +1301,7 @@ async def test_probe_best_audio_stream_picks_highest_bitrate():
     fake_proc.communicate = AsyncMock(return_value=(ffprobe_output, b""))
 
     with patch(
-        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        "xmpd.stream_transport.asyncio.create_subprocess_exec",
         new=AsyncMock(return_value=fake_proc),
     ):
         idx = await _probe_best_audio_stream("https://example.com/manifest.mpd")
@@ -1313,7 +1315,7 @@ async def test_probe_best_audio_stream_single_stream_returns_zero():
     """Falls back to index 0 when only one audio stream exists."""
     import json as _json
 
-    from xmpd.stream_proxy import _probe_best_audio_stream
+    from xmpd.stream_transport import _probe_best_audio_stream
 
     ffprobe_output = _json.dumps({
         "streams": [
@@ -1325,7 +1327,7 @@ async def test_probe_best_audio_stream_single_stream_returns_zero():
     fake_proc.communicate = AsyncMock(return_value=(ffprobe_output, b""))
 
     with patch(
-        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        "xmpd.stream_transport.asyncio.create_subprocess_exec",
         new=AsyncMock(return_value=fake_proc),
     ):
         idx = await _probe_best_audio_stream("https://example.com/manifest.mpd")
@@ -1337,10 +1339,10 @@ async def test_probe_best_audio_stream_single_stream_returns_zero():
 @pytest.mark.real_ffprobe
 async def test_probe_best_audio_stream_ffprobe_failure_returns_zero():
     """Falls back to index 0 when ffprobe raises an exception."""
-    from xmpd.stream_proxy import _probe_best_audio_stream
+    from xmpd.stream_transport import _probe_best_audio_stream
 
     with patch(
-        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        "xmpd.stream_transport.asyncio.create_subprocess_exec",
         side_effect=OSError("ffprobe not found"),
     ):
         idx = await _probe_best_audio_stream("https://example.com/manifest.mpd")
@@ -1396,7 +1398,7 @@ async def test_route_tidal_dash_ffmpeg_receives_map_flag(track_store, tidal_prov
             return fake_ffprobe
         return fake_ffmpeg
 
-    with patch("xmpd.stream_proxy.asyncio.create_subprocess_exec", side_effect=fake_spawn):
+    with patch("xmpd.stream_transport.asyncio.create_subprocess_exec", side_effect=fake_spawn):
         async with TestClient(TestServer(proxy.app)) as client:
             resp = await client.get("/proxy/tidal/99887766", allow_redirects=False)
             assert resp.status == 200
@@ -1543,7 +1545,7 @@ async def test_route_tidal_dash_patches_first_chunk_with_track_duration(
     fake_proc.kill = Mock()
 
     with patch(
-        "xmpd.stream_proxy.asyncio.create_subprocess_exec",
+        "xmpd.stream_transport.asyncio.create_subprocess_exec",
         new=AsyncMock(return_value=fake_proc),
     ):
         async with TestClient(TestServer(proxy.app)) as client:
@@ -1575,7 +1577,7 @@ def _patch_probe(monkeypatch, streams):
     async def fake_probe(_url):
         return streams
 
-    monkeypatch.setattr("xmpd.stream_proxy._ffprobe_audio_streams", fake_probe)
+    monkeypatch.setattr("xmpd.stream_transport._ffprobe_audio_streams", fake_probe)
 
 
 async def _await_probe_tasks(proxy):

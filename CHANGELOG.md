@@ -2,8 +2,28 @@
 
 ## [Unreleased]
 
+### Maintenance
+
+- Extract playback, rating, and query command handlers from the daemon, and
+  move ffmpeg streaming, source probes, and FLAC framing into `stream_transport`.
+  Socket commands and audio delivery retain their existing behavior.
+- Fix package type errors, add development type stubs, and consolidate the
+  development dependencies into the locked `dev` extra.
+- Add `scripts/check.sh` and GitHub Actions checks for lint, types, version
+  consistency, and the regression suite on Python 3.11 and 3.13. Pre-commit uses
+  the same locked lint and type tools.
+- Refresh streaming and development documentation, remove obsolete implementation
+  phase comments, and update test fixtures for the current schema, local
+  favorites lookup, and UI behavior. Doctor tests use a fixed clock.
+
 ### Fixed
 
+- Importing `xmpctl` or `xmpd-status` no longer replaces the caller's interpreter
+  with the repository venv. Automatic venv selection only runs for direct CLI
+  execution, so alternate Python environments can safely import the scripts.
+- Search's local favorites lookup now reads M3U files from the MPD playlist
+  directory, while XSPF files remain under the music directory's `_xmpd` folder.
+  Configured favorites names are honored when looking up those files.
 - `providers/ytmusic`: every YouTube radio command failed with "No tracks found in radio playlist" (`xmpctl radio` exiting 1, including the `ctrl-r` binds in `xmpd-search` and `xmpd-history`). Not a track-level problem: YouTube inserted a "Comments" tab into the `next` response's `watchNextTabbedResultsRenderer`, so the tabs became `Up next, Lyrics, Comments, Related`. ytmusicapi <= 1.12.0 read the Related tab at hardcoded index 2, hit Comments (which carries `content`, not `endpoint`) and raised `KeyError: 'endpoint'` before parsing a single track, even though the queue itself held all 50. `get_radio`'s `except Exception` swallowed it into an empty list, and `_retry_on_failure` burned three attempts on a deterministic parse error. ytmusicapi 1.12.1 replaced the index lookup with a scan over all tabs (`get_tab_browse_ids`), so the dependency floor is now `>=1.12.1`.
 - `xmpd-status`: the waybar/i3blocks quality badge showed HiRes for plain YouTube tracks. Since 2.3.1's byte-proxy fix, the proxy re-encodes YT audio to FLAC without pinning a sample format, so ffmpeg upconverts opus float output to 24-bit and MPD reports `48000:24:2`; the badge classifier only detected lossy sources via MPD's float bit format and read the 24-bit re-encode as HiRes. The badge now asks the proxy's new `/proxy/{provider}/{track_id}/info` endpoint for the actual source codec (see below) and falls back to a provider hint (YT = lossy) only while the probe is pending or the daemon predates the endpoint.
 - `extras/airplay-bridge`: the `owntone-bridge` null sink was a second, invisible attenuator in front of OwnTone. The installer created it with `monitor.channel-volumes = true` (PipeWire's own default is `false`), so the sink's volume slider scaled the monitor the padder captures. Found at 15% (-49.44 dB): the receiver's AirPlay volume read 80 while the PCM arriving at it peaked at -58.94 dBFS, inaudible and down to roughly 5 effective bits. New installs now write `false`, so OwnTone's per-output volume (which *is* the receiver's own AirPlay volume) is the single knob. Existing installs migrate with `apply-single-knob`; note that removing the attenuation is a step up of whatever the slider sits at, and AirPlay volume only reaches down to about -30 dB.

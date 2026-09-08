@@ -13,13 +13,21 @@ repos:
         pass_filenames: false
         files: ^(pyproject\.toml|xmpd/__init__\.py)$
 
-  # Python code formatting
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
+  # Use the same locked tools and package scope as scripts/check.sh and CI.
+  - repo: local
     hooks:
       - id: ruff
-        args: [--fix]
-      - id: ruff-format
+        name: Ruff (locked)
+        entry: uv run --locked --extra dev ruff check xmpd/
+        language: system
+        pass_filenames: false
+        files: ^(xmpd/.*\.py|pyproject\.toml|uv\.lock)$
+      - id: mypy
+        name: Mypy (locked)
+        entry: uv run --locked --extra dev mypy xmpd/
+        language: system
+        pass_filenames: false
+        files: ^(xmpd/.*\.py|pyproject\.toml|uv\.lock)$
 
   # Basic checks
   - repo: https://github.com/pre-commit/pre-commit-hooks

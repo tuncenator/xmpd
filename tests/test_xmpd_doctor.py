@@ -60,6 +60,12 @@ def _seed_db(home: Path, total_rows: int = 5, unsynced: int = 0) -> None:
 
 def _run_doctor(bin_dir: Path, home: Path) -> subprocess.CompletedProcess:
     """Run bin/xmpd-doctor with the stubbed PATH and HOME."""
+    _write_stub(bin_dir, "date", '''#!/usr/bin/env bash
+if [[ "$*" == "+%s" ]]; then
+    exec /bin/date -d '2026-05-14T12:00:00+03:00' +%s
+fi
+exec /bin/date "$@"
+''')
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "HOME": str(home),

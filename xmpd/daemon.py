@@ -2,7 +2,7 @@
 
 This module implements the XMPDaemon class which coordinates provider-agnostic
 playlist syncing to MPD, with support for periodic auto-sync, history reporting,
-rating dispatch, and an HTTP stream-redirect proxy.
+rating dispatch, and an HTTP audio proxy.
 """
 
 import asyncio
@@ -12,16 +12,19 @@ import os
 import re
 import signal
 import socket
-import sqlite3
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mpd import MPDClient as MPDClientBase
+
 from xmpd.auth.ytmusic_cookie import FirefoxCookieExtractor
+from xmpd.commands import playback, queries, ratings
 from xmpd.config import get_config_dir, load_config
+from xmpd.config import get_playlist_prefixes as _build_playlist_prefix
 from xmpd.exceptions import CookieExtractionError, MPDConnectionError
 from xmpd.history_reporter import HistoryReporter
 from xmpd.history_store import HistoryStore
@@ -30,7 +33,7 @@ from xmpd.mpd_client import MPDClient
 from xmpd.notify import send_notification
 from xmpd.providers import build_registry
 from xmpd.providers.base import Provider
-from xmpd.rating import RatingAction, RatingManager, apply_to_provider
+from xmpd.rating import RatingManager
 from xmpd.stream_proxy import StreamRedirectProxy, resolve_stream_cache_hours
 from xmpd.stream_resolver import StreamResolver
 from xmpd.sync_engine import SyncEngine
@@ -45,9 +48,8 @@ _MPDCONF_CANDIDATES = ["~/.mpdconf", "~/.mpd/mpd.conf", "/etc/mpd.conf"]
 def _build_yt_config(config: dict[str, Any]) -> dict[str, Any]:
     """Synthesize a ``yt`` provider config section from legacy top-level keys.
 
-    During the Phase 8-10 transition the user's ``config.yaml`` may still
-    use the legacy flat shape (no ``yt:`` section).  This helper bridges
-    the gap so ``build_registry`` always receives a well-formed dict.
+    Legacy configurations may omit the ``yt:`` section. Normalize that
+    shape before building the provider registry.
     """
     if "yt" in config and isinstance(config["yt"], dict):
         # Already has the new shape; ensure ``enabled`` defaults to True
@@ -56,18 +58,6 @@ def _build_yt_config(config: dict[str, Any]) -> dict[str, Any]:
         return section
     # Legacy config: synthesize from top-level keys
     return {"enabled": True}
-
-
-def _build_playlist_prefix(config: dict[str, Any]) -> dict[str, str]:
-    """Normalise ``playlist_prefix`` into a per-provider dict.
-
-    Phase 11 will make the config natively a dict.  Until then, a bare
-    string is treated as the ``yt`` prefix.
-    """
-    raw = config.get("playlist_prefix", "YT: ")
-    if isinstance(raw, dict):
-        return raw
-    return {"yt": str(raw)}
 
 
 class XMPDaemon:
@@ -532,7 +522,10 @@ class XMPDaemon:
                 # Create shutdown event in the async context
                 self._proxy_shutdown_event = asyncio.Event()
 
-                async with self.proxy_server:
+                proxy_server = self.proxy_server
+                if proxy_server is None:
+                    return
+                async with proxy_server:
                     logger.info(
                         f"Proxy server running at http://{self.config['proxy_host']}:{self.config['proxy_port']}"
                     )
@@ -1073,144 +1066,7 @@ class XMPDaemon:
         provider: str | None,
         track_id: str | None,
     ) -> dict[str, Any]:
-        """Handle 'radio' command - generate radio playlist.
-
-        Args:
-            provider: Provider name, or None to infer from current track.
-            track_id: Track ID, or None to infer from current track.
-        """
-        logger.info("Radio command: provider=%s track_id=%s", provider, track_id)
-
-        try:
-            # Infer provider + track_id from current MPD track if needed
-            if track_id is None:
-                try:
-                    current = self.mpd_client.currentsong()
-                except Exception as e:
-                    logger.error("Failed to get current song from MPD: %s", e)
-                    return {"success": False, "error": "Failed to get current track"}
-
-                if not current:
-                    return {"success": False, "error": "No track currently playing"}
-
-                file_url = current.get("file", "")
-                provider, track_id = self._extract_provider_and_track(file_url)
-
-                if not provider or not track_id:
-                    return {"success": False, "error": "Current track is not a provider track"}
-
-                logger.info(
-                    "Inferred from current track: provider=%s track_id=%s",
-                    provider,
-                    track_id,
-                )
-
-            # Default provider to yt for backward compat
-            if provider is None:
-                provider = "yt"
-
-            if provider not in self.provider_registry:
-                return {"success": False, "error": f"Unknown provider: {provider}"}
-
-            prov = self.provider_registry[provider]
-            is_auth, err = prov.is_authenticated()
-            if not is_auth:
-                return {"success": False, "error": f"{provider} not authenticated: {err}"}
-
-            # Fetch radio tracks via Provider Protocol
-            radio_tracks = prov.get_radio(
-                track_id,
-                limit=self.config.get("radio_playlist_limit", 25),
-            )
-            if not radio_tracks:
-                return {"success": False, "error": "No tracks found in radio playlist"}
-
-            # Guarantee the seed track plays first regardless of provider.
-            # Tidal's get_track_radio omits the seed; YT's watch_playlist usually
-            # includes it but ordering is not contractual.
-            radio_tracks = self._ensure_seed_first(
-                prov,
-                provider,
-                track_id,
-                radio_tracks,
-            )
-
-            logger.info("Fetched %d radio tracks from %s", len(radio_tracks), provider)
-
-            # Build TrackWithMetadata objects for MPD playlist creation
-            from xmpd.mpd_client import TrackWithMetadata
-
-            track_objects: list[TrackWithMetadata] = []
-            for t in radio_tracks:
-                # Persist to TrackStore for on-demand proxy resolution
-                if self.track_store:
-                    try:
-                        self.track_store.add_track(
-                            provider=t.provider,
-                            track_id=t.track_id,
-                            stream_url=None,
-                            title=t.metadata.title,
-                            artist=t.metadata.artist,
-                            album=t.metadata.album,
-                            duration_seconds=t.metadata.duration_seconds,
-                            art_url=t.metadata.art_url,
-                        )
-                    except Exception as e:
-                        logger.warning("Failed to save track %s: %s", t.track_id, e)
-
-                track_objects.append(
-                    TrackWithMetadata(
-                        url="",
-                        title=t.metadata.title,
-                        artist=t.metadata.artist or "Unknown Artist",
-                        video_id=t.track_id,
-                        duration_seconds=t.metadata.duration_seconds,
-                        provider=t.provider,
-                    )
-                )
-
-            if not track_objects:
-                return {"success": False, "error": "No valid tracks to add to playlist"}
-
-            # Build liked set for like indicator
-            like_indicator = self.config.get(
-                "like_indicator",
-                {"enabled": False, "tag": "+1", "alignment": "right"},
-            )
-            liked_video_ids: set[str] = set()
-            if like_indicator.get("enabled", False):
-                try:
-                    favs = prov.get_favorites()
-                    liked_video_ids = {f.track_id for f in favs}
-                except Exception as e:
-                    logger.warning("Failed to fetch favorites for like indicator: %s", e)
-
-            # Create MPD playlist
-            prefix_map = _build_playlist_prefix(self.config)
-            prefix = prefix_map.get(provider, "YT: " if provider == "yt" else "TD: ")
-            playlist_name = f"{prefix}Radio"
-            logger.info("Creating playlist '%s' with %d tracks", playlist_name, len(track_objects))
-
-            self.mpd_client.create_or_replace_playlist(
-                name=playlist_name,
-                tracks=track_objects,
-                proxy_config=self.proxy_config,
-                playlist_format=self.config.get("playlist_format", "m3u"),
-                mpd_music_directory=self.config.get("mpd_music_directory"),
-                liked_video_ids=liked_video_ids,
-                like_indicator=like_indicator,
-            )
-
-            return {
-                "success": True,
-                "message": f"Radio playlist created: {len(track_objects)} tracks",
-                "tracks": len(track_objects),
-                "playlist": playlist_name,
-            }
-
-        except Exception as e:
-            logger.error("Radio generation failed: %s", e)
-            return {"success": False, "error": f"Radio generation failed: {e}"}
+        return playback.radio(self, provider, track_id)
 
     @staticmethod
     def _ensure_seed_first(
@@ -1264,15 +1120,24 @@ class XMPDaemon:
 
         from xmpd.sync_engine import DEFAULT_FAVORITES_NAMES
 
-        music_dir = Path(self.config.get("mpd_music_directory", "~/Music")).expanduser()
-        playlist_dir = music_dir / "_xmpd"
         prefix_map = _build_playlist_prefix(self.config)
         fmt = self.config.get("playlist_format", "m3u")
+        if fmt == "xspf":
+            music_dir = Path(self.config.get("mpd_music_directory", "~/Music")).expanduser()
+            playlist_dir = music_dir / "_xmpd"
+        else:
+            playlist_dir = Path(
+                self.config.get("mpd_playlist_directory", "~/.config/mpd/playlists")
+            ).expanduser()
+        favorites_names = {
+            **DEFAULT_FAVORITES_NAMES,
+            **self.config.get("favorites_playlist_name_per_provider", {}),
+        }
 
         liked: set[str] = set()
         for pname in self.provider_registry:
             prefix = prefix_map.get(pname, f"{pname.upper()}: ")
-            fav_name = DEFAULT_FAVORITES_NAMES.get(pname, "Favorites")
+            fav_name = favorites_names.get(pname, "Favorites")
             playlist_path = playlist_dir / f"{prefix}{fav_name}.{fmt}"
             if not playlist_path.exists():
                 continue
@@ -1302,9 +1167,9 @@ class XMPDaemon:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-                match = re.search(r"/proxy/[^/]+/([^?\s]+)", line)
-                if match:
-                    liked.add(f"{pname}:{match.group(1)}")
+                line_match = re.search(r"/proxy/[^/]+/([^?\s]+)", line)
+                if line_match:
+                    liked.add(f"{pname}:{line_match.group(1)}")
 
     _TIDAL_QUALITY_LABELS: dict[str, str] = {
         "HI_RES_LOSSLESS": "HiRes",
@@ -1321,267 +1186,13 @@ class XMPDaemon:
         return "Lo"
 
     def _cmd_search_json(self, args: list[str]) -> dict[str, Any]:
-        """Handle 'search-json' command - return structured JSON search results.
-
-        Syntax: search-json [--provider yt|all] [--limit N] QUERY
-
-        Args:
-            args: Remaining command tokens after 'search-json'.
-
-        Returns:
-            Response dict with 'success' and 'results' (list of track dicts).
-            Each track dict has: provider, track_id, title, artist, album,
-            duration, duration_seconds, quality, liked.
-        """
-        # Parse args: consume --provider and --limit flags, rest is query
-        provider_filter = "all"
-        limit = 25
-        remaining: list[str] = []
-        i = 0
-        while i < len(args):
-            if args[i] == "--provider" and i + 1 < len(args):
-                provider_filter = args[i + 1]
-                i += 2
-            elif args[i] == "--limit" and i + 1 < len(args):
-                try:
-                    limit = int(args[i + 1])
-                except ValueError:
-                    pass
-                i += 2
-            else:
-                remaining.append(args[i])
-                i += 1
-
-        query = " ".join(remaining).strip()
-        logger.info(
-            "search-json command: query=%r, provider=%s, limit=%d",
-            query,
-            provider_filter,
-            limit,
-        )
-
-        if not query:
-            return {"success": False, "error": "Empty search query"}
-
-        # Determine which providers to search
-        if provider_filter and provider_filter != "all":
-            if provider_filter not in self.provider_registry:
-                return {"success": False, "error": f"Unknown provider: {provider_filter}"}
-            targets = {provider_filter: self.provider_registry[provider_filter]}
-        else:
-            targets = self.provider_registry
-
-        auth_targets = {}
-        for pname, prov in targets.items():
-            try:
-                is_auth, _ = prov.is_authenticated()
-                if is_auth:
-                    auth_targets[pname] = prov
-            except Exception as e:
-                logger.warning("search-json: auth check failed for %s: %s", pname, e)
-
-        def _search_provider(
-            pname: str,
-            prov: Provider,
-        ) -> tuple[str, list[tuple[str, str, dict[str, Any]]]]:
-            search_results = prov.search(query, limit=limit)
-            fallback_quality = self._quality_for_provider(pname)
-            hits: list[tuple[str, str, dict[str, Any]]] = []
-            for track in search_results:
-                duration_secs = track.metadata.duration_seconds or 0
-                quality = track.metadata.quality or fallback_quality
-                hits.append(
-                    (
-                        track.provider,
-                        track.track_id,
-                        {
-                            "provider": track.provider,
-                            "track_id": track.track_id,
-                            "title": track.metadata.title,
-                            "artist": track.metadata.artist or "Unknown Artist",
-                            "album": track.metadata.album or None,
-                            "duration": self._format_duration(duration_secs),
-                            "duration_seconds": duration_secs,
-                            "quality": quality,
-                        },
-                    )
-                )
-            return pname, hits
-
-        raw_hits: list[tuple[str, str, dict[str, Any]]] = []
-        with ThreadPoolExecutor(max_workers=len(auth_targets) + 1) as pool:
-            liked_ids_future = pool.submit(self._get_liked_ids)
-            search_futures = {
-                pool.submit(_search_provider, pname, prov): pname
-                for pname, prov in auth_targets.items()
-            }
-            for future in as_completed(search_futures):
-                pname = search_futures[future]
-                try:
-                    _, hits = future.result()
-                    raw_hits.extend(hits)
-                except Exception as e:
-                    logger.warning("search-json: search failed for %s: %s", pname, e)
-            liked_ids = liked_ids_future.result()
-
-        results: list[dict[str, Any]] = []
-        for provider, track_id, entry in raw_hits:
-            entry["liked"] = f"{provider}:{track_id}" in liked_ids if track_id else None
-            results.append(entry)
-        logger.info("search-json: returning %d results for %r", len(results), query)
-        return {"success": True, "results": results}
+        return queries.search_json(self, args)
 
     def _cmd_history_json(self, args: list[str]) -> dict[str, Any]:
-        """Handle 'history-json' command - return local history rows.
-
-        Syntax: history-json [--mode time|count] [--since ISO|all] [--limit N]
-
-        Args:
-            args: Remaining command tokens after 'history-json'.
-
-        Returns:
-            Response dict with 'success' and 'rows' (list of row dicts).
-            Each row dict carries the columns in the local plays table
-            plus, in count mode, 'play_count' and 'last_played_at'.
-        """
-        if self.history_store is None:
-            return {"success": False, "error": "history not enabled"}
-
-        mode = "time"
-        since_str = "all"
-        limit = 5000
-        i = 0
-        while i < len(args):
-            if args[i] == "--mode" and i + 1 < len(args):
-                mode = args[i + 1]
-                i += 2
-            elif args[i] == "--since" and i + 1 < len(args):
-                since_str = args[i + 1]
-                i += 2
-            elif args[i] == "--limit" and i + 1 < len(args):
-                try:
-                    limit = int(args[i + 1])
-                except ValueError:
-                    pass
-                i += 2
-            else:
-                i += 1
-
-        if mode not in ("time", "count"):
-            return {"success": False, "error": "mode must be time or count"}
-        assert mode in ("time", "count")  # narrowing for mypy
-
-        since: datetime | None = None
-        if since_str != "all":
-            try:
-                since = datetime.fromisoformat(since_str)
-            except ValueError:
-                return {"success": False, "error": f"invalid since: {since_str}"}
-
-        try:
-            rows = self.history_store.get_plays(
-                mode=mode,  # type: ignore[arg-type]
-                since=since,
-                limit=limit,
-            )
-        except sqlite3.Error as e:
-            logger.exception("history-json: SQLite error")
-            return {"success": False, "error": f"history-json: {e}"}
-
-        logger.info(
-            "history-json: mode=%s since=%s limit=%d -> %d rows",
-            mode,
-            since_str,
-            limit,
-            len(rows),
-        )
-        return {"success": True, "rows": rows}
+        return queries.history_json(self, args)
 
     def _cmd_history_backfill(self, args: list[str]) -> dict[str, Any]:
-        """Handle 'history-backfill' IPC command.
-
-        Parses ``--log PATH`` and ``--dry-run`` from args, resolves the MPD log
-        path (explicit -> config -> autodetect), calls run_backfill, and if rows
-        were inserted triggers one bidir push.
-
-        Args:
-            args: Remaining command tokens after 'history-backfill'.
-
-        Returns:
-            Response dict with 'success', 'inserted', 'skipped', 'orphans',
-            'dry_run', and 'log_path'; or 'success'=False and 'error' on failure.
-        """
-        from xmpd.history_backfill import run_backfill as _run_backfill
-
-        if not self.history_store:
-            return {"success": False, "error": "history.enabled is false"}
-
-        log_path: str | None = None
-        dry_run = False
-        i = 0
-        while i < len(args):
-            if args[i] == "--log" and i + 1 < len(args):
-                log_path = args[i + 1]
-                i += 2
-            elif args[i] == "--dry-run":
-                dry_run = True
-                i += 1
-            else:
-                i += 1
-
-        # Resolution chain: explicit -> config -> autodetect
-        if not log_path:
-            log_path = (self.config.get("history") or {}).get("mpd_log_path")
-        if not log_path:
-            log_path = self._autodetect_mpd_log_path()
-        if not log_path:
-            return {"success": False, "error": "could not locate MPD log file"}
-
-        log_path = os.path.expanduser(log_path)
-        if not os.path.isfile(log_path):
-            return {"success": False, "error": f"log file not found: {log_path}"}
-
-        try:
-            result = _run_backfill(
-                self.history_store,
-                self.track_store,
-                log_path,
-                dry_run=dry_run,
-                mpd_socket_path=self.config.get("mpd_socket_path"),
-            )
-        except Exception as exc:
-            logger.error("history-backfill failed: %s", exc, exc_info=True)
-            return {"success": False, "error": str(exc)}
-
-        # Trigger one bidir push if anything was inserted and not a dry-run
-        if not dry_run and result["inserted"] > 0 and self.history_syncer is not None:
-            try:
-                if self._history_executor is not None:
-                    self._history_executor.submit(self.history_syncer.bidir_push)
-            except Exception as exc:
-                logger.warning("history-backfill: failed to submit bidir push: %s", exc)
-
-        logger.info(
-            "history-backfill: inserted=%d skipped=%d orphans=%d"
-            " skipped_failed_decode=%d skipped_placeholder=%d dry_run=%s log=%s",
-            result["inserted"],
-            result["skipped"],
-            result["orphans"],
-            result["skipped_failed_decode"],
-            result["skipped_placeholder"],
-            dry_run,
-            log_path,
-        )
-        return {
-            "success": True,
-            "inserted": result["inserted"],
-            "skipped": result["skipped"],
-            "orphans": result["orphans"],
-            "skipped_failed_decode": result["skipped_failed_decode"],
-            "skipped_placeholder": result["skipped_placeholder"],
-            "dry_run": dry_run,
-            "log_path": log_path,
-        }
+        return queries.history_backfill(self, args)
 
     def _autodetect_mpd_log_path(self) -> str | None:
         """Walk candidate mpd.conf paths and extract the log_file directive.
@@ -1605,308 +1216,36 @@ class XMPDaemon:
                 return os.path.expanduser(m.group(1))
         return None
 
-    def _ensure_mpd(self) -> None:
+    def _ensure_mpd(self) -> MPDClientBase:
         """Reconnect to MPD if the connection was lost."""
         try:
-            self.mpd_client._client.ping()
+            client = self.mpd_client._client
+            if client is None:
+                raise MPDConnectionError("MPD client not connected")
+            client.ping()
         except Exception:
             logger.warning("MPD connection lost, reconnecting")
             self.mpd_client.connect()
 
+        client = self.mpd_client._client
+        if client is None:
+            raise MPDConnectionError("MPD client unavailable after reconnect")
+        return client
+
     def _cmd_play(self, provider: str, track_id: str | None) -> dict[str, Any]:
-        """Handle 'play' command - play track immediately.
-
-        Args:
-            provider: Provider canonical name (e.g. 'yt').
-            track_id: Track identifier.
-        """
-        logger.info("Play command: provider=%s track_id=%s", provider, track_id)
-
-        try:
-            if not track_id:
-                return {"success": False, "error": "Missing track ID"}
-
-            # Get track metadata via provider
-            track_info = self._get_track_info(provider, track_id)
-
-            # Register in TrackStore so stream proxy can resolve the track
-            if self.track_store:
-                try:
-                    self.track_store.add_track(
-                        provider=provider,
-                        track_id=track_id,
-                        stream_url=None,
-                        title=track_info.get("title", "Unknown"),
-                        artist=track_info.get("artist", None),
-                        album=track_info.get("album"),
-                        duration_seconds=track_info.get("duration_seconds"),
-                        art_url=track_info.get("art_url"),
-                    )
-                except Exception:
-                    logger.warning("Failed to register track in store: %s/%s", provider, track_id)
-
-            # Build proxy URL
-            proxy_port = (self.proxy_config or {}).get("port", 8080)
-            proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
-
-            # Clear queue, add track with metadata, start playback
-            logger.info("Playing: %s - %s", track_info["title"], track_info["artist"])
-            self._ensure_mpd()
-            self.mpd_client._client.clear()
-            song_id = self.mpd_client._client.addid(proxy_url)
-            self.mpd_client._client.addtagid(song_id, "Title", track_info["title"])
-            self.mpd_client._client.addtagid(song_id, "Artist", track_info["artist"])
-            self.mpd_client._client.play()
-
-            return {
-                "success": True,
-                "message": f"Now playing: {track_info['title']} - {track_info['artist']}",
-                "title": track_info["title"],
-                "artist": track_info["artist"],
-            }
-
-        except Exception as e:
-            logger.error("Play command failed: %s", e)
-            return {"success": False, "error": f"Play failed: {e}"}
+        return playback.play(self, provider, track_id)
 
     def _cmd_queue(self, provider: str, track_id: str | None) -> dict[str, Any]:
-        """Handle 'queue' command - add track to MPD queue.
-
-        Args:
-            provider: Provider canonical name.
-            track_id: Track identifier.
-        """
-        logger.info("Queue command: provider=%s track_id=%s", provider, track_id)
-
-        try:
-            if not track_id:
-                return {"success": False, "error": "Missing track ID"}
-
-            track_info = self._get_track_info(provider, track_id)
-
-            # Register in TrackStore so stream proxy can resolve the track
-            if self.track_store:
-                try:
-                    self.track_store.add_track(
-                        provider=provider,
-                        track_id=track_id,
-                        stream_url=None,
-                        title=track_info.get("title", "Unknown"),
-                        artist=track_info.get("artist", None),
-                        album=track_info.get("album"),
-                        duration_seconds=track_info.get("duration_seconds"),
-                        art_url=track_info.get("art_url"),
-                    )
-                except Exception:
-                    logger.warning("Failed to register track in store: %s/%s", provider, track_id)
-
-            proxy_port = (self.proxy_config or {}).get("port", 8080)
-            proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
-
-            logger.info("Adding to queue: %s - %s", track_info["title"], track_info["artist"])
-            self._ensure_mpd()
-            song_id = self.mpd_client._client.addid(proxy_url)
-            self.mpd_client._client.addtagid(song_id, "Title", track_info["title"])
-            self.mpd_client._client.addtagid(song_id, "Artist", track_info["artist"])
-
-            return {
-                "success": True,
-                "message": f"Added to queue: {track_info['title']} - {track_info['artist']}",
-                "title": track_info["title"],
-                "artist": track_info["artist"],
-            }
-
-        except Exception as e:
-            logger.error("Queue command failed: %s", e)
-            return {"success": False, "error": f"Queue failed: {e}"}
+        return playback.queue(self, provider, track_id)
 
     def _cmd_like(self, provider: str | None, track_id: str | None) -> dict[str, Any]:
-        """Handle 'like' command."""
-        if not provider or not track_id:
-            return {"success": False, "error": "Usage: like <provider> <track_id>"}
-        if provider not in self.provider_registry:
-            return {"success": False, "error": f"Unknown provider: {provider}"}
-
-        prov = self.provider_registry[provider]
-        try:
-            is_auth, err = prov.is_authenticated()
-        except Exception as exc:
-            return {"success": False, "error": f"{provider} auth probe failed: {exc}"}
-        if not is_auth:
-            return {"success": False, "error": f"{provider} not authenticated: {err}"}
-
-        try:
-            raw_state = prov.get_like_state(track_id)
-            from xmpd.rating import RatingState
-
-            state_map = {
-                "LIKED": RatingState.LIKED,
-                "DISLIKED": RatingState.DISLIKED,
-                "NEUTRAL": RatingState.NEUTRAL,
-            }
-            current = state_map.get(raw_state, RatingState.NEUTRAL)
-            transition = self._rating_manager.apply_action(current, RatingAction.LIKE)
-            apply_to_provider(prov, transition, track_id)
-            # Invalidate favorites cache so next search-json reflects new state
-            self._liked_ids_cache_time = 0.0
-            return {
-                "success": True,
-                "message": transition.user_message,
-                "new_state": transition.new_state.value,
-            }
-        except Exception as e:
-            logger.error("Like failed: %s", e, exc_info=True)
-            return {"success": False, "error": str(e)}
+        return ratings.like(self, provider, track_id)
 
     def _cmd_dislike(self, provider: str | None, track_id: str | None) -> dict[str, Any]:
-        """Handle 'dislike' command."""
-        if not provider or not track_id:
-            return {"success": False, "error": "Usage: dislike <provider> <track_id>"}
-        if provider not in self.provider_registry:
-            return {"success": False, "error": f"Unknown provider: {provider}"}
-
-        prov = self.provider_registry[provider]
-        try:
-            is_auth, err = prov.is_authenticated()
-        except Exception as exc:
-            return {"success": False, "error": f"{provider} auth probe failed: {exc}"}
-        if not is_auth:
-            return {"success": False, "error": f"{provider} not authenticated: {err}"}
-
-        try:
-            raw_state = prov.get_like_state(track_id)
-            from xmpd.rating import RatingState
-
-            state_map = {
-                "LIKED": RatingState.LIKED,
-                "DISLIKED": RatingState.DISLIKED,
-                "NEUTRAL": RatingState.NEUTRAL,
-            }
-            current = state_map.get(raw_state, RatingState.NEUTRAL)
-            transition = self._rating_manager.apply_action(current, RatingAction.DISLIKE)
-            apply_to_provider(prov, transition, track_id)
-            # Invalidate favorites cache so next search-json reflects new state
-            self._liked_ids_cache_time = 0.0
-            return {
-                "success": True,
-                "message": transition.user_message,
-                "new_state": transition.new_state.value,
-            }
-        except Exception as e:
-            logger.error("Dislike failed: %s", e, exc_info=True)
-            return {"success": False, "error": str(e)}
+        return ratings.dislike(self, provider, track_id)
 
     def _cmd_like_toggle(self, provider: str | None, track_id: str | None) -> dict[str, Any]:
-        """Handle 'like-toggle' command - toggle like state for arbitrary track.
-
-        Unlike 'like', which toggles based on current provider state, this
-        command is explicitly for the search interface: it reads current like
-        state, applies the LIKE toggle action, updates the provider, then
-        invalidates the favorites cache so the next search-json reflects the
-        change.
-
-        Args:
-            provider: Provider canonical name (e.g. 'yt', 'tidal').
-            track_id: Track identifier.
-
-        Returns:
-            Response dict with 'success', 'message', 'new_state', 'liked' (bool).
-        """
-        if not provider or not track_id:
-            return {"success": False, "error": "Usage: like-toggle <provider> <track_id>"}
-        if provider not in self.provider_registry:
-            return {"success": False, "error": f"Unknown provider: {provider}"}
-
-        prov = self.provider_registry[provider]
-        try:
-            is_auth, err = prov.is_authenticated()
-        except Exception as exc:
-            return {"success": False, "error": f"{provider} auth probe failed: {exc}"}
-        if not is_auth:
-            return {"success": False, "error": f"{provider} not authenticated: {err}"}
-
-        try:
-            raw_state = prov.get_like_state(track_id)
-            from xmpd.rating import RatingState
-
-            state_map = {
-                "LIKED": RatingState.LIKED,
-                "DISLIKED": RatingState.DISLIKED,
-                "NEUTRAL": RatingState.NEUTRAL,
-            }
-            current = state_map.get(raw_state, RatingState.NEUTRAL)
-            transition = self._rating_manager.apply_action(current, RatingAction.LIKE)
-            apply_to_provider(prov, transition, track_id)
-
-            # Invalidate the favorites cache so next search-json reflects new state
-            self._liked_ids_cache_time = 0.0
-            logger.debug(
-                "like-toggle: invalidated favorites cache for %s:%s (new_state=%s)",
-                provider,
-                track_id,
-                transition.new_state.value,
-            )
-
-            now_liked = transition.new_state == RatingState.LIKED
-
-            # Patch on-disk playlists and live MPD queue immediately
-            try:
-                from xmpd.playlist_patcher import patch_mpd_queue, patch_playlist_files
-                from xmpd.sync_engine import DEFAULT_FAVORITES_NAMES
-
-                proxy_port = (self.proxy_config or {}).get("port", 8080)
-                proxy_url = f"http://localhost:{proxy_port}/proxy/{provider}/{track_id}"
-
-                like_indicator = self.config.get("like_indicator", {})
-                if like_indicator.get("enabled", False):
-                    playlist_dir = Path(
-                        self.config.get("mpd_playlist_directory", "~/.config/mpd/playlists")
-                    ).expanduser()
-                    xspf_dir = None
-                    if self.config.get("playlist_format") == "xspf":
-                        music_dir = self.config.get("mpd_music_directory", "~/Music")
-                        xspf_dir = Path(music_dir).expanduser() / "_xmpd"
-
-                    prefix_map = self.config.get("playlist_prefix", {"yt": "YT: ", "tidal": "TD: "})
-                    fav_names_cfg = self.config.get("favorites_playlist_name_per_provider", {})
-                    fav_names = {**DEFAULT_FAVORITES_NAMES, **fav_names_cfg}
-                    favorites_set = set()
-                    for prov_name, fav_name in fav_names.items():
-                        prov_prefix = prefix_map.get(prov_name, "")
-                        favorites_set.add(f"{prov_prefix}{fav_name}")
-
-                    patch_playlist_files(
-                        proxy_url,
-                        now_liked,
-                        playlist_dir,
-                        xspf_dir,
-                        like_indicator,
-                        favorites_set,
-                    )
-
-                    if self.mpd_client and self.mpd_client._client:
-                        self._ensure_mpd()
-                        track_info = self._get_track_info(provider, track_id)
-                        base_title = track_info.get("title", "Unknown")
-                        patch_mpd_queue(
-                            self.mpd_client._client,
-                            proxy_url,
-                            base_title,
-                            now_liked,
-                            like_indicator,
-                        )
-            except Exception as patch_exc:
-                logger.warning("Like-toggle playlist patching failed: %s", patch_exc)
-
-            return {
-                "success": True,
-                "message": transition.user_message,
-                "new_state": transition.new_state.value,
-                "liked": now_liked,
-            }
-        except Exception as e:
-            logger.error("Like-toggle failed: %s", e, exc_info=True)
-            return {"success": False, "error": str(e)}
+        return ratings.like_toggle(self, provider, track_id)
 
     # ------------------------------------------------------------------
     # Helpers

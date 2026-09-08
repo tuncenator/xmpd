@@ -275,7 +275,7 @@ class TestClassifyAudioQuality:
         result = ytmpd_status.classify_audio_quality(
             "44100:16:2", "0", "tidal", compact=True
         )
-        assert result == "CD"
+        assert result == "HF"
 
     def test_compact_tidal_hires(self):
         result = ytmpd_status.classify_audio_quality(
@@ -1294,12 +1294,13 @@ class TestGetSyncStatus:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE tracks (
-                video_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT 'yt',
+                track_id TEXT PRIMARY KEY,
                 stream_url TEXT
             )
         """)
         cursor.execute(
-            "INSERT INTO tracks (video_id, stream_url) VALUES (?, ?)",
+            "INSERT INTO tracks (track_id, stream_url) VALUES (?, ?)",
             ("testvideoid", "https://youtube.com/stream/url"),
         )
         conn.commit()
@@ -1321,12 +1322,13 @@ class TestGetSyncStatus:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE tracks (
-                video_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT 'yt',
+                track_id TEXT PRIMARY KEY,
                 stream_url TEXT
             )
         """)
         cursor.execute(
-            "INSERT INTO tracks (video_id, stream_url) VALUES (?, ?)",
+            "INSERT INTO tracks (track_id, stream_url) VALUES (?, ?)",
             ("testvideoid", None),  # NULL stream_url
         )
         conn.commit()
@@ -1348,7 +1350,8 @@ class TestGetSyncStatus:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE tracks (
-                video_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT 'yt',
+                track_id TEXT PRIMARY KEY,
                 stream_url TEXT
             )
         """)

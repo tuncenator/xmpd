@@ -1,6 +1,6 @@
 """Provider registry for xmpd.
 
-Builds the dict of enabled+authenticated providers from config. Provider
+Builds the dict of enabled providers from config; consumers check authentication. Provider
 canonical names (``yt``, ``tidal``) are the registry keys; class/module names
 are descriptive (``YTMusicProvider``, ``xmpd/providers/ytmusic.py``).
 """
@@ -46,7 +46,7 @@ def build_registry(
 
     Args:
         config: Loaded config dict (must contain `yt` / `tidal` sections per
-            the post-Phase-11 schema).
+            the multi-provider schema).
         stream_resolver: Optional `StreamResolver` instance to inject into
             `YTMusicProvider`. Required for YT playback through the proxy --
             without it, `YTMusicProvider.resolve_stream()` raises and proxy
@@ -59,7 +59,7 @@ def build_registry(
     if "yt" in enabled:
         from xmpd.providers.ytmusic import YTMusicProvider
 
-        registry["yt"] = YTMusicProvider(  # type: ignore[assignment]  # Phase 3 completes Provider Protocol surface
+        registry["yt"] = YTMusicProvider(
             config["yt"],
             stream_resolver=stream_resolver,
         )
@@ -67,7 +67,7 @@ def build_registry(
     if "tidal" in enabled:
         from xmpd.providers.tidal import TidalProvider
 
-        registry["tidal"] = TidalProvider(config["tidal"])  # type: ignore[assignment]
+        registry["tidal"] = TidalProvider(config["tidal"])
 
     logger.info("Provider registry built: %s", sorted(registry.keys()))
     return registry

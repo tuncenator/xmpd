@@ -39,7 +39,11 @@ from pathlib import Path
 _script_dir = Path(__file__).resolve().parent.parent
 _venv_python = _script_dir / ".venv" / "bin" / "python"
 
-if _venv_python.exists() and sys.executable != str(_venv_python):
+if (
+    __name__ == "__main__"
+    and _venv_python.exists()
+    and sys.executable != str(_venv_python)
+):
     # Re-exec using venv Python
     os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
 

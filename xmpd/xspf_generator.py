@@ -7,7 +7,6 @@ color-coded fields and duration information.
 
 import xml.sax.saxutils as saxutils
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -16,7 +15,7 @@ class XSPFTrack:
     location: str  # URL (will be XML-escaped)
     creator: str   # Artist name
     title: str     # Track title
-    duration: Optional[int] = None  # Duration in milliseconds
+    duration: int | None = None  # Duration in milliseconds
 
 
 def generate_xspf(tracks: list[XSPFTrack]) -> str:

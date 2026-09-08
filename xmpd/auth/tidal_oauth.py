@@ -3,7 +3,7 @@
 This module is the single source of truth for "load / save / refresh a Tidal
 session." It is invoked from two call sites:
 
-1. ``xmpctl auth tidal`` (Phase 11) -- runs the interactive device flow.
+1. ``xmpctl auth tidal`` -- runs the interactive device flow.
 2. ``TidalProvider._ensure_session()`` -- loads a persisted session for
    non-interactive use; raises ``TidalAuthRequired`` if missing or invalid.
 
@@ -167,8 +167,7 @@ def save_session(session: tidalapi.Session, session_path: Path) -> None:
 
     Note: tidalapi exposes ``save_session_to_file`` but it does NOT persist
     ``expiry_time``; we roll our own to capture it. The ``is_pkce`` field is
-    persisted for forward compatibility (Phase 9 always writes False because
-    we use the device flow).
+    persisted for forward compatibility; the device flow writes False.
 
     JSON shape:
 

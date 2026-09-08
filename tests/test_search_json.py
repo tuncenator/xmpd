@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from xmpd.providers.base import Track, TrackMetadata
+from tests.favorites_helpers import write_favorites
 
 XMPCTL = Path(__file__).parent.parent / "bin" / "xmpctl"
 
@@ -60,6 +61,7 @@ def _make_daemon(tmp_path, registry=None, config=None):
     config_dir.mkdir(exist_ok=True)
 
     cfg = dict(_DAEMON_MOCK_CONFIG)
+    cfg["mpd_playlist_directory"] = str(tmp_path / "playlists")
     if config:
         cfg.update(config)
 
@@ -111,9 +113,10 @@ class TestCmdSearchJson:
                 duration_seconds=239,
             )
         ]
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         response = daemon._cmd_search_json(["radiohead"])
         assert response["success"] is True
         assert len(response["results"]) == 1
@@ -136,9 +139,10 @@ class TestCmdSearchJson:
             _make_track(track_id="aaaaaaaaaa1", title="Track A", duration_seconds=180),
             _make_track(track_id="bbbbbbbbbbb", title="Track B", duration_seconds=240),
         ]
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         response = daemon._cmd_search_json(["test"])
         assert response["success"] is True
         for track in response["results"]:
@@ -154,9 +158,10 @@ class TestCmdSearchJson:
 
         yt = _make_yt_provider()
         yt.search.return_value = search_tracks
-        yt.get_favorites.return_value = [liked_track]
+        favorite_tracks = [liked_track]
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         response = daemon._cmd_search_json(["test"])
         assert response["success"] is True
 
@@ -169,9 +174,10 @@ class TestCmdSearchJson:
     def test_no_results_returns_empty_list(self, tmp_path):
         yt = _make_yt_provider()
         yt.search.return_value = []
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         response = daemon._cmd_search_json(["nonexistent xyz 999"])
         assert response["success"] is True
         assert response["results"] == []
@@ -179,9 +185,10 @@ class TestCmdSearchJson:
     def test_limit_flag_passed_to_search(self, tmp_path):
         yt = _make_yt_provider()
         yt.search.return_value = []
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         daemon._cmd_search_json(["--limit", "5", "radiohead"])
         yt.search.assert_called_once_with("radiohead", limit=5)
 
@@ -189,9 +196,10 @@ class TestCmdSearchJson:
         """--provider flag restricts to named provider."""
         yt = _make_yt_provider()
         yt.search.return_value = []
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         response = daemon._cmd_search_json(["--provider", "yt", "radiohead"])
         assert response["success"] is True
 
@@ -204,33 +212,41 @@ class TestCmdSearchJson:
     def test_search_api_failure_returns_error(self, tmp_path):
         yt = _make_yt_provider()
         yt.search.side_effect = Exception("API timeout")
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         response = daemon._cmd_search_json(["radiohead"])
         # Search failures for individual providers are caught; returns empty
         assert response["success"] is True
         assert response["results"] == []
 
     def test_liked_ids_cache_is_used(self, tmp_path):
-        """get_favorites is only called once when cache is warm."""
+        """Search uses the cached local favorites until invalidation."""
         yt = _make_yt_provider()
         yt.search.return_value = [
             _make_track(track_id="abc12345678", title="Song", duration_seconds=180),
         ]
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
 
         # Prime cache then mark fresh
         daemon._get_liked_ids()
         daemon._liked_ids_cache_time = time.time()
+        write_favorites(daemon, [_make_track(track_id="abc12345678")])
 
         # Two more calls should not re-fetch
-        daemon._cmd_search_json(["radiohead"])
-        daemon._cmd_search_json(["radiohead"])
+        for _ in range(2):
+            response = daemon._cmd_search_json(["radiohead"])
+            assert response["results"][0]["liked"] is False
 
-        assert yt.get_favorites.call_count == 1
+        daemon._liked_ids_cache_time = 0.0
+        response = daemon._cmd_search_json(["radiohead"])
+        assert response["results"][0]["liked"] is True
+
+        yt.get_favorites.assert_not_called()
 
     def test_duration_formatted_correctly(self, tmp_path):
         """Duration field is formatted as M:SS."""
@@ -238,9 +254,10 @@ class TestCmdSearchJson:
         yt.search.return_value = [
             _make_track(track_id="abc12345678", title="Track", duration_seconds=65),
         ]
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         response = daemon._cmd_search_json(["test"])
         assert response["results"][0]["duration"] == "1:05"
         assert response["results"][0]["duration_seconds"] == 65
@@ -370,42 +387,80 @@ class TestGetLikedIds:
 
     def test_returns_empty_set_when_no_liked_songs(self, tmp_path):
         yt = _make_yt_provider()
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         result = daemon._get_liked_ids()
         assert result == set()
 
     def test_returns_track_ids_from_favorites(self, tmp_path):
         yt = _make_yt_provider()
-        yt.get_favorites.return_value = [
+        favorite_tracks = [
             _make_track(track_id="abc12345678"),
             _make_track(track_id="def12345678"),
         ]
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         result = daemon._get_liked_ids()
         assert result == {"yt:abc12345678", "yt:def12345678"}
 
-    def test_cache_avoids_repeated_api_calls(self, tmp_path):
+    def test_cache_avoids_repeated_playlist_reads(self, tmp_path):
         yt = _make_yt_provider()
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         daemon._get_liked_ids()
         daemon._liked_ids_cache_time = time.time()  # Mark fresh
-        daemon._get_liked_ids()
-        daemon._get_liked_ids()
+        write_favorites(daemon, [_make_track(track_id="abc12345678")])
+        assert daemon._get_liked_ids() == set()
+        assert daemon._get_liked_ids() == set()
+        daemon._liked_ids_cache_time = 0.0
+        assert daemon._get_liked_ids() == {"yt:abc12345678"}
 
-        assert yt.get_favorites.call_count == 1
+        yt.get_favorites.assert_not_called()
 
-    def test_failed_fetch_returns_empty_on_first_call(self, tmp_path):
+    def test_unreadable_playlist_returns_empty_on_first_call(self, tmp_path):
         yt = _make_yt_provider()
-        yt.get_favorites.side_effect = Exception("Network error")
-
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        path = write_favorites(daemon, [_make_track()])
+        path.unlink()
+        path.mkdir()  # Opening this as playlist text raises IsADirectoryError.
         result = daemon._get_liked_ids()
         assert result == set()
+        yt.get_favorites.assert_not_called()
+
+    def test_xspf_favorites_use_music_directory_and_custom_names(self, tmp_path):
+        yt = _make_yt_provider()
+        daemon = _make_daemon(tmp_path, registry={"yt": yt}, config={
+            "playlist_format": "xspf",
+            "mpd_music_directory": str(tmp_path / "music"),
+            "playlist_prefix": {"yt": "YouTube: "},
+            "favorites_playlist_name_per_provider": {"yt": "My Favorites"},
+        })
+        directory = tmp_path / "music" / "_xmpd"
+        directory.mkdir(parents=True)
+        (directory / "YouTube: My Favorites.xspf").write_text(
+            '<playlist><trackList><track><location>'
+            'http://localhost:8080/proxy/yt/abc12345678'
+            '</location></track></trackList></playlist>'
+        )
+        assert daemon._get_liked_ids() == {"yt:abc12345678"}
+        yt.get_favorites.assert_not_called()
+
+    def test_m3u_favorites_keep_provider_ids_separate(self, tmp_path):
+        daemon = _make_daemon(tmp_path, registry={
+            "yt": _make_yt_provider(), "tidal": MagicMock(),
+        }, config={"playlist_prefix": {"yt": "YT: ", "tidal": "TD: "}})
+        directory = Path(daemon.config["mpd_playlist_directory"])
+        directory.mkdir(parents=True)
+        for provider, name in (("yt", "YT: Liked Songs"), ("tidal", "TD: Favorites")):
+            (directory / f"{name}.m3u").write_text(
+                f"#EXTM3U\nhttp://localhost:8080/proxy/{provider}/12345678901\n"
+            )
+        assert daemon._get_liked_ids() == {"yt:12345678901", "tidal:12345678901"}
 
 
 # ---------------------------------------------------------------------------

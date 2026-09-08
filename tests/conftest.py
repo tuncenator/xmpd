@@ -90,14 +90,14 @@ def _no_real_ffprobe(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     """
     if request.node.get_closest_marker("real_ffprobe"):
         return
-    if "xmpd.stream_proxy" not in sys.modules:
+    if "xmpd.stream_transport" not in sys.modules:
         return
 
     async def _no_streams(_url: str) -> list:
         return []
 
     monkeypatch.setattr(
-        sys.modules["xmpd.stream_proxy"], "_ffprobe_audio_streams", _no_streams
+        sys.modules["xmpd.stream_transport"], "_ffprobe_audio_streams", _no_streams
     )
 
 
@@ -112,7 +112,7 @@ def _no_live_proxy_info(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
     """
     if request.node.get_closest_marker("real_proxy_info"):
         return
-    mod = sys.modules.get("ytmpd_status")
-    if mod is None:
-        return
-    monkeypatch.setattr(mod, "get_proxy_source_info", lambda _fp: None)
+    for name in ("ytmpd_status", "ytmpd_status_integration"):
+        mod = sys.modules.get(name)
+        if mod is not None:
+            monkeypatch.setattr(mod, "get_proxy_source_info", lambda _fp: None)

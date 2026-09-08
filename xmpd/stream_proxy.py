@@ -25,7 +25,6 @@ This module is the renamed successor of xmpd.icy_proxy / ICYProxyServer
 """
 
 import asyncio
-import json
 import logging
 import re
 import time
@@ -34,7 +33,7 @@ from typing import Any
 
 from aiohttp import web
 
-from xmpd.audio_flow import _LOSSLESS_CODECS, _LOSSY_CODECS
+from xmpd import stream_transport
 from xmpd.exceptions import DashStreamError, URLRefreshError
 from xmpd.track_store import TrackStore
 
@@ -44,86 +43,15 @@ DEFAULT_TTL_HOURS = 5
 MAX_CONCURRENT_STREAMS = 10
 DASH_MAX_RETRIES = 3
 DASH_RETRY_DELAYS = (2, 4, 8)
-DASH_FIRST_CHUNK_TIMEOUT = 15
-# Mid-stream watchdog: kill ffmpeg if its stdout produces no data for this
-# many seconds. Guards against silent hangs where ffmpeg blocks waiting for
-# a CDN segment that never arrives, leaving MPD with a half-buffered stream
-# and no recovery path.
-DASH_STREAM_IDLE_TIMEOUT = 30
-
-# Chunk size for ffmpeg stdout reads when piping DASH-stitched FLAC to the
-# client. 64 KiB is a balance between latency and syscall overhead.
-FFMPEG_READ_CHUNK = 65536
-
 # Source-info probe cache: how long a failed probe result is served before a
 # /info request triggers a re-probe, and how many entries are kept.
 SOURCE_INFO_ERROR_RETRY_SECONDS = 60
 SOURCE_INFO_CACHE_MAX = 64
 
-# ffmpeg HTTP-input options that let a single progressive stream survive a
-# mid-transfer CDN reset. YouTube's googlevideo edge routinely drops long-lived
-# direct connections (SABR throttling / URL expiry mid-song); redirecting MPD
-# straight at the CDN then means the reset hits EOF early and the track is cut
-# off. Byte-proxying with these flags makes ffmpeg transparently reconnect
-# (HTTP range resume) so MPD sees one continuous stream. Must precede -i.
-# Deliberately omits -reconnect_at_eof: a real end-of-track EOF must end the
-# stream cleanly, not trigger a reconnect loop.
-FFMPEG_HTTP_RECONNECT_OPTS: tuple[str, ...] = (
-    "-reconnect", "1",
-    "-reconnect_streamed", "1",
-    "-reconnect_on_network_error", "1",
-    "-reconnect_delay_max", "5",
-)
-
 TRACK_ID_PATTERNS: dict[str, re.Pattern[str]] = {
     "yt": re.compile(r"^[A-Za-z0-9_-]{11}$"),
     "tidal": re.compile(r"^\d{1,20}$"),
 }
-
-
-def _patch_flac_streaminfo_total_samples(
-    header: bytes, duration_seconds: float | int | None
-) -> bytes:
-    """Overwrite STREAMINFO.total_samples in a FLAC stream header.
-
-    ffmpeg's FLAC encoder writes STREAMINFO with total_samples=0 when emitting
-    to a pipe (it can't seek back to patch the field at EOF), which leaves MPD
-    unable to compute track duration and makes `mpc status` show 0:00. Since
-    xmpd already knows the provider-reported duration, we patch the field on
-    the fly: parse sample_rate out of the actual header (don't assume 44.1k),
-    compute total_samples = duration_seconds * sample_rate, and rewrite the
-    36-bit field at body bits 108-143.
-
-    Returns ``header`` unchanged when duration is missing, the bytes don't
-    look like a STREAMINFO header, or the sample rate is zero -- the caller
-    can pass the first ffmpeg chunk in blindly.
-    """
-    if duration_seconds is None or duration_seconds <= 0:
-        return header
-    if len(header) < 42 or header[0:4] != b"fLaC":
-        return header
-    if (header[4] & 0x7F) != 0:  # first metadata block must be STREAMINFO
-        return header
-    if int.from_bytes(header[5:8], "big") != 34:
-        return header
-
-    body = bytearray(header[8:42])
-    sample_rate = (body[10] << 12) | (body[11] << 4) | (body[12] >> 4)
-    if sample_rate == 0:
-        return header
-
-    total_samples = min(round(duration_seconds * sample_rate), (1 << 36) - 1)
-    if total_samples <= 0:
-        return header
-
-    bps_high_nibble = body[13] & 0xF0  # preserve low 4 bits of bits_per_sample
-    body[13] = bps_high_nibble | ((total_samples >> 32) & 0x0F)
-    body[14] = (total_samples >> 24) & 0xFF
-    body[15] = (total_samples >> 16) & 0xFF
-    body[16] = (total_samples >> 8) & 0xFF
-    body[17] = total_samples & 0xFF
-
-    return header[:8] + bytes(body) + header[42:]
 
 
 def _is_dash_manifest(url: str) -> bool:
@@ -135,264 +63,6 @@ def _is_dash_manifest(url: str) -> bool:
     a token-bearing URL like ``foo.mpd?token=...`` still classifies.
     """
     return url.split("?", 1)[0].lower().endswith(".mpd")
-
-
-async def _kill_ffmpeg(proc: asyncio.subprocess.Process) -> bytes:
-    """Kill an ffmpeg subprocess and return its stderr output."""
-    if proc.returncode is None:
-        proc.kill()
-        try:
-            await asyncio.shield(proc.wait())
-        except (asyncio.CancelledError, Exception):
-            pass
-    stderr_bytes = b""
-    if proc.stderr is not None:
-        try:
-            stderr_bytes = await asyncio.shield(proc.stderr.read())
-        except (asyncio.CancelledError, Exception):
-            pass
-    return stderr_bytes
-
-
-async def _ffprobe_audio_streams(url: str) -> list[dict[str, Any]]:
-    """Return ffprobe ``-show_streams`` audio entries for ``url``.
-
-    Returns an empty list on any failure (ffprobe missing, network error,
-    expired URL, unparsable output).
-    """
-    proc: asyncio.subprocess.Process | None = None
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffprobe",
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_streams",
-            "-select_streams", "a",
-            url,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-        data = json.loads(stdout)
-        streams = data.get("streams", [])
-    except Exception as e:
-        logger.debug("ffprobe failed for %s...: %s", url[:60], e)
-        return []
-    finally:
-        # wait_for cancels communicate() on timeout but leaves ffprobe
-        # running; a stalled CDN read has no rw timeout and would hang the
-        # process forever. Same on task cancellation (daemon shutdown).
-        if proc is not None and proc.returncode is None:
-            proc.kill()
-            try:
-                await asyncio.shield(proc.wait())
-            except (asyncio.CancelledError, Exception):
-                pass
-    return streams if isinstance(streams, list) else []
-
-
-def _source_info_from_streams(streams: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build a source-info payload from ffprobe audio stream entries.
-
-    Picks the highest-bitrate stream (what the proxy actually serves, see
-    ``_probe_best_audio_stream``) and classifies its codec as lossy/lossless
-    via the shared codec tables in ``xmpd.audio_flow``. ``lossy`` is None for
-    codecs in neither table so consumers can distinguish "unknown codec"
-    from a real verdict.
-    """
-    def _as_int(v: Any) -> int | None:
-        try:
-            return int(v)
-        except (ValueError, TypeError):
-            return None
-
-    best = max(streams, key=lambda s: _as_int(s.get("bit_rate")) or 0)
-    codec = str(best.get("codec_name", "")).lower()
-    lossy: bool | None = None
-    if codec in _LOSSY_CODECS:
-        lossy = True
-    elif codec in _LOSSLESS_CODECS:
-        lossy = False
-    return {
-        "status": "ok",
-        "codec": codec,
-        "lossy": lossy,
-        "sample_rate": _as_int(best.get("sample_rate")),
-        "bits": _as_int(best.get("bits_per_raw_sample"))
-        or _as_int(best.get("bits_per_sample"))
-        or None,  # ffprobe reports 0 for "not applicable" (e.g. opus)
-        "channels": _as_int(best.get("channels")),
-        "bitrate": _as_int(best.get("bit_rate")),
-    }
-
-
-async def _probe_best_audio_stream(manifest_url: str) -> int:
-    """Return the index of the highest-bitrate audio stream in the manifest.
-
-    Runs ``ffprobe`` against ``manifest_url`` and picks the audio stream with
-    the highest ``bit_rate`` value. Falls back to index 0 on any error or when
-    the manifest contains only one audio stream.
-    """
-    streams = await _ffprobe_audio_streams(manifest_url)
-
-    if len(streams) <= 1:
-        return 0
-
-    best_idx = 0
-    best_bitrate = -1
-    for i, stream in enumerate(streams):
-        try:
-            br = int(stream.get("bit_rate", 0))
-        except (ValueError, TypeError):
-            br = 0
-        if br > best_bitrate:
-            best_bitrate = br
-            best_idx = i
-
-    logger.debug(
-        "ffprobe: %d audio streams found, selecting index %d (bitrate %d)",
-        len(streams), best_idx, best_bitrate,
-    )
-    return best_idx
-
-
-async def _stream_via_ffmpeg(
-    request: web.Request,
-    source_url: str,
-    provider: str,
-    track_id: str,
-    stream_index: int = 0,
-    duration_seconds: float | int | None = None,
-    input_opts: tuple[str, ...] = (),
-) -> web.StreamResponse:
-    """Pipe ffmpeg's FLAC remux of ``source_url`` back to the client.
-
-    Handles both DASH manifests (Tidal ``.mpd``) and single progressive HTTP
-    audio streams (YouTube googlevideo URLs). ``input_opts`` are ffmpeg options
-    injected *before* ``-i`` -- pass ``FFMPEG_HTTP_RECONNECT_OPTS`` for a
-    progressive stream so a mid-song CDN reset reconnects instead of cutting
-    the track off. DASH inputs pass no extra opts (segment refetch is handled
-    by ffmpeg's demuxer).
-
-    ``stream_index`` selects which audio adaptation set to map. Pass the value
-    returned by ``_probe_best_audio_stream`` to get the highest-quality stream.
-    Defaults to 0 (safe fallback when probing is skipped, e.g. single-stream
-    progressive audio).
-
-    ``duration_seconds`` is patched into the FLAC STREAMINFO.total_samples
-    field on the first chunk so MPD can show a real track length instead of
-    0:00. When None, the field is left at whatever ffmpeg wrote (zero).
-
-    Reads the first chunk *before* committing HTTP 200 so that a failed
-    ffmpeg (network down, expired manifest) raises DashStreamError instead
-    of sending an empty 200 that stalls MPD.
-
-    A mid-stream idle watchdog (DASH_STREAM_IDLE_TIMEOUT) kills ffmpeg if
-    it stops producing data after the response has started, so a stalled
-    CDN segment ends the stream cleanly instead of hanging forever.
-
-    Kills the subprocess if the client disconnects mid-stream so we don't
-    leak ffmpeg processes when MPD skips tracks.
-    """
-    proc = await asyncio.create_subprocess_exec(
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        *input_opts,
-        "-i",
-        source_url,
-        "-map",
-        f"0:a:{stream_index}",
-        # Re-encode to FLAC (lossless) instead of -c copy. The DASH→raw-FLAC
-        # rewrap occasionally emits frames whose sync bytes land off-boundary,
-        # which makes libFLAC in MPD log MISSING_FRAME and produce an audible
-        # in-track glitch. compression_level=0 keeps CPU cost near zero
-        # (~1-3s per track) while emitting a cleanly framed FLAC stream.
-        "-c:a",
-        "flac",
-        "-compression_level",
-        "0",
-        "-f",
-        "flac",
-        "pipe:1",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    assert proc.stdout is not None
-
-    try:
-        first_chunk = await asyncio.wait_for(
-            proc.stdout.read(FFMPEG_READ_CHUNK),
-            timeout=DASH_FIRST_CHUNK_TIMEOUT,
-        )
-    except (TimeoutError, asyncio.CancelledError):
-        first_chunk = b""
-
-    if not first_chunk:
-        stderr_bytes = await _kill_ffmpeg(proc)
-        raise DashStreamError(
-            f"ffmpeg produced no data for {provider}/{track_id}: "
-            f"{stderr_bytes.decode(errors='replace')[:300]}"
-        )
-
-    first_chunk = _patch_flac_streaminfo_total_samples(first_chunk, duration_seconds)
-
-    response = web.StreamResponse(
-        status=200, headers={"Content-Type": "audio/flac"}
-    )
-    response.enable_chunked_encoding()
-    await response.prepare(request)
-
-    client_disconnected = False
-    try:
-        await response.write(first_chunk)
-        while True:
-            try:
-                chunk = await asyncio.wait_for(
-                    proc.stdout.read(FFMPEG_READ_CHUNK),
-                    timeout=DASH_STREAM_IDLE_TIMEOUT,
-                )
-            except TimeoutError:
-                logger.warning(
-                    f"[PROXY] ffmpeg idle >{DASH_STREAM_IDLE_TIMEOUT}s "
-                    f"mid-stream for {provider}/{track_id}, terminating"
-                )
-                break
-            if not chunk:
-                break
-            await response.write(chunk)
-    except (ConnectionResetError, asyncio.CancelledError):
-        logger.info(
-            f"[PROXY] Client disconnected during DASH stream {provider}/{track_id}"
-        )
-        client_disconnected = True
-    finally:
-        if proc.returncode is None:
-            proc.kill()
-            try:
-                await asyncio.shield(proc.wait())
-            except (asyncio.CancelledError, Exception):
-                pass
-        if proc.returncode not in (0, -9, None):
-            stderr_bytes = b""
-            if proc.stderr is not None:
-                try:
-                    stderr_bytes = await asyncio.shield(proc.stderr.read())
-                except (asyncio.CancelledError, Exception):
-                    pass
-            logger.warning(
-                f"[PROXY] ffmpeg exited with rc={proc.returncode} "
-                f"for {provider}/{track_id}: {stderr_bytes.decode(errors='replace')[:300]}"
-            )
-
-    if not client_disconnected:
-        try:
-            await response.write_eof()
-        except (ConnectionResetError, ConnectionError):
-            pass
-    return response
 
 
 def resolve_stream_cache_hours(config: dict[str, Any]) -> dict[str, int]:
@@ -427,8 +97,8 @@ class StreamRedirectProxy:
     """HTTP redirect proxy for lazy provider-agnostic stream URL resolution.
 
     Handles requests in the format: http://host:port/proxy/{provider}/{track_id}
-    Resolves the stream URL (with caching and auto-refresh) and returns
-    an HTTP 307 redirect, allowing MPD to stream directly from the CDN.
+    Resolves the stream URL with caching and auto-refresh, then streams
+    YouTube/DASH audio through ffmpeg or redirects other direct audio URLs.
 
     Concurrency model: a semaphore gates the URL-resolution phase (the
     expensive blocking provider API call). Once resolution completes the
@@ -439,7 +109,7 @@ class StreamRedirectProxy:
     Attributes:
         track_store: TrackStore instance for metadata lookup
         provider_registry: dict mapping provider name to Provider instance
-        stream_resolver: legacy YT-only StreamResolver; honored as fallback through Phase 8
+        stream_resolver: legacy YT-only fallback when no YT provider is registered
         host: Server bind address
         port: Server bind port
         app: aiohttp.web.Application instance
@@ -451,7 +121,7 @@ class StreamRedirectProxy:
         self,
         track_store: TrackStore,
         provider_registry: dict[str, Any] | None = None,
-        stream_resolver: Any | None = None,  # legacy YT-only path; kept for Phase 4-7 compatibility
+        stream_resolver: Any | None = None,  # legacy YT-only fallback
         host: str = "localhost",
         port: int = 8080,
         max_concurrent_streams: int = MAX_CONCURRENT_STREAMS,
@@ -464,7 +134,7 @@ class StreamRedirectProxy:
             provider_registry: dict mapping provider name to Provider instance;
                                empty dict ({}) is valid (legacy resolver fallback used for yt)
             stream_resolver: Optional legacy StreamResolver for yt URL refresh;
-                             kept for Phase 4-7 compatibility, removed in Phase 8
+                             used when no YT provider is registered
             host: Server bind address (default: "localhost")
             port: Server bind port (default: 8080)
             max_concurrent_streams: Maximum concurrent resolution requests (default: 10)
@@ -582,7 +252,7 @@ class StreamRedirectProxy:
 
     async def _refresh_stream_url(self, provider: str, track_id: str) -> str:
         """Resolve a fresh stream URL via the provider registry, falling back to
-        the legacy stream_resolver for the YT path through Phase 8.
+        the legacy stream_resolver when no YT provider is registered.
 
         Args:
             provider: Provider name (e.g. "yt", "tidal")
@@ -683,9 +353,9 @@ class StreamRedirectProxy:
         """ffprobe ``stream_url`` and cache the classified result."""
         key = (provider, track_id)
         try:
-            streams = await _ffprobe_audio_streams(stream_url)
+            streams = await stream_transport._ffprobe_audio_streams(stream_url)
             if streams:
-                entry = _source_info_from_streams(streams)
+                entry = stream_transport._source_info_from_streams(streams)
             else:
                 entry = {
                     "status": "error",
@@ -774,7 +444,7 @@ class StreamRedirectProxy:
             request: aiohttp request object
 
         Returns:
-            HTTP 307 Temporary Redirect or 200 streamed FLAC for DASH
+            HTTP 307 Temporary Redirect or 200 streamed FLAC for DASH/YouTube
 
         Raises:
             HTTPNotFound: Unknown provider or track not in store
@@ -835,7 +505,7 @@ class StreamRedirectProxy:
         if provider == "yt":
             return await self._stream_with_retry(
                 request, stream_url, provider, track_id, req_id, duration_seconds,
-                input_opts=FFMPEG_HTTP_RECONNECT_OPTS,
+                input_opts=stream_transport.FFMPEG_HTTP_RECONNECT_OPTS,
             )
 
         logger.debug(
@@ -860,14 +530,14 @@ class StreamRedirectProxy:
 
         Used for both DASH manifests (``probe=True`` to ffprobe-select the
         highest-quality audio stream) and progressive HTTP audio
-        (``input_opts=FFMPEG_HTTP_RECONNECT_OPTS`` so a mid-song CDN reset
+        (``input_opts=stream_transport.FFMPEG_HTTP_RECONNECT_OPTS`` so a mid-song CDN reset
         reconnects rather than cutting the track off). If ffmpeg produces no
         audio data (network outage, expired/403 URL), re-resolves the stream
         URL and retries up to DASH_MAX_RETRIES times before returning 502.
         """
         stream_index = 0
         if probe:
-            stream_index = await _probe_best_audio_stream(stream_url)
+            stream_index = await stream_transport._probe_best_audio_stream(stream_url)
             logger.info(
                 "[PROXY:%s] DASH probe selected audio stream %d for %s/%s",
                 req_id, stream_index, provider, track_id,
@@ -876,7 +546,7 @@ class StreamRedirectProxy:
         for attempt in range(DASH_MAX_RETRIES + 1):
             await self._increment_counter("_active_streams")
             try:
-                return await _stream_via_ffmpeg(
+                return await stream_transport._stream_via_ffmpeg(
                     request, stream_url, provider, track_id, stream_index,
                     duration_seconds, input_opts=input_opts,
                 )

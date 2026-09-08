@@ -21,6 +21,7 @@ import pytest
 
 from xmpd.daemon import XMPDaemon
 from xmpd.providers.base import Track, TrackMetadata
+from tests.favorites_helpers import write_favorites
 
 XMPCTL = Path(__file__).parent.parent / "bin" / "xmpctl"
 XMPD_SEARCH = Path(__file__).parent.parent / "bin" / "xmpd-search"
@@ -61,6 +62,7 @@ def _make_daemon(tmp_path: Any, registry: dict[str, Any] | None = None) -> XMPDa
     config_dir.mkdir(exist_ok=True)
 
     cfg = dict(_BASE_CONFIG)
+    cfg["mpd_playlist_directory"] = str(tmp_path / "playlists")
 
     if registry is None:
         registry = {"yt": _make_yt_provider()}
@@ -228,10 +230,10 @@ class TestLikeToggleCacheInvalidation:
         assert daemon._liked_ids_cache_time == 0.0
 
     def test_like_toggle_cache_allows_refetch(self, tmp_path: Any) -> None:
-        """After toggle, _get_liked_ids() calls provider.get_favorites() again."""
+        """After toggle, _get_liked_ids() rereads the synced local favorites."""
         yt = _make_yt_provider()
         yt.get_like_state.return_value = "NEUTRAL"
-        yt.get_favorites.return_value = [
+        favorite_tracks = [
             Track(
                 provider="yt",
                 track_id="abc12345678",
@@ -242,6 +244,7 @@ class TestLikeToggleCacheInvalidation:
             )
         ]
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
         # Warm cache with empty liked set
         daemon._liked_ids_cache = set()
         daemon._liked_ids_cache_time = time.time()
@@ -249,10 +252,10 @@ class TestLikeToggleCacheInvalidation:
         # Toggle like
         daemon._cmd_like_toggle("yt", "abc12345678")
 
-        # Now _get_liked_ids() should fetch fresh data because cache was invalidated
+        # Cache invalidation makes the next lookup reread the on-disk playlist
         liked_ids = daemon._get_liked_ids()
         assert "yt:abc12345678" in liked_ids
-        yt.get_favorites.assert_called()
+        yt.get_favorites.assert_not_called()
 
     def test_cmd_like_invalidates_cache(self, tmp_path: Any) -> None:
         """_cmd_like also invalidates favorites cache on success."""
@@ -280,12 +283,12 @@ class TestLikeToggleCacheInvalidation:
 class TestSearchJsonLikeState:
     """search-json returns updated liked state after cache invalidation."""
 
-    def test_search_json_reflects_like_after_toggle(self, tmp_path: Any) -> None:
+    def test_search_json_rereads_synced_like_after_toggle(self, tmp_path: Any) -> None:
         """After like-toggle, search-json results show liked=True for the track."""
         yt = _make_yt_provider()
         yt.get_like_state.return_value = "NEUTRAL"
 
-        # get_favorites returns the track as liked after toggle
+        # The synced favorites playlist contains the liked track
         track = Track(
             provider="yt",
             track_id="abc12345678",
@@ -294,10 +297,11 @@ class TestSearchJsonLikeState:
                 album=None, duration_seconds=180, art_url=None,
             ),
         )
-        yt.get_favorites.return_value = [track]
+        favorite_tracks = [track]
         yt.search.return_value = [track]
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
 
         # Simulate: cache is warm with an empty set (track not yet liked)
         daemon._liked_ids_cache = set()
@@ -313,12 +317,12 @@ class TestSearchJsonLikeState:
         assert len(results) == 1
         assert results[0]["liked"] is True
 
-    def test_search_json_reflects_unlike_after_toggle(self, tmp_path: Any) -> None:
+    def test_search_json_rereads_synced_unlike_after_toggle(self, tmp_path: Any) -> None:
         """After unlike (LIKED -> NEUTRAL), search-json shows liked=False."""
         yt = _make_yt_provider()
         yt.get_like_state.return_value = "LIKED"
         # After unlike, favorites list is empty
-        yt.get_favorites.return_value = []
+        favorite_tracks = []
 
         track = Track(
             provider="yt",
@@ -331,6 +335,7 @@ class TestSearchJsonLikeState:
         yt.search.return_value = [track]
 
         daemon = _make_daemon(tmp_path, registry={"yt": yt})
+        write_favorites(daemon, favorite_tracks)
 
         # Simulate: cache is warm with the track liked
         daemon._liked_ids_cache = {"yt:abc12345678"}
@@ -431,12 +436,12 @@ class TestXmpdSearchCtrlL:
         else:
             pytest.fail("No ctrl-l binding found in xmpd-search")
 
-    def test_ctrl_l_triggers_reload(self) -> None:
-        """ctrl-l must reload fzf results to show updated liked state."""
+    def test_ctrl_l_preserves_browse_results(self) -> None:
+        """Toggling a like keeps the current browse selection and query intact."""
         content = XMPD_SEARCH.read_text()
         for line in content.splitlines():
             if "ctrl-l:" in line:
-                assert "reload" in line.lower(), f"ctrl-l line missing reload: {line}"
+                assert "reload" not in line.lower(), f"ctrl-l unexpectedly reloads results: {line}"
                 break
         else:
             pytest.fail("No ctrl-l binding found in xmpd-search")

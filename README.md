@@ -259,8 +259,10 @@ recommended.
 
 - **`xmpctl like` / `xmpctl like-toggle`**: the daemon parses the currently
   playing MPD URL (`/proxy/<provider>/<track_id>`) and dispatches to the
-  matching provider. `like-toggle` also patches the local liked-songs playlist
-  immediately. No cross-provider mirroring.
+  matching provider. With `like_indicator.enabled`, `like-toggle` immediately
+  patches title indicators in existing playlists and the MPD queue. Favorites
+  membership is refreshed by sync; search reads the local favorites playlists.
+  No cross-provider mirroring.
 - **`xmpd-search`**: two-mode fzf interface. Queries all enabled and
   authenticated providers in parallel. `--provider yt|tidal|all` restricts
   scope. Results show `[YT]` / `[TD]` badges with quality labels.
@@ -272,9 +274,8 @@ recommended.
 ## HiRes streaming status
 
 Tidal streams use the DASH manifest API (`/v2/trackManifests`). The
-`quality_ceiling` config defaults to `LOSSLESS` (16-bit/44.1 kHz FLAC).
-`HI_RES_LOSSLESS` is accepted by the config but the stream path currently
-delivers LOSSLESS-tier audio. Search results display per-track quality badges
+`quality_ceiling` config defaults to `HI_RES_LOSSLESS`, but the stream path
+currently clamps delivery to `LOSSLESS` (16-bit/44.1 kHz FLAC). Search results display per-track quality badges
 (HiRes, HiFi, Lo) from Tidal's metadata regardless of the streaming ceiling.
 
 ## AirPlay bridge (optional)
@@ -407,8 +408,18 @@ Each synced track URL points to a local proxy: `http://localhost:<port>/proxy/<p
 
 When MPD dereferences the URL, the proxy validates the provider and track ID,
 looks up the cached stream URL in the track-store SQLite DB, refreshes it if
-expired (per-provider TTL), and issues an HTTP 307 redirect to the actual
-upstream audio URL. The stream goes directly from the upstream server to MPD.
+expired (per-provider TTL), and selects a delivery mode:
+
+- YouTube audio streams through ffmpeg with HTTP reconnect options, then reaches
+  MPD as a continuous FLAC stream over localhost. Encoding a lossy source as FLAC
+  does not restore lost audio information.
+- Tidal DASH manifests are assembled and encoded as FLAC by ffmpeg.
+- Other direct audio URLs receive an HTTP 307 redirect, so MPD reads the CDN
+  directly.
+
+A background ffprobe reads the source codec and audio properties for quality
+reporting through `/proxy/<provider>/<track_id>/info`. See
+[Stream Proxy](docs/STREAM_PROXY.md) for timeouts, retries, and route details.
 
 `HistoryReporter` watches MPD idle events, parses the playing proxy URL to
 identify provider and track, and calls `provider.report_play()` after
@@ -417,11 +428,24 @@ identify provider and track, and calls `provider.report_play()` after
 ## Development
 
 ```bash
-pytest -q                                    # full suite
-pytest --cov=xmpd --cov-report=term-missing
-mypy xmpd/
-ruff check xmpd/
+uv sync --locked --extra dev
+uv run --locked --extra dev bash scripts/check.sh  # lint, types, versions, full suite
+
+# Individual checks
+uv run --locked --extra dev pytest -q
+uv run --locked --extra dev pytest --cov=xmpd --cov-report=term-missing
+uv run --locked --extra dev mypy xmpd/
+uv run --locked --extra dev ruff check xmpd/
 ```
+
+The suite needs Linux, Bash, `sqlite3`, `jq`, and Python 3.11 or newer. Tests
+use temporary files, mocked provider APIs, and local socket servers; they do not
+require a running MPD or provider credentials. Live Tidal tests are opt-in via
+`XMPD_TIDAL_TEST=1` and are excluded from CI. Restricted sandboxes must allow
+local socket bind/connect operations to run the full suite.
+
+GitHub Actions runs the same checks on Python 3.11 and 3.13 using `uv.lock`.
+The `dev` extra is the single development dependency list for both pip and uv.
 
 ## Project structure
 
@@ -431,11 +455,13 @@ xmpd/
 |   +-- __main__.py               # Daemon entry point
 |   +-- audio_flow.py             # End-to-end quality probe for `xmpctl flow`
 |   +-- config.py                 # Config load/validate (multi-source shape)
-|   +-- daemon.py                 # Orchestrator + socket server
+|   +-- daemon.py                 # Lifecycle, shared state, socket dispatch
+|   +-- commands/                 # Playback, rating, search, and history handlers
 |   +-- history_reporter.py       # MPD -> provider history
 |   +-- playlist_patcher.py       # In-place liked-playlist add/remove
 |   +-- proxy_url.py              # Proxy URL parsing utilities
-|   +-- stream_proxy.py           # HTTP 307 proxy: /proxy/<provider>/<id>
+|   +-- stream_proxy.py           # HTTP routes, URL cache, resolution and retry policy
+|   +-- stream_transport.py       # ffmpeg streaming, source probes, FLAC framing
 |   +-- mpd_client.py             # python-mpd2 wrapper
 |   +-- notify.py                 # Desktop notifications
 |   +-- rating.py                 # Like / dislike state machine

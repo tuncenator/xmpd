@@ -8,7 +8,8 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, Literal, Self, cast
 
 from mpd import CommandError, ConnectionError
 from mpd import MPDClient as MPDClientBase
@@ -63,6 +64,9 @@ class MPDClient:
             self.playlist_directory = Path(playlist_directory).expanduser()
         else:
             self.playlist_directory = Path.home() / ".config" / "mpd" / "playlists"
+
+        self.host: str | None
+        self.port: int | None
 
         # Detect connection type
         if ":" in socket_path:
@@ -170,11 +174,11 @@ class MPDClient:
             MPDConnectionError: If not connected to MPD.
             MPDPlaylistError: If listing playlists fails.
         """
-        self._ensure_connected()
+        client = self._ensure_connected()
 
         try:
             logger.debug("Listing MPD playlists")
-            playlists = self._client.listplaylists()
+            playlists = client.listplaylists()
             names = [p["playlist"] for p in playlists]
             logger.debug(f"Found {len(names)} playlists")
             return names
@@ -442,11 +446,11 @@ class MPDClient:
             MPDConnectionError: If not connected to MPD.
             MPDPlaylistError: If deletion fails.
         """
-        self._ensure_connected()
+        client = self._ensure_connected()
 
         try:
             logger.debug(f"Deleting playlist: {name}")
-            self._client.rm(name)
+            client.rm(name)
             logger.info(f"Deleted playlist: {name}")
         except ConnectionError as e:
             raise MPDConnectionError(f"Lost connection to MPD: {e}") from e
@@ -469,11 +473,11 @@ class MPDClient:
             MPDConnectionError: If not connected to MPD.
             MPDPlaylistError: If operation fails.
         """
-        self._ensure_connected()
+        client = self._ensure_connected()
 
         try:
             logger.debug(f"Adding URL to playlist '{name}'")
-            self._client.playlistadd(name, url)
+            client.playlistadd(name, url)
             logger.debug(f"Added URL to playlist '{name}'")
         except ConnectionError as e:
             raise MPDConnectionError(f"Lost connection to MPD: {e}") from e
@@ -495,10 +499,10 @@ class MPDClient:
         Raises:
             MPDConnectionError: If not connected to MPD.
         """
-        self._ensure_connected()
-        return self._client.currentsong()
+        client = self._ensure_connected()
+        return cast(dict[str, str], client.currentsong())
 
-    def _ensure_connected(self) -> None:
+    def _ensure_connected(self) -> MPDClientBase:
         """Ensure we're connected to MPD, reconnect if needed.
 
         Raises:
@@ -516,7 +520,11 @@ class MPDClient:
                 logger.error(f"Failed to reconnect to MPD: {e}")
                 raise
 
-    def __enter__(self):
+        if self._client is None:
+            raise MPDConnectionError("MPD client unavailable after reconnect")
+        return self._client
+
+    def __enter__(self) -> Self:
         """Context manager entry: connect to MPD.
 
         Returns:
@@ -525,7 +533,12 @@ class MPDClient:
         self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
         """Context manager exit: disconnect from MPD.
 
         Args:

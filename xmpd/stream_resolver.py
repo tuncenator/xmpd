@@ -144,7 +144,7 @@ class StreamResolver:
 
             # Collect results as they complete
             completed = 0
-            pending_futures = list(future_to_video_id.keys())
+            pending_futures = set(future_to_video_id)
 
             while pending_futures:
                 # Check if we should stop (e.g., daemon shutting down)
@@ -240,7 +240,7 @@ class StreamResolver:
 
                 # Get the direct URL
                 url = info.get('url')
-                if not url:
+                if not isinstance(url, str) or not url:
                     logger.warning(f"No URL in extracted info for {video_id}")
                     return None
 
@@ -279,9 +279,10 @@ class StreamResolver:
                 try:
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(video_url, download=False)
-                        if info and info.get('url'):
+                        retry_url = info.get('url') if info else None
+                        if isinstance(retry_url, str) and retry_url:
                             logger.debug(f"Retry successful for {video_id}")
-                            return info['url']
+                            return retry_url
                 except Exception as retry_error:
                     logger.warning(f"Retry failed for {video_id}: {retry_error}")
                     return None
