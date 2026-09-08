@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-09-08
+
 ### Maintenance
 
+- Refresh the README with current setup and usage instructions, architecture
+  diagrams, and the xmpd logo with light and dark variants. Move detailed
+  listening-history setup into its own guide.
 - Extract playback, rating, and query command handlers from the daemon, and
   move ffmpeg streaming, source probes, and FLAC framing into `stream_transport`.
   Socket commands and audio delivery retain their existing behavior.

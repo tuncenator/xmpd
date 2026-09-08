@@ -76,7 +76,7 @@ disable `yt.enabled`; Firefox and Deno are not needed for Tidal.
 ### Install
 
 ```bash
-git clone --branch development https://github.com/tuncenator/xmpd.git
+git clone --branch main https://github.com/tuncenator/xmpd.git
 cd xmpd
 ./install.sh
 ```
