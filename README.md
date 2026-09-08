@@ -1,6 +1,11 @@
-# xmpd
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/xmpd-logo-dark.png">
+    <img src="docs/assets/xmpd-logo-light.png" alt="xmpd" width="560">
+  </picture>
+</h1>
 
-**Your streaming libraries, played through MPD.**
+<p align="center"><strong>Your streaming libraries, played through MPD.</strong></p>
 
 xmpd brings YouTube Music and Tidal playlists into the music tools you already
 use. Search from a terminal, queue tracks with `mpc` or `ncmpcpp`, keep listening
