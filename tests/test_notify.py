@@ -15,6 +15,13 @@ def reset_rate_limit():
     yield
 
 
+@pytest.fixture(autouse=True)
+def linux_by_default():
+    """Run as on Linux (notify-send) unless a test says otherwise."""
+    with patch.object(notify, "_MACOS", False):
+        yield
+
+
 class TestSendNotification:
     """Tests for send_notification()."""
 
@@ -70,6 +77,27 @@ class TestSendNotification:
         result = send_notification("Title", "Body")
 
         assert result is False
+
+
+class TestMacOS:
+    """On macOS the notification goes through osascript."""
+
+    @patch.object(notify, "_MACOS", True)
+    @patch("xmpd.notify.subprocess.run")
+    def test_uses_osascript(self, mock_run):
+        result = send_notification('Say "hi"', "Body")
+
+        assert result is True
+        args = mock_run.call_args[0][0]
+        assert args[0] == "osascript"
+        # Text goes in as arguments, never into the script itself
+        assert args[-2:] == ['Say "hi"', "Body"]
+        assert not any('"hi"' in a for a in args[:-2])
+
+    @patch.object(notify, "_MACOS", True)
+    @patch("xmpd.notify.subprocess.run", side_effect=FileNotFoundError)
+    def test_missing_osascript(self, mock_run):
+        assert send_notification("Title", "Body") is False
 
 
 class TestRateLimiting:

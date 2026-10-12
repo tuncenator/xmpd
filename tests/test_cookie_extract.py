@@ -1,9 +1,11 @@
 """Tests for xmpd.cookie_extract module."""
 
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -193,6 +195,24 @@ class TestFindProfileDir:
         result = ext.find_profile_dir()
         assert result == firefox_home / "abcdefgh.default-release"
 
+    def test_auto_detect_macos_install_ids(self, firefox_home: Path) -> None:
+        # macOS hashes /Applications/<app> into other install IDs
+        (firefox_home / "profiles.ini").write_text(
+            "[Install2656FF1E876E9973]\nDefault=abcdefgh.default-release\n\n"
+            "[Install1F42C145FFDD4120]\nDefault=4wkrywqj.dev-edition-default\n"
+        )
+        dev = _make_extractor(firefox_home, browser="firefox-dev").find_profile_dir()
+        std = _make_extractor(firefox_home, browser="firefox").find_profile_dir()
+        assert dev == firefox_home / "4wkrywqj.dev-edition-default"
+        assert std == firefox_home / "abcdefgh.default-release"
+
+    def test_find_firefox_dir_macos(self, tmp_path: Path) -> None:
+        mac_dir = tmp_path / "Library" / "Application Support" / "Firefox"
+        mac_dir.mkdir(parents=True)
+        (mac_dir / "profiles.ini").write_text(PROFILES_INI_CONTENT)
+        with patch("xmpd.auth.ytmusic_cookie.Path.home", return_value=tmp_path):
+            assert FirefoxCookieExtractor._find_firefox_dir() == mac_dir
+
     def test_explicit_profile(self, firefox_home: Path) -> None:
         ext = _make_extractor(firefox_home, profile="4wkrywqj.dev-edition-default")
         result = ext.find_profile_dir()
@@ -208,6 +228,18 @@ class TestFindProfileDir:
         ext = _make_extractor(firefox_home)
         with pytest.raises(CookieExtractionError, match="profiles.ini not found"):
             ext.find_profile_dir()
+
+    def test_unreadable_profiles_ini(self, firefox_home: Path) -> None:
+        ini = firefox_home / "profiles.ini"
+        ini.chmod(0)
+        try:
+            if os.access(ini, os.R_OK):
+                pytest.skip("running as root, file stays readable")
+            ext = _make_extractor(firefox_home)
+            with pytest.raises(CookieExtractionError, match="Cannot read"):
+                ext.find_profile_dir()
+        finally:
+            ini.chmod(0o644)
 
     def test_missing_install_section(self, firefox_home: Path) -> None:
         (firefox_home / "profiles.ini").write_text("[Profile0]\nName=default\n")

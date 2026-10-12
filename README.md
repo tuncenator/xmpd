@@ -37,12 +37,12 @@ history across machines, and optionally send audio to AirPlay speakers.
 
 | Component | Used for |
 |---|---|
-| Linux, Bash, Python 3.11+ | Daemon and command-line tools |
+| Linux or macOS, Bash, Python 3.11+ | Daemon and command-line tools |
 | MPD and `mpc` | Playback and queue control |
 | `ffmpeg` and `ffprobe` | Streaming and audio quality inspection |
 | `uv` | Python environment and dependencies; the installer can install it |
 | `fzf` | Interactive search and history browsers |
-| Firefox signed in to YouTube Music | YouTube authentication and stream-resolution cookies |
+| Firefox signed in to YouTube Music | YouTube authentication and stream-resolution cookies; on macOS the daemon needs Full Disk Access to read them |
 | Deno on the daemon's `PATH` | YouTube JavaScript challenges; see [yt-dlp's setup guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS) |
 | Tidal account with streaming access | Optional Tidal provider |
 
