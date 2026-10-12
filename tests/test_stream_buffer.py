@@ -413,6 +413,32 @@ async def test_failed_pass_resumes_where_it_stopped(
 
 
 @pytest.mark.asyncio
+async def test_rejected_url_is_refreshed_before_buffering(track_store, tmp_path, monkeypatch):
+    probed = []
+
+    async def fake_media(url):
+        probed.append(url)
+        return ([FLAC_STREAM], "2.000000") if url.endswith("new.mpd") else (None, None)
+
+    monkeypatch.setattr("xmpd.stream_transport._ffprobe_media", fake_media)
+    proxy = _proxy(track_store, tmp_path)
+    ffmpeg = FakeFfmpeg()
+    with patch("xmpd.stream_transport.asyncio.create_subprocess_exec", new=ffmpeg):
+        async with TestClient(TestServer(proxy.app)) as client:
+            resp = await client.get("/proxy/tidal/12345678")
+            body = await resp.read()
+    assert probed == [
+        "https://im-fa.manifest.tidal.com/abc.mpd?token=xyz",
+        "https://im-fa.manifest.tidal.com/new.mpd",
+    ]
+    assert resp.headers["Content-Type"] == "audio/x-wav"
+    args = ffmpeg.calls[0]
+    assert args[args.index("-i") + 1] == "https://im-fa.manifest.tidal.com/new.mpd"
+    assert body == LAYOUT.wav_header() + frame_bytes(0, FRAMES)
+    await proxy.stop()
+
+
+@pytest.mark.asyncio
 async def test_concurrent_requests_share_one_ffmpeg(track_store, tmp_path, probe):
     proxy = _proxy(track_store, tmp_path)
     ffmpeg = FakeFfmpeg()

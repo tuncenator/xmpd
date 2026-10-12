@@ -314,6 +314,18 @@ class StreamResolver:
 
         return True
 
+    def invalidate(self, video_id: str) -> None:
+        """Drop the cached URL for one video so the next resolve re-extracts.
+
+        Used when a cached URL was rejected (e.g. 403), which can happen well
+        before the cache TTL runs out.
+        """
+        if self._cache.pop(video_id, None) is None:
+            return
+        logger.debug(f"Invalidated cached URL for {video_id}")
+        if self._cache_file:
+            self._save_cache()
+
     def clear_cache(self) -> None:
         """Clear all cached URLs.
 

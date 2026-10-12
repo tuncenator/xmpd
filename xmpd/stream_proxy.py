@@ -603,6 +603,16 @@ class StreamRedirectProxy:
         """Probe the source, create its buffer and wait for the first audio."""
         provider, track_id = key
         streams, format_duration = await stream_transport._ffprobe_media(stream_url)
+        if streams is None:
+            # A cached URL can be rejected well before its TTL; try a fresh one.
+            try:
+                stream_url = await self._force_refresh_url(provider, track_id, req_id)
+            except URLRefreshError:
+                pass
+            else:
+                streams, format_duration = await stream_transport._ffprobe_media(
+                    stream_url
+                )
         if not streams:
             logger.warning(
                 f"[PROXY:{req_id}] ffprobe found no audio in {provider}/{track_id}, "
@@ -869,6 +879,10 @@ class StreamRedirectProxy:
     ) -> str:
         """Force-refresh a stream URL, bypassing the TTL cache check."""
         async with self._resolution_semaphore:
+            # The resolver caches YT URLs for hours; a rejected URL must not
+            # come back from that cache on retry.
+            if provider == "yt" and self.stream_resolver is not None:
+                self.stream_resolver.invalidate(track_id)
             try:
                 new_url = await self._refresh_stream_url(provider, track_id)
             except URLRefreshError as e:

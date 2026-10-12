@@ -91,6 +91,23 @@ class TestStreamResolverCaching:
 
         assert len(resolver._cache) == 0
 
+    def test_invalidate(self, tmp_path):
+        """Invalidating one video drops it from memory and the cache file."""
+        cache_file = tmp_path / "stream_cache.json"
+        resolver = StreamResolver(cache_file=str(cache_file))
+        resolver._cache["vid1"] = CachedURL("url1", datetime.now(), "vid1")
+        resolver._cache["vid2"] = CachedURL("url2", datetime.now(), "vid2")
+        resolver._save_cache()
+
+        resolver.invalidate("vid1")
+        resolver.invalidate("missing")
+
+        assert "vid1" not in resolver._cache
+        assert "vid2" in resolver._cache
+        reloaded = StreamResolver(cache_file=str(cache_file))
+        assert "vid1" not in reloaded._cache
+        assert "vid2" in reloaded._cache
+
     def test_get_cache_stats(self):
         """Test getting cache statistics."""
         resolver = StreamResolver(cache_hours=5)

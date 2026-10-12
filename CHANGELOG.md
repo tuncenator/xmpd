@@ -19,6 +19,11 @@
 - MPD's album-art scan at each song change (from Now Playing bridges such as
   `mpd-now-playable`) reads the same buffer instead of starting a second
   Tidal download, which held MPD's replies for up to 12 seconds.
+- YouTube tracks play again. YouTube now rejects stream URLs from yt-dlp
+  older than 2026.08 (403 past the first few KB); the lock pins 2026.8.19.
+  Retries also drop the rejected URL from the 5-hour stream cache instead of
+  getting the same dead URL back, and a source ffprobe can't open gets one
+  fresh URL before the proxy gives up on buffering it.
 
 - Auto-auth finds Firefox on macOS: the profile folder in
   `~/Library/Application Support/Firefox` and the macOS install IDs of Firefox
