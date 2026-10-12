@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Auto-auth finds Firefox on macOS: the profile folder in
+  `~/Library/Application Support/Firefox` and the macOS install IDs of Firefox
+  and Firefox Developer Edition. An unreadable `profiles.ini` now says so
+  instead of reporting no installation; on macOS that is a background service
+  without Full Disk Access.
+- Desktop notifications use `osascript` on macOS, where `notify-send` does not
+  exist.
+
 ## [2.4.0] - 2026-09-08
 
 ### Maintenance

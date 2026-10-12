@@ -18,10 +18,17 @@ from xmpd.exceptions import CookieExtractionError
 
 logger = logging.getLogger(__name__)
 
-# Firefox install IDs used to find the default profile in profiles.ini
+# Firefox install IDs used to find the default profile in profiles.ini. An ID
+# is a hash of the install directory, so each OS has its own.
 _INSTALL_IDS = {
-    "firefox": "Install4F96D1932A9F858E",
-    "firefox-dev": "Install46F492E0ACFF84D4",
+    "firefox": (
+        "Install4F96D1932A9F858E",  # Linux
+        "Install2656FF1E876E9973",  # macOS, /Applications/Firefox.app
+    ),
+    "firefox-dev": (
+        "Install46F492E0ACFF84D4",  # Linux
+        "Install1F42C145FFDD4120",  # macOS, /Applications/Firefox Developer Edition.app
+    ),
 }
 
 # Minimum required cookies for ytmusicapi browser auth
@@ -83,12 +90,14 @@ class FirefoxCookieExtractor:
         """Locate the Firefox profile root directory.
 
         Checks XDG-compliant path first (~/.config/mozilla/firefox),
-        then falls back to the traditional path (~/.mozilla/firefox).
+        then the traditional path (~/.mozilla/firefox), then the macOS one
+        (~/Library/Application Support/Firefox).
         """
         home = Path.home()
         for candidate in (
             home / ".config" / "mozilla" / "firefox",
             home / ".mozilla" / "firefox",
+            home / "Library" / "Application Support" / "Firefox",
         ):
             if (candidate / "profiles.ini").exists():
                 return candidate
@@ -118,13 +127,21 @@ class FirefoxCookieExtractor:
             raise CookieExtractionError(f"Firefox profiles.ini not found: {profiles_ini}")
 
         parser = ConfigParser()
-        parser.read(profiles_ini)
+        # read() skips a file it can't open; on macOS that is a background
+        # process without Full Disk Access, which would otherwise surface as
+        # a misleading "no installation found"
+        if not parser.read(profiles_ini):
+            raise CookieExtractionError(
+                f"Cannot read {profiles_ini} (on macOS a background service "
+                "needs Full Disk Access to read Firefox's files)"
+            )
 
-        install_id = _INSTALL_IDS[self.browser]
-        if install_id not in parser:
+        install_ids = _INSTALL_IDS[self.browser]
+        install_id = next((i for i in install_ids if i in parser), None)
+        if install_id is None:
             raise CookieExtractionError(
                 f"No {self.browser} installation found in profiles.ini "
-                f"(looking for section [{install_id}])"
+                f"(looking for a section [{'] or ['.join(install_ids)}])"
             )
 
         default_profile = parser[install_id].get("Default")
