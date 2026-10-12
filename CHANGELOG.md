@@ -16,6 +16,11 @@
   picked from the Sound menu (16-bit, so hi-res sources lose their extra
   bits) and Bluetooth (always lossy on macOS). Quality hints no
   longer suggest Linux-only fixes on a Mac.
+- A YouTube session that dies between syncs recovers within seconds instead
+  of at the next sync. Google rotates session cookies while YouTube is open in
+  Firefox, so the copy in `browser.json` can go stale; a status request that
+  finds it invalid now refreshes from Firefox in the background, at most once
+  every 5 minutes.
 
 ### Added
 

@@ -213,6 +213,7 @@ class XMPDaemon:
         self._auto_auth_shutdown = threading.Event()
         self._last_reactive_refresh: float = 0.0
         self._reactive_refresh_cooldown: float = 300.0  # 5 minutes
+        self._reactive_refresh_lock = threading.Lock()
         if self._auto_auth_enabled:
             logger.info(
                 "Auto-auth enabled (browser: %s, refresh every %sh)",
@@ -672,31 +673,46 @@ class XMPDaemon:
     def _maybe_reactive_refresh(self) -> None:
         """Refresh from Firefox if the YouTube session has gone dead mid-run.
 
-        Called before each sync. Rate-limited by a cooldown so a persistently
-        broken session does not hammer extraction every cycle.
+        Called before each sync and when a status request finds the session
+        invalid. Rate-limited by a cooldown that also covers the liveness
+        probe, so neither a persistently broken session nor a status bar
+        polling every second can hammer YouTube or extraction.
         """
         if not self._auto_auth_enabled:
             return
         yt = self.provider_registry.get("yt")
         if yt is None or not hasattr(yt, "has_live_session"):
             return
-        now = time.time()
-        if now - self._last_reactive_refresh < self._reactive_refresh_cooldown:
+        # The sync thread and status-triggered threads can arrive together.
+        if not self._reactive_refresh_lock.acquire(blocking=False):
             return
         try:
-            live = yt.has_live_session()
-        except Exception:
-            live = False
-        if live:
-            return
+            now = time.time()
+            if now - self._last_reactive_refresh < self._reactive_refresh_cooldown:
+                return
+            self._last_reactive_refresh = now
+            try:
+                live = yt.has_live_session()
+            except Exception:
+                live = False
+            if live:
+                return
 
-        self._last_reactive_refresh = now
-        logger.info("Auto-auth: YouTube session is not live, refreshing from Firefox")
-        if self._attempt_auto_refresh():
-            logger.info("Auto-auth: reactive refresh succeeded")
-        else:
-            logger.warning("Auto-auth: reactive refresh failed")
-            self._notify_refresh_failed()
+            logger.info("Auto-auth: YouTube session is not live, refreshing from Firefox")
+            if self._attempt_auto_refresh():
+                logger.info("Auto-auth: reactive refresh succeeded")
+            else:
+                logger.warning("Auto-auth: reactive refresh failed")
+                self._notify_refresh_failed()
+        finally:
+            self._reactive_refresh_lock.release()
+
+    def _reactive_refresh_due(self) -> bool:
+        """Cheap pre-check so status polls don't spawn a thread per request."""
+        return (
+            self._auto_auth_enabled
+            and time.time() - self._last_reactive_refresh >= self._reactive_refresh_cooldown
+        )
 
     def _perform_sync(self) -> None:
         """Execute sync and update state."""
@@ -990,6 +1006,14 @@ class XMPDaemon:
                 auth_valid, auth_error = False, "probe failed"
         else:
             auth_valid, auth_error = False, "yt provider not in registry"
+
+        # Google rotates session cookies while YouTube is open in Firefox, so
+        # the copy in browser.json can die between syncs. Recover now, off the
+        # request thread, instead of showing "invalid" until the next sync.
+        if yt is not None and not auth_valid and self._reactive_refresh_due():
+            threading.Thread(
+                target=self._maybe_reactive_refresh, name="auth-reactive", daemon=True,
+            ).start()
 
         return {
             "success": True,

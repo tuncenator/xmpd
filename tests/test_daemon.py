@@ -2,6 +2,7 @@
 
 import json
 import signal
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -1355,6 +1356,55 @@ class TestAutoAuthRefresh:
             daemon._maybe_reactive_refresh()
             daemon._maybe_reactive_refresh()  # within cooldown -> skipped
             assert m.call_count == 1
+
+    def test_reactive_refresh_cooldown_covers_live_probe(self, tmp_path):
+        # Status polls every second while the cache says invalid; a live
+        # session must not be re-probed on every poll.
+        yt = _make_yt_provider()
+        yt.has_live_session.return_value = True
+        daemon = self._enabled_daemon(tmp_path, yt)
+        daemon._maybe_reactive_refresh()
+        daemon._maybe_reactive_refresh()
+        assert yt.has_live_session.call_count == 1
+
+    def test_reactive_refresh_skips_while_another_runs(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.has_live_session.return_value = False
+        daemon = self._enabled_daemon(tmp_path, yt)
+        daemon._reactive_refresh_lock.acquire()
+        try:
+            with patch.object(daemon, "_attempt_auto_refresh") as m:
+                daemon._maybe_reactive_refresh()
+                m.assert_not_called()
+        finally:
+            daemon._reactive_refresh_lock.release()
+
+    def test_status_with_invalid_auth_starts_background_refresh(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.is_authenticated.return_value = (False, "Not signed in")
+        daemon = self._enabled_daemon(tmp_path, yt)
+        with patch("xmpd.daemon.threading.Thread") as thread_cls:
+            response = daemon._cmd_status()
+        assert response["auth_valid"] is False
+        assert thread_cls.call_args.kwargs["target"] == daemon._maybe_reactive_refresh
+        thread_cls.return_value.start.assert_called_once()
+
+    def test_status_skips_refresh_thread_during_cooldown(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.is_authenticated.return_value = (False, "Not signed in")
+        daemon = self._enabled_daemon(tmp_path, yt)
+        daemon._last_reactive_refresh = time.time()
+        with patch("xmpd.daemon.threading.Thread") as thread_cls:
+            daemon._cmd_status()
+        thread_cls.assert_not_called()
+
+    def test_status_with_valid_auth_does_not_refresh(self, tmp_path):
+        yt = _make_yt_provider()
+        yt.is_authenticated.return_value = (True, "")
+        daemon = self._enabled_daemon(tmp_path, yt)
+        with patch("xmpd.daemon.threading.Thread") as thread_cls:
+            daemon._cmd_status()
+        thread_cls.assert_not_called()
 
     def test_reactive_refresh_noop_when_disabled(self, tmp_path):
         yt = _make_yt_provider()
