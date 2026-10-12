@@ -887,6 +887,23 @@ async def test_refresh_stream_url_via_legacy_resolver(track_store):
 
 
 @pytest.mark.asyncio
+async def test_force_refresh_url_invalidates_resolver_cache(track_store, yt_provider_mock):
+    """A forced refresh must not get the rejected URL back from the resolver cache."""
+    mock_resolver = Mock()
+    calls = []
+    mock_resolver.invalidate = Mock(side_effect=lambda vid: calls.append(("invalidate", vid)))
+    yt_provider_mock.resolve_stream = Mock(
+        side_effect=lambda vid: calls.append(("resolve", vid)) or "https://fresh.example/url"
+    )
+    proxy = _make_proxy(
+        track_store, provider_registry={"yt": yt_provider_mock}, stream_resolver=mock_resolver
+    )
+    result = await proxy._force_refresh_url("yt", "testvideoid", "req")
+    assert result == "https://fresh.example/url"
+    assert calls == [("invalidate", "testvideoid"), ("resolve", "testvideoid")]
+
+
+@pytest.mark.asyncio
 async def test_refresh_stream_url_no_resolver_raises(track_store):
     from xmpd.exceptions import URLRefreshError
 
@@ -1299,6 +1316,7 @@ async def test_probe_best_audio_stream_picks_highest_bitrate():
 
     fake_proc = AsyncMock()
     fake_proc.communicate = AsyncMock(return_value=(ffprobe_output, b""))
+    fake_proc.returncode = 0
 
     with patch(
         "xmpd.stream_transport.asyncio.create_subprocess_exec",
@@ -1325,6 +1343,7 @@ async def test_probe_best_audio_stream_single_stream_returns_zero():
 
     fake_proc = AsyncMock()
     fake_proc.communicate = AsyncMock(return_value=(ffprobe_output, b""))
+    fake_proc.returncode = 0
 
     with patch(
         "xmpd.stream_transport.asyncio.create_subprocess_exec",
@@ -1379,6 +1398,7 @@ async def test_route_tidal_dash_ffmpeg_receives_map_flag(track_store, tidal_prov
 
     fake_ffprobe = AsyncMock()
     fake_ffprobe.communicate = AsyncMock(return_value=(ffprobe_output, b""))
+    fake_ffprobe.returncode = 0
 
     fake_flac_bytes = b"fLaC" + b"\x00" * 4096
     fake_ffmpeg = Mock()

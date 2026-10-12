@@ -115,7 +115,7 @@ async def _ffprobe_audio_streams(url: str) -> list[dict[str, Any]]:
     expired URL, unparsable output).
     """
     streams, _duration = await _ffprobe_media(url)
-    return streams
+    return streams or []
 
 
 def _source_info_from_streams(streams: list[dict[str, Any]]) -> dict[str, Any]:
@@ -153,12 +153,13 @@ def _source_info_from_streams(streams: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-async def _ffprobe_media(url: str) -> tuple[list[dict[str, Any]], Any]:
+async def _ffprobe_media(url: str) -> tuple[list[dict[str, Any]] | None, Any]:
     """Return ``(audio streams, format duration)`` from one ffprobe run.
 
     The duration is ffprobe's raw ``format.duration`` string (None when
-    absent). Returns ``([], None)`` on any failure (ffprobe missing,
-    network error, expired URL, unparsable output).
+    absent). Streams are None when ffprobe could not read the source at all
+    (ffprobe missing, network error, rejected or expired URL) and an empty
+    list when it read the source but found no usable audio.
     """
     proc: asyncio.subprocess.Process | None = None
     try:
@@ -174,12 +175,14 @@ async def _ffprobe_media(url: str) -> tuple[list[dict[str, Any]], Any]:
             stderr=asyncio.subprocess.DEVNULL,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode != 0:
+            return None, None
         data = json.loads(stdout)
         streams = data.get("streams", [])
         fmt = data.get("format") or {}
     except Exception as e:
         logger.debug("ffprobe failed for %s...: %s", url[:60], e)
-        return [], None
+        return None, None
     finally:
         # wait_for cancels communicate() on timeout but leaves ffprobe
         # running; a stalled CDN read has no rw timeout and would hang the
