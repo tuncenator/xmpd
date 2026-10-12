@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from xmpd import audio_flow
 from xmpd.audio_flow import (
     FlowReport,
@@ -1070,3 +1072,193 @@ class TestMpdSinkFromInputsMultiOutput:
             prefer_media_name="Some Other Output",
         )
         assert name == "owntone-bridge"
+
+
+# Trimmed `system_profiler SPAudioDataType -json` from a MacBook Pro with the
+# Sound menu set to AirPlay.
+_SP_AUDIO_FIXTURE = {
+    "SPAudioDataType": [
+        {
+            "_name": "coreaudio_device",
+            "_items": [
+                {
+                    "_name": "AirPlay",
+                    "coreaudio_default_audio_output_device": "spaudio_yes",
+                    "coreaudio_device_output": 2,
+                    "coreaudio_device_srate": 44100,
+                    "coreaudio_device_transport": "coreaudio_device_type_airplay",
+                },
+                {
+                    "_name": "MacBook Pro Microphone",
+                    "coreaudio_default_audio_input_device": "spaudio_yes",
+                    "coreaudio_device_input": 1,
+                    "coreaudio_device_srate": 48000,
+                    "coreaudio_device_transport": "coreaudio_device_type_builtin",
+                },
+                {
+                    "_name": "MacBook Pro Speakers",
+                    "coreaudio_default_audio_system_device": "spaudio_yes",
+                    "coreaudio_device_output": 2,
+                    "coreaudio_device_srate": 48000,
+                    "coreaudio_device_transport": "coreaudio_device_type_builtin",
+                },
+            ],
+        }
+    ]
+}
+
+
+class TestCoreAudioSink:
+    @pytest.fixture(autouse=True)
+    def _no_real_coreaudio(self, monkeypatch):
+        # Keep tests off the host's real audio hardware.
+        monkeypatch.setattr(audio_flow, "_coreaudio_physical_format", lambda _n: None)
+
+    def _probe_with_format(self, monkeypatch, tmp_path, fmt):
+        monkeypatch.setattr(audio_flow.Path, "home", classmethod(lambda _c: tmp_path))
+        monkeypatch.setattr(audio_flow.shutil, "which", lambda _n: "/usr/sbin/system_profiler")
+        monkeypatch.setattr(
+            audio_flow.subprocess, "run",
+            lambda *_a, **_kw: _FakeProc(json.dumps(_SP_AUDIO_FIXTURE)),
+        )
+        monkeypatch.setattr(audio_flow, "_coreaudio_physical_format", lambda _n: fmt)
+        return _probe_sink([{"plugin": "osx", "outputname": "CoreAudio"}])
+
+    def test_integer_stream_sets_sink_bits(self, monkeypatch, tmp_path):
+        sink = self._probe_with_format(monkeypatch, tmp_path, (16, False))
+        assert sink is not None and sink.bits == 16 and sink.sample_fmt is None
+
+    def test_float_stream_sets_sample_fmt_not_bits(self, monkeypatch, tmp_path):
+        sink = self._probe_with_format(monkeypatch, tmp_path, (32, True))
+        assert sink is not None and sink.bits is None and sink.sample_fmt == "float32"
+
+    def test_selects_default_output_device(self):
+        d = audio_flow.select_coreaudio_device(_SP_AUDIO_FIXTURE)
+        assert d is not None and d["_name"] == "AirPlay"
+
+    def test_selects_configured_device_by_name(self):
+        d = audio_flow.select_coreaudio_device(_SP_AUDIO_FIXTURE, "MacBook Pro Speakers")
+        assert d is not None and d["_name"] == "MacBook Pro Speakers"
+
+    def test_missing_configured_device_returns_none(self):
+        assert audio_flow.select_coreaudio_device(_SP_AUDIO_FIXTURE, "Nope") is None
+
+    def test_airplay_device_maps_to_airplay_backend(self):
+        d = audio_flow.select_coreaudio_device(_SP_AUDIO_FIXTURE)
+        sink = audio_flow.coreaudio_sink_from_device(d)
+        assert sink.backend == "airplay"
+        assert sink.sample_rate == 44100
+        assert sink.channels == 2
+        assert sink.error and "Sound menu" in sink.error
+
+    def test_builtin_device(self):
+        d = audio_flow.select_coreaudio_device(_SP_AUDIO_FIXTURE, "MacBook Pro Speakers")
+        sink = audio_flow.coreaudio_sink_from_device(d)
+        assert sink.backend == "coreaudio"
+        assert sink.name == "MacBook Pro Speakers"
+        assert sink.description == "Built-in"
+        assert sink.sample_rate == 48000
+        assert not sink.is_bluetooth
+        assert sink.error is None
+
+    def test_bluetooth_device_is_lossy(self):
+        sink = audio_flow.coreaudio_sink_from_device({
+            "_name": "AirPods Pro",
+            "coreaudio_device_output": 2,
+            "coreaudio_device_srate": 48000,
+            "coreaudio_device_transport": "coreaudio_device_type_bluetooth",
+        })
+        assert sink.is_bluetooth and sink.bt_lossy
+        assert sink.bt_codec_display == "AAC or SBC"
+
+    def test_probe_sink_routes_osx_plugin_through_system_profiler(
+        self, monkeypatch, tmp_path,
+    ):
+        monkeypatch.setattr(audio_flow.Path, "home", classmethod(lambda _c: tmp_path))
+        monkeypatch.setattr(audio_flow.shutil, "which", lambda _n: "/usr/sbin/system_profiler")
+        calls = []
+
+        def fake_run(cmd, **_kw):
+            calls.append(cmd)
+            return _FakeProc(json.dumps(_SP_AUDIO_FIXTURE))
+
+        monkeypatch.setattr(audio_flow.subprocess, "run", fake_run)
+        sink = _probe_sink([{"plugin": "osx", "outputname": "CoreAudio"}])
+        assert calls and calls[0][0] == "system_profiler"
+        assert sink is not None and sink.backend == "airplay"
+
+    def test_probe_sink_honors_device_from_mpd_conf(self, monkeypatch, tmp_path):
+        conf = tmp_path / ".config" / "mpd" / "mpd.conf"
+        conf.parent.mkdir(parents=True)
+        conf.write_text(
+            'audio_output {\n  type "osx"\n  name "CoreAudio"\n'
+            '  device "MacBook Pro Speakers"\n}\n'
+        )
+        monkeypatch.setattr(audio_flow.Path, "home", classmethod(lambda _c: tmp_path))
+        monkeypatch.setattr(audio_flow.shutil, "which", lambda _n: "/usr/sbin/system_profiler")
+        monkeypatch.setattr(
+            audio_flow.subprocess, "run",
+            lambda *_a, **_kw: _FakeProc(json.dumps(_SP_AUDIO_FIXTURE)),
+        )
+        sink = _probe_sink([{"plugin": "osx", "outputname": "CoreAudio"}])
+        assert sink is not None and sink.name == "MacBook Pro Speakers"
+
+    def test_probe_sink_reports_missing_system_profiler(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(audio_flow.Path, "home", classmethod(lambda _c: tmp_path))
+        monkeypatch.setattr(audio_flow.shutil, "which", lambda _n: None)
+        sink = _probe_sink([{"plugin": "osx", "outputname": "CoreAudio"}])
+        assert sink is not None and sink.error == "system_profiler not found"
+
+
+class TestComputeVerdictCoreAudio:
+    def _mpd(self):
+        return MPDInfo(
+            state="play", file="x", artist=None, title=None,
+            sample_rate=48000, bits=24, channels=2,
+            elapsed=0.0, duration=100.0, active_outputs=[],
+        )
+
+    def _flac_48k(self):
+        cand = StreamCandidate(
+            index=0, codec="flac", sample_fmt="s32",
+            sample_rate=48000, channels=2,
+            bits_per_raw_sample=24, bitrate=1500000, tag_id="FLAC,48000,24",
+        )
+        return SourceInfo(
+            provider="tidal", track_id="x", manifest_url="u",
+            candidates=[cand], selected=cand,
+        )
+
+    def _sink(self, transport, rate):
+        return audio_flow.coreaudio_sink_from_device({
+            "_name": "dev", "coreaudio_device_output": 2,
+            "coreaudio_device_srate": rate,
+            "coreaudio_device_transport": transport,
+        })
+
+    def test_airplay_resample_hint_says_unavoidable(self):
+        sink = self._sink("coreaudio_device_type_airplay", 44100)
+        v = _compute_verdict(self._mpd(), self._flac_48k(), sink)
+        assert v.label == "LOSSLESS (resampled)"
+        assert "unavoidable" in v.hints[0]
+
+    def test_coreaudio_resample_hint_points_to_audio_midi_setup(self):
+        sink = self._sink("coreaudio_device_type_usb", 44100)
+        v = _compute_verdict(self._mpd(), self._flac_48k(), sink)
+        assert "Audio MIDI Setup" in v.hints[0]
+
+    def test_macos_airplay_16bit_cap_on_24bit_source(self):
+        sink = self._sink("coreaudio_device_type_airplay", 48000)
+        sink.bits = 16
+        v = _compute_verdict(self._mpd(), self._flac_48k(), sink)
+        assert v.label == "LOSSLESS"
+        assert v.detail.startswith("macOS AirPlay sends 16-bit")
+        assert v.hints == []
+
+    def test_coreaudio_bluetooth_hints_skip_linux_advice(self):
+        sink = self._sink("coreaudio_device_type_bluetooth", 48000)
+        v = _compute_verdict(self._mpd(), self._flac_48k(), sink)
+        assert v.label == "LOSSY"
+        assert len(v.hints) == 1
+        assert "ALSA" not in v.hints[0] and "LDAC" not in v.hints[0]
+

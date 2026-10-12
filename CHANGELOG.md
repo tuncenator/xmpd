@@ -11,6 +11,11 @@
   without Full Disk Access.
 - Desktop notifications use `osascript` on macOS, where `notify-send` does not
   exist.
+- `xmpctl flow` reports the macOS output device behind MPD's `osx` output:
+  its name, type, sample rate, bit depth and any resample, including AirPlay
+  picked from the Sound menu (16-bit, so hi-res sources lose their extra
+  bits) and Bluetooth (always lossy on macOS). Quality hints no
+  longer suggest Linux-only fixes on a Mac.
 
 ## [2.4.0] - 2026-09-08
 
