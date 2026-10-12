@@ -55,6 +55,23 @@ _SAMPLE_FMT_BITS: dict[str, int] = {
 }
 
 
+# Directory holding the ffmpeg and ffprobe to run (config key ``ffmpeg_dir``),
+# for hosts whose PATH ffmpeg can't read DASH. None runs whatever is on PATH.
+# The daemon sets it at startup for the stream proxy, which gets no config.
+_ffmpeg_dir: str | None = None
+
+
+def set_ffmpeg_dir(path: str | None) -> None:
+    global _ffmpeg_dir
+    _ffmpeg_dir = path
+
+
+def ffmpeg_tool(name: str, ffmpeg_dir: str | None = None) -> str:
+    """Command for ``ffmpeg``/``ffprobe``: from ``ffmpeg_dir``, else the global."""
+    directory = ffmpeg_dir or _ffmpeg_dir
+    return str(Path(directory) / name) if directory else name
+
+
 def _bits_from_sample_fmt(fmt: str | None) -> int | None:
     if not fmt:
         return None
@@ -299,6 +316,7 @@ def _probe_local_source(
     if not path.is_absolute():
         path = Path(music_dir).expanduser() / path
     track_id = path.name
+    ffprobe = ffmpeg_tool("ffprobe", config.get("ffmpeg_dir"))
 
     if not path.exists():
         return SourceInfo(
@@ -306,11 +324,11 @@ def _probe_local_source(
             candidates=[], selected=None,
             error=f"file not found: {path}",
         )
-    if shutil.which("ffprobe") is None:
+    if shutil.which(ffprobe) is None:
         return SourceInfo(
             provider="local", track_id=track_id, manifest_url=str(path),
             candidates=[], selected=None,
-            error="ffprobe not on PATH",
+            error=f"{ffprobe} not found",
         )
 
     candidates: list[StreamCandidate] = []
@@ -319,7 +337,7 @@ def _probe_local_source(
     try:
         proc = subprocess.run(
             [
-                "ffprobe", "-v", "quiet", "-print_format", "json",
+                ffprobe, "-v", "quiet", "-print_format", "json",
                 "-show_streams", "-select_streams", "a", str(path),
             ],
             capture_output=True, text=True, timeout=15, check=False,
@@ -345,6 +363,7 @@ def _probe_proxy_source(
         Path.home() / ".config" / "xmpd" / "track_mapping.db"
     )
     stream_url = _lookup_cached_stream_url(db_path, provider, track_id)
+    ffprobe = ffmpeg_tool("ffprobe", config.get("ffmpeg_dir"))
 
     error: str | None = None
     candidates: list[StreamCandidate] = []
@@ -352,13 +371,13 @@ def _probe_proxy_source(
 
     if not stream_url:
         error = "no cached stream URL (daemon hasn't resolved this track yet)"
-    elif shutil.which("ffprobe") is None:
-        error = "ffprobe not on PATH"
+    elif shutil.which(ffprobe) is None:
+        error = f"{ffprobe} not found"
     else:
         try:
             proc = subprocess.run(
                 [
-                    "ffprobe", "-v", "quiet", "-print_format", "json",
+                    ffprobe, "-v", "quiet", "-print_format", "json",
                     "-show_streams", "-select_streams", "a", stream_url,
                 ],
                 capture_output=True, text=True, timeout=15, check=False,

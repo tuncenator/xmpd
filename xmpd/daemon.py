@@ -21,6 +21,7 @@ from typing import Any
 
 from mpd import MPDClient as MPDClientBase
 
+from xmpd.audio_flow import set_ffmpeg_dir
 from xmpd.auth.ytmusic_cookie import FirefoxCookieExtractor
 from xmpd.commands import playback, queries, ratings
 from xmpd.config import get_config_dir, load_config
@@ -78,6 +79,7 @@ class XMPDaemon:
 
         # Load configuration
         self.config = load_config()
+        set_ffmpeg_dir(self.config.get("ffmpeg_dir"))
         logger.info("Configuration loaded")
 
         # Runtime control (set early so lambdas referencing _running resolve)

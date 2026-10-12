@@ -11,7 +11,7 @@ from typing import Any
 
 from aiohttp import web
 
-from xmpd.audio_flow import _LOSSLESS_CODECS, _LOSSY_CODECS
+from xmpd.audio_flow import _LOSSLESS_CODECS, _LOSSY_CODECS, ffmpeg_tool
 from xmpd.exceptions import DashStreamError
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ async def _ffprobe_audio_streams(url: str) -> list[dict[str, Any]]:
     proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ffprobe",
+            ffmpeg_tool("ffprobe"),
             "-v", "quiet",
             "-print_format", "json",
             "-show_streams",
@@ -240,7 +240,7 @@ async def _stream_via_ffmpeg(
     leak ffmpeg processes when MPD skips tracks.
     """
     proc = await asyncio.create_subprocess_exec(
-        "ffmpeg",
+        ffmpeg_tool("ffmpeg"),
         "-hide_banner",
         "-loglevel",
         "error",

@@ -505,7 +505,7 @@ class TestProbeLocalSource:
         info = _probe_local_source(
             self._mpd("x.mp3"), {"mpd_music_directory": str(tmp_path)}
         )
-        assert info.error == "ffprobe not on PATH"
+        assert info.error == "ffprobe not found"
 
     def test_ffprobe_returns_no_streams(self, monkeypatch, tmp_path):
         track = tmp_path / "x.mp3"
@@ -1262,3 +1262,36 @@ class TestComputeVerdictCoreAudio:
         assert len(v.hints) == 1
         assert "ALSA" not in v.hints[0] and "LDAC" not in v.hints[0]
 
+
+class TestFfmpegTool:
+    def test_bare_name_without_dir(self, monkeypatch):
+        monkeypatch.setattr(audio_flow, "_ffmpeg_dir", None)
+        assert audio_flow.ffmpeg_tool("ffprobe") == "ffprobe"
+
+    def test_explicit_dir_wins(self, monkeypatch):
+        monkeypatch.setattr(audio_flow, "_ffmpeg_dir", "/global")
+        assert audio_flow.ffmpeg_tool("ffprobe", "/opt/ff/bin") == "/opt/ff/bin/ffprobe"
+
+    def test_falls_back_to_global_dir(self, monkeypatch):
+        monkeypatch.setattr(audio_flow, "_ffmpeg_dir", None)
+        audio_flow.set_ffmpeg_dir("/opt/ff/bin")
+        assert audio_flow.ffmpeg_tool("ffmpeg") == "/opt/ff/bin/ffmpeg"
+
+    def test_local_probe_uses_configured_ffprobe(self, monkeypatch, tmp_path):
+        track = tmp_path / "a.flac"
+        track.write_bytes(b"")
+        monkeypatch.setattr(audio_flow.shutil, "which", lambda name: name)
+        calls = []
+
+        def fake_run(cmd, **_kw):
+            calls.append(cmd)
+            return _FakeProc("{}")
+
+        monkeypatch.setattr(audio_flow.subprocess, "run", fake_run)
+        mpd = MPDInfo(
+            state="play", file=str(track), artist=None, title=None,
+            sample_rate=44100, bits=16, channels=2,
+            elapsed=0.0, duration=1.0, active_outputs=[],
+        )
+        _probe_local_source(mpd, {"ffmpeg_dir": "/opt/ff/bin"})
+        assert calls[0][0] == "/opt/ff/bin/ffprobe"

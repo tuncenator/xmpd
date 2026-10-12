@@ -38,6 +38,9 @@ _DEFAULTS: dict[str, Any] = {
     "proxy_host": "localhost",
     "proxy_port": 8080,
     "proxy_track_mapping_db": None,
+    # Directory with the ffmpeg/ffprobe to use; None means PATH. Set it when
+    # the PATH ffmpeg lacks the DASH demuxer Tidal needs (Homebrew's does).
+    "ffmpeg_dir": None,
     # Radio
     "radio_playlist_limit": 25,
     # Per-provider sections
@@ -247,6 +250,7 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
         "mpd_playlist_directory",
         "mpd_music_directory",
         "proxy_track_mapping_db",
+        "ffmpeg_dir",
     ]
     for field in path_fields:
         if field in config and config[field] is not None:
