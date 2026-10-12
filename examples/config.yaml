@@ -51,6 +51,10 @@ proxy_host: localhost
 proxy_port: 8080
 proxy_track_mapping_db: ~/.config/xmpd/track_mapping.db
 
+# ffmpeg/ffprobe directory; unset uses PATH. Tidal needs an ffmpeg with the
+# DASH demuxer, which Homebrew's lacks (built without libxml2).
+# ffmpeg_dir: ~/.local/opt/ffmpeg-xmpd/bin
+
 # ===== Radio =====
 radio_playlist_limit: 25      # 10-50
 

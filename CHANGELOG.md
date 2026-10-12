@@ -11,6 +11,18 @@
   without Full Disk Access.
 - Desktop notifications use `osascript` on macOS, where `notify-send` does not
   exist.
+- `xmpctl flow` reports the macOS output device behind MPD's `osx` output:
+  its name, type, sample rate, bit depth and any resample, including AirPlay
+  picked from the Sound menu (16-bit, so hi-res sources lose their extra
+  bits) and Bluetooth (always lossy on macOS). Quality hints no
+  longer suggest Linux-only fixes on a Mac.
+
+### Added
+
+- `ffmpeg_dir` config key: run ffmpeg and ffprobe from a given directory
+  instead of PATH. Tidal streams are DASH manifests, and Homebrew's ffmpeg
+  can't read them (built without libxml2), so on macOS point this at an
+  ffmpeg built with `--enable-libxml2`.
 
 ## [2.4.0] - 2026-09-08
 

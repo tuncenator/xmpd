@@ -7,15 +7,17 @@ Tools used (all optional with graceful fallback):
 - ``ffprobe`` for DASH manifest stream enumeration (already an xmpd dep)
 - ``pactl`` for PulseAudio / PipeWire-as-Pulse sink details
 - ``pw-dump`` (PipeWire) for Bluetooth codec; falls back to pactl card profile
+- ``system_profiler`` for the CoreAudio device behind MPD's macOS output
 
 Sink probing branches on the MPD output ``plugin`` field:
-``pulse``/``pipewire`` go through pactl; ``alsa``/``jack``/``fifo`` are reported
-with a note that detail extraction is not implemented (v1 scope: STORMTREE,
-VICAR -- both PipeWire/Pulse).
+``pulse``/``pipewire`` go through pactl; ``osx`` goes through system_profiler;
+``alsa``/``jack``/``fifo`` are reported with a note that detail extraction is
+not implemented.
 """
 
 from __future__ import annotations
 
+import ctypes
 import json
 import re
 import shutil
@@ -51,6 +53,23 @@ _SAMPLE_FMT_BITS: dict[str, int] = {
     "s32le": 32, "s32be": 32, "s32ne": 32,
     "float32le": 32, "float32be": 32, "float32ne": 32,
 }
+
+
+# Directory holding the ffmpeg and ffprobe to run (config key ``ffmpeg_dir``),
+# for hosts whose PATH ffmpeg can't read DASH. None runs whatever is on PATH.
+# The daemon sets it at startup for the stream proxy, which gets no config.
+_ffmpeg_dir: str | None = None
+
+
+def set_ffmpeg_dir(path: str | None) -> None:
+    global _ffmpeg_dir
+    _ffmpeg_dir = path
+
+
+def ffmpeg_tool(name: str, ffmpeg_dir: str | None = None) -> str:
+    """Command for ``ffmpeg``/``ffprobe``: from ``ffmpeg_dir``, else the global."""
+    directory = ffmpeg_dir or _ffmpeg_dir
+    return str(Path(directory) / name) if directory else name
 
 
 def _bits_from_sample_fmt(fmt: str | None) -> int | None:
@@ -297,6 +316,7 @@ def _probe_local_source(
     if not path.is_absolute():
         path = Path(music_dir).expanduser() / path
     track_id = path.name
+    ffprobe = ffmpeg_tool("ffprobe", config.get("ffmpeg_dir"))
 
     if not path.exists():
         return SourceInfo(
@@ -304,11 +324,11 @@ def _probe_local_source(
             candidates=[], selected=None,
             error=f"file not found: {path}",
         )
-    if shutil.which("ffprobe") is None:
+    if shutil.which(ffprobe) is None:
         return SourceInfo(
             provider="local", track_id=track_id, manifest_url=str(path),
             candidates=[], selected=None,
-            error="ffprobe not on PATH",
+            error=f"{ffprobe} not found",
         )
 
     candidates: list[StreamCandidate] = []
@@ -317,7 +337,7 @@ def _probe_local_source(
     try:
         proc = subprocess.run(
             [
-                "ffprobe", "-v", "quiet", "-print_format", "json",
+                ffprobe, "-v", "quiet", "-print_format", "json",
                 "-show_streams", "-select_streams", "a", str(path),
             ],
             capture_output=True, text=True, timeout=15, check=False,
@@ -343,6 +363,7 @@ def _probe_proxy_source(
         Path.home() / ".config" / "xmpd" / "track_mapping.db"
     )
     stream_url = _lookup_cached_stream_url(db_path, provider, track_id)
+    ffprobe = ffmpeg_tool("ffprobe", config.get("ffmpeg_dir"))
 
     error: str | None = None
     candidates: list[StreamCandidate] = []
@@ -350,13 +371,13 @@ def _probe_proxy_source(
 
     if not stream_url:
         error = "no cached stream URL (daemon hasn't resolved this track yet)"
-    elif shutil.which("ffprobe") is None:
-        error = "ffprobe not on PATH"
+    elif shutil.which(ffprobe) is None:
+        error = f"{ffprobe} not found"
     else:
         try:
             proc = subprocess.run(
                 [
-                    "ffprobe", "-v", "quiet", "-print_format", "json",
+                    ffprobe, "-v", "quiet", "-print_format", "json",
                     "-show_streams", "-select_streams", "a", stream_url,
                 ],
                 capture_output=True, text=True, timeout=15, check=False,
@@ -472,7 +493,7 @@ def _probe_sink(active_outputs: list[dict[str, Any]]) -> SinkInfo | None:
             break
     if chosen is None:
         for o in active_outputs:
-            if o.get("plugin") in ("pulse", "pipewire", "alsa", "jack"):
+            if o.get("plugin") in ("pulse", "pipewire", "alsa", "jack", "osx"):
                 chosen = o
                 break
     if chosen is None:
@@ -498,6 +519,8 @@ def _probe_sink(active_outputs: list[dict[str, Any]]) -> SinkInfo | None:
             bt_bitrate=None, bt_lossy=None,
             error="ALSA hw_params probe not implemented in v1",
         )
+    if plugin == "osx":
+        return _probe_coreaudio_sink(chosen)
     if plugin == "jack":
         return SinkInfo(
             backend="jack", name=str(chosen.get("outputname") or "jack"),
@@ -633,25 +656,261 @@ def _read_fifo_format(
     has no ``format`` directive. The bridge installer writes 44100:16:2; users
     may have overridden it.
     """
-    if mpd_conf is None:
-        mpd_conf = Path.home() / ".mpd" / "mpd.conf"
-    if not mpd_conf.exists():
+    fmt = _mpd_output_settings(output_name, mpd_conf).get("format")
+    if not fmt:
         return None, None, None
+    return _parse_mpd_audio_field(fmt)
+
+
+def _find_mpd_conf() -> Path | None:
+    """First user mpd.conf in MPD's own lookup order, or None."""
+    home = Path.home()
+    for candidate in (
+        home / ".config" / "mpd" / "mpd.conf",
+        home / ".mpdconf",
+        home / ".mpd" / "mpd.conf",
+    ):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _mpd_output_settings(
+    output_name: str, mpd_conf: Path | None = None,
+) -> dict[str, str]:
+    """Key/value pairs of the named ``audio_output`` block, or {} if absent."""
+    if mpd_conf is None:
+        mpd_conf = _find_mpd_conf()
+    if mpd_conf is None or not mpd_conf.exists():
+        return {}
     try:
         text = mpd_conf.read_text()
     except OSError:
-        return None, None, None
+        return {}
 
     for block in _MPD_AUDIO_OUTPUT_BLOCK_RE.finditer(text):
-        body = block.group(1)
-        kvs = dict(_MPD_KV_RE.findall(body))
-        if kvs.get("name") != output_name:
-            continue
-        fmt = kvs.get("format")
-        if not fmt:
-            return None, None, None
-        return _parse_mpd_audio_field(fmt)
-    return None, None, None
+        kvs = dict(_MPD_KV_RE.findall(block.group(1)))
+        if kvs.get("name") == output_name:
+            return kvs
+    return {}
+
+
+# ---------- CoreAudio (macOS) probe ----------
+
+_MACOS_AIRPLAY = "macOS AirPlay"
+
+# system_profiler transport ids -> display label. AirPlay and Bluetooth get
+# their own handling below; the rest only label the Device line.
+_COREAUDIO_TRANSPORTS: dict[str, str] = {
+    "coreaudio_device_type_builtin": "Built-in",
+    "coreaudio_device_type_usb": "USB",
+    "coreaudio_device_type_hdmi": "HDMI",
+    "coreaudio_device_type_displayport": "DisplayPort",
+    "coreaudio_device_type_thunderbolt": "Thunderbolt",
+    "coreaudio_device_type_bluetooth": "Bluetooth",
+    "coreaudio_device_type_airplay": "AirPlay",
+    "coreaudio_device_type_virtual": "Virtual",
+    "coreaudio_device_type_aggregate": "Aggregate",
+}
+
+
+def _probe_coreaudio_sink(output: dict[str, Any]) -> SinkInfo:
+    """Resolve the CoreAudio device behind MPD's ``osx`` output.
+
+    MPD's ``outputs`` command doesn't expose the plugin's ``device`` setting,
+    so it is read from mpd.conf; unset or "default" means the system default
+    output, which is what the Sound menu switches. system_profiler is used
+    instead of the CoreAudio C API so the probe needs no pyobjc dependency.
+    """
+    output_name = str(output.get("outputname") or "CoreAudio")
+    configured = _mpd_output_settings(output_name).get("device", "default")
+
+    def unavailable(error: str) -> SinkInfo:
+        return SinkInfo(
+            backend="coreaudio", name=output_name, description=None,
+            state=None, sample_fmt=None, sample_rate=None, channels=None,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None, error=error,
+        )
+
+    if shutil.which("system_profiler") is None:
+        return unavailable("system_profiler not found")
+    try:
+        proc = subprocess.run(
+            ["system_profiler", "SPAudioDataType", "-json"],
+            capture_output=True, text=True, timeout=10, check=True,
+        )
+        data = json.loads(proc.stdout)
+    except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as e:
+        return unavailable(f"system_profiler failed: {e}")
+
+    device = select_coreaudio_device(data, configured)
+    if device is None:
+        target = "default output" if configured == "default" else f"device {configured!r}"
+        return unavailable(f"CoreAudio {target} not found")
+    sink = coreaudio_sink_from_device(device)
+    fmt = _coreaudio_physical_format(None if configured == "default" else configured)
+    if fmt is not None:
+        bits, is_float = fmt
+        if is_float:
+            sink.sample_fmt = f"float{bits}"
+        else:
+            sink.bits = bits
+    return sink
+
+
+class _PropertyAddress(ctypes.Structure):
+    _fields_ = [
+        ("selector", ctypes.c_uint32),
+        ("scope", ctypes.c_uint32),
+        ("element", ctypes.c_uint32),
+    ]
+
+
+class _StreamDescription(ctypes.Structure):
+    _fields_ = [
+        ("sample_rate", ctypes.c_double),
+        ("format_id", ctypes.c_uint32),
+        ("format_flags", ctypes.c_uint32),
+        ("bytes_per_packet", ctypes.c_uint32),
+        ("frames_per_packet", ctypes.c_uint32),
+        ("bytes_per_frame", ctypes.c_uint32),
+        ("channels_per_frame", ctypes.c_uint32),
+        ("bits_per_channel", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
+def _fourcc(code: str) -> int:
+    return int.from_bytes(code.encode("ascii"), "big")
+
+
+def _coreaudio_physical_format(device_name: str | None) -> tuple[int, bool] | None:
+    """(bits, is_float) of the device's first output stream, via CoreAudio.
+
+    system_profiler has no bit depth, and the AirPlay device's 16-bit integer
+    stream is what truncates hi-res sources. ``device_name`` None means the
+    default output. Returns None off macOS or on any CoreAudio error.
+    """
+    try:
+        ca = ctypes.CDLL("/System/Library/Frameworks/CoreAudio.framework/CoreAudio")
+        cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    except OSError:
+        return None
+    addr_p = ctypes.POINTER(_PropertyAddress)
+    u32_p = ctypes.POINTER(ctypes.c_uint32)
+    ca.AudioObjectGetPropertyDataSize.argtypes = [
+        ctypes.c_uint32, addr_p, ctypes.c_uint32, ctypes.c_void_p, u32_p,
+    ]
+    ca.AudioObjectGetPropertyData.argtypes = [
+        ctypes.c_uint32, addr_p, ctypes.c_uint32, ctypes.c_void_p, u32_p, ctypes.c_void_p,
+    ]
+    cf.CFStringGetCString.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32,
+    ]
+    cf.CFStringGetCString.restype = ctypes.c_bool
+    cf.CFRelease.argtypes = [ctypes.c_void_p]
+
+    def address(selector: str, scope: str) -> _PropertyAddress:
+        return _PropertyAddress(_fourcc(selector), _fourcc(scope), 0)
+
+    def get(obj: int, selector: str, scope: str, out: Any) -> bool:
+        size = ctypes.c_uint32(ctypes.sizeof(out))
+        addr = address(selector, scope)
+        status = ca.AudioObjectGetPropertyData(
+            obj, ctypes.byref(addr), 0, None, ctypes.byref(size), ctypes.byref(out),
+        )
+        return bool(status == 0)
+
+    def get_ids(obj: int, selector: str, scope: str) -> list[int]:
+        size = ctypes.c_uint32(0)
+        addr = address(selector, scope)
+        if ca.AudioObjectGetPropertyDataSize(
+            obj, ctypes.byref(addr), 0, None, ctypes.byref(size),
+        ) != 0:
+            return []
+        ids = (ctypes.c_uint32 * (size.value // 4))()
+        if ca.AudioObjectGetPropertyData(
+            obj, ctypes.byref(addr), 0, None, ctypes.byref(size), ids,
+        ) != 0:
+            return []
+        return list(ids)
+
+    def name(obj: int) -> str | None:
+        ref = ctypes.c_void_p()
+        if not get(obj, "lnam", "glob", ref) or not ref.value:
+            return None
+        buf = ctypes.create_string_buffer(1024)
+        ok = cf.CFStringGetCString(ref, buf, len(buf), 0x08000100)  # UTF-8
+        cf.CFRelease(ref)
+        return buf.value.decode() if ok else None
+
+    system_object = 1
+    if device_name is None:
+        default = ctypes.c_uint32()
+        if not get(system_object, "dOut", "glob", default):
+            return None
+        device: int | None = default.value
+    else:
+        device = next(
+            (d for d in get_ids(system_object, "dev#", "glob") if name(d) == device_name),
+            None,
+        )
+    if device is None:
+        return None
+    streams = get_ids(device, "stm#", "outp")
+    fmt = _StreamDescription()
+    if not streams or not get(streams[0], "pft ", "glob", fmt):
+        return None
+    return int(fmt.bits_per_channel), bool(fmt.format_flags & 1)  # kAudioFormatFlagIsFloat
+
+
+def select_coreaudio_device(
+    profiler_data: dict[str, Any], configured: str = "default",
+) -> dict[str, Any] | None:
+    """Pick the device MPD plays to from ``system_profiler SPAudioDataType -json``."""
+    devices: list[dict[str, Any]] = []
+    for group in profiler_data.get("SPAudioDataType", []):
+        devices.extend(group.get("_items", []))
+    for d in devices:
+        if configured == "default":
+            if d.get("coreaudio_default_audio_output_device") == "spaudio_yes":
+                return d
+        elif d.get("_name") == configured:
+            return d
+    return None
+
+
+def coreaudio_sink_from_device(device: dict[str, Any]) -> SinkInfo:
+    """Build a SinkInfo from one system_profiler audio device entry."""
+    name = str(device.get("_name") or "?")
+    transport = str(device.get("coreaudio_device_transport", ""))
+    label = _COREAUDIO_TRANSPORTS.get(transport)
+    rate = _safe_int(device.get("coreaudio_device_srate"))
+    channels = _safe_int(device.get("coreaudio_device_output"))
+
+    if transport == "coreaudio_device_type_airplay":
+        # The Sound menu's AirPlay device is a single "AirPlay" entry whatever
+        # receiver is picked; macOS exposes no public API for the receiver name.
+        return SinkInfo(
+            backend="airplay", name=name, description=_MACOS_AIRPLAY,
+            state=None, sample_fmt=None, sample_rate=rate, channels=channels,
+            is_bluetooth=False, bt_codec=None, bt_codec_display=None,
+            bt_bitrate=None, bt_lossy=None,
+            error="receiver is picked in the Sound menu; macOS doesn't expose its name",
+        )
+
+    is_bt = transport == "coreaudio_device_type_bluetooth"
+    return SinkInfo(
+        backend="coreaudio", name=name,
+        description=label if label and label != name else None,
+        state=None, sample_fmt=None, sample_rate=rate, channels=channels,
+        is_bluetooth=is_bt,
+        bt_codec=None,
+        # macOS negotiates AAC or SBC and reports neither; both are lossy.
+        bt_codec_display="AAC or SBC" if is_bt else None,
+        bt_bitrate=None, bt_lossy=True if is_bt else None,
+    )
 
 
 def _probe_pulse_sink(prefer_media_name: str | None = None) -> SinkInfo:
@@ -998,8 +1257,12 @@ def _compute_verdict(
     if sink_lossy and sink is not None:
         codec_str = sink.bt_codec_display or "lossy codec"
         bitrate = sink.bt_bitrate or "unknown bitrate"
-        hints = ["switch to a wired ALSA sink for bit-perfect playback"]
-        if sink.bt_codec != "ldac":
+        if sink.backend == "coreaudio":
+            # No LDAC or ALSA on macOS; a wired output is the only way out.
+            hints = ["switch to a wired or built-in output for lossless playback"]
+        else:
+            hints = ["switch to a wired ALSA sink for bit-perfect playback"]
+        if sink.backend != "coreaudio" and sink.bt_codec != "ldac":
             hints.append(
                 "or pair an LDAC source/sink for higher-bitrate (still lossy) Bluetooth"
             )
@@ -1012,13 +1275,20 @@ def _compute_verdict(
 
     if src_lossless and not sink_lossy:
         if rate_mismatch and src_rate and sink_rate:
+            if sink and sink.backend == "airplay":
+                hint = "AirPlay runs at a fixed rate, so this resample is unavoidable"
+            elif sink and sink.backend == "coreaudio":
+                hint = (
+                    f"set the device to {src_rate} Hz in Audio MIDI Setup "
+                    "for bit-perfect playback"
+                )
+            else:
+                hint = f"set the sink sample rate to {src_rate} Hz for bit-perfect playback"
             return Verdict(
                 label="LOSSLESS (resampled)",
                 detail=f"source {src_rate} Hz resampled to {sink_rate} Hz at the sink",
                 bottleneck="resampler",
-                hints=[
-                    f"set the sink sample rate to {src_rate} Hz for bit-perfect playback",
-                ],
+                hints=[hint],
             )
         if bits_truncated:
             # OwnTone's AirPlay implementation encodes 16-bit/44.1 kHz ALAC in
@@ -1035,6 +1305,15 @@ def _compute_verdict(
                     ))
                 )
             )
+            if sink is not None and sink.description == _MACOS_AIRPLAY:
+                # macOS's own AirPlay device has a 16-bit integer stream.
+                return Verdict(
+                    label="LOSSLESS",
+                    detail=(
+                        f"macOS AirPlay sends 16-bit/44.1 kHz; source's extra "
+                        f"bits ({src_bits}-bit) are dropped before AirPlay encoding"
+                    ),
+                )
             if sink_is_airplay:
                 return Verdict(
                     label="LOSSLESS",
