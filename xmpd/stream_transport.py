@@ -1,18 +1,27 @@
 """Audio probing and ffmpeg transport used by the HTTP stream proxy.
 
-Owns subprocess lifetimes, stream selection, FLAC framing, and read timeouts.
-URL resolution, caching, routing, and retry policy live in stream_proxy.
+Owns subprocess lifetimes, stream selection, the PCM decode pass that fills
+the seekable buffer, the unbuffered FLAC fallback, and read timeouts. URL
+resolution, caching, routing, and retry policy live in stream_proxy.
 """
 
 import asyncio
 import json
 import logging
-from typing import Any
+import re
+import xml.etree.ElementTree as ET
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
+import aiohttp
 from aiohttp import web
 
 from xmpd.audio_flow import _LOSSLESS_CODECS, _LOSSY_CODECS, ffmpeg_tool
 from xmpd.exceptions import DashStreamError
+
+if TYPE_CHECKING:
+    from xmpd.stream_buffer import PcmLayout
 
 logger = logging.getLogger(__name__)
 
@@ -105,35 +114,8 @@ async def _ffprobe_audio_streams(url: str) -> list[dict[str, Any]]:
     Returns an empty list on any failure (ffprobe missing, network error,
     expired URL, unparsable output).
     """
-    proc: asyncio.subprocess.Process | None = None
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            ffmpeg_tool("ffprobe"),
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_streams",
-            "-select_streams", "a",
-            url,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-        data = json.loads(stdout)
-        streams = data.get("streams", [])
-    except Exception as e:
-        logger.debug("ffprobe failed for %s...: %s", url[:60], e)
-        return []
-    finally:
-        # wait_for cancels communicate() on timeout but leaves ffprobe
-        # running; a stalled CDN read has no rw timeout and would hang the
-        # process forever. Same on task cancellation (daemon shutdown).
-        if proc is not None and proc.returncode is None:
-            proc.kill()
-            try:
-                await asyncio.shield(proc.wait())
-            except (asyncio.CancelledError, Exception):
-                pass
-    return streams if isinstance(streams, list) else []
+    streams, _duration = await _ffprobe_media(url)
+    return streams
 
 
 def _source_info_from_streams(streams: list[dict[str, Any]]) -> dict[str, Any]:
@@ -171,15 +153,93 @@ def _source_info_from_streams(streams: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-async def _probe_best_audio_stream(manifest_url: str) -> int:
-    """Return the index of the highest-bitrate audio stream in the manifest.
+async def _ffprobe_media(url: str) -> tuple[list[dict[str, Any]], Any]:
+    """Return ``(audio streams, format duration)`` from one ffprobe run.
 
-    Runs ``ffprobe`` against ``manifest_url`` and picks the audio stream with
-    the highest ``bit_rate`` value. Falls back to index 0 on any error or when
-    the manifest contains only one audio stream.
+    The duration is ffprobe's raw ``format.duration`` string (None when
+    absent). Returns ``([], None)`` on any failure (ffprobe missing,
+    network error, expired URL, unparsable output).
     """
-    streams = await _ffprobe_audio_streams(manifest_url)
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg_tool("ffprobe"),
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams",
+            "-show_format",
+            "-select_streams", "a",
+            url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        data = json.loads(stdout)
+        streams = data.get("streams", [])
+        fmt = data.get("format") or {}
+    except Exception as e:
+        logger.debug("ffprobe failed for %s...: %s", url[:60], e)
+        return [], None
+    finally:
+        # wait_for cancels communicate() on timeout but leaves ffprobe
+        # running; a stalled CDN read has no rw timeout and would hang the
+        # process forever. Same on task cancellation (daemon shutdown).
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            try:
+                await asyncio.shield(proc.wait())
+            except (asyncio.CancelledError, Exception):
+                pass
+    if not isinstance(streams, list) or not isinstance(fmt, dict):
+        return [], None
+    return streams, fmt.get("duration")
 
+
+_ISO_DURATION = re.compile(
+    r"^P(?:(?P<d>[\d.]+)D)?(?:T(?:(?P<h>[\d.]+)H)?(?:(?P<m>[\d.]+)M)?(?:(?P<s>[\d.]+)S)?)?$"
+)
+
+
+def _parse_dash_duration(manifest: str) -> float | None:
+    """Return a DASH manifest's mediaPresentationDuration in seconds."""
+    try:
+        root = ET.fromstring(manifest)
+    except ET.ParseError:
+        return None
+    m = _ISO_DURATION.match(root.get("mediaPresentationDuration", "").strip())
+    if not m:
+        return None
+    parts = {k: float(v) for k, v in m.groupdict().items() if v}
+    seconds = (
+        parts.get("d", 0) * 86400
+        + parts.get("h", 0) * 3600
+        + parts.get("m", 0) * 60
+        + parts.get("s", 0)
+    )
+    return seconds or None
+
+
+async def _dash_duration(manifest_url: str) -> float | None:
+    """Fetch a DASH manifest and return its exact duration in seconds.
+
+    ffprobe reports a manifest's duration in whole seconds; the manifest
+    itself has milliseconds, which the seekable buffer needs to size the
+    track without cutting its last moments. None on any failure.
+    """
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as session, session.get(manifest_url) as resp:
+            if resp.status != 200:
+                return None
+            return _parse_dash_duration(await resp.text())
+    except (aiohttp.ClientError, TimeoutError, UnicodeDecodeError) as e:
+        logger.debug("DASH manifest fetch failed for %s...: %s", manifest_url[:60], e)
+        return None
+
+
+def _best_stream_index(streams: list[dict[str, Any]]) -> int:
+    """Index of the highest-bitrate entry in ``streams`` (0 when unsure)."""
     if len(streams) <= 1:
         return 0
 
@@ -199,6 +259,16 @@ async def _probe_best_audio_stream(manifest_url: str) -> int:
         len(streams), best_idx, best_bitrate,
     )
     return best_idx
+
+
+async def _probe_best_audio_stream(manifest_url: str) -> int:
+    """Return the index of the highest-bitrate audio stream in the manifest.
+
+    Runs ``ffprobe`` against ``manifest_url`` and picks the audio stream with
+    the highest ``bit_rate`` value. Falls back to index 0 on any error or when
+    the manifest contains only one audio stream.
+    """
+    return _best_stream_index(await _ffprobe_audio_streams(manifest_url))
 
 
 async def _stream_via_ffmpeg(
@@ -338,3 +408,112 @@ async def _stream_via_ffmpeg(
         except (ConnectionResetError, ConnectionError):
             pass
     return response
+
+
+# ffmpeg warnings logged per pass; a failing CDN can repeat one line per
+# segment for the rest of the track.
+FFMPEG_WARNING_LINES_MAX = 20
+
+
+@dataclass
+class PcmPassResult:
+    """Outcome of one ffmpeg pass: ``ok`` means ffmpeg reached the end."""
+
+    ok: bool
+    reason: str = ""
+
+
+async def _log_ffmpeg_stderr(stream: asyncio.StreamReader, label: str) -> None:
+    """Log ffmpeg's warnings as they arrive, so a dropped segment leaves a trace."""
+    logged = 0
+    while line := await stream.readline():
+        text = line.decode(errors="replace").strip()
+        if not text:
+            continue
+        if logged < FFMPEG_WARNING_LINES_MAX:
+            logger.warning("[PROXY] ffmpeg (%s): %s", label, text)
+        elif logged == FFMPEG_WARNING_LINES_MAX:
+            logger.warning("[PROXY] ffmpeg (%s): further warnings suppressed", label)
+        logged += 1
+
+
+async def _render_pcm(
+    source_url: str,
+    stream_index: int,
+    layout: "PcmLayout",
+    start_frame: int,
+    on_data: Callable[[bytes], Awaitable[bool]],
+    label: str,
+    input_opts: tuple[str, ...] = (),
+) -> PcmPassResult:
+    """Run one ffmpeg pass decoding ``source_url`` to raw PCM for ``on_data``.
+
+    Starts at ``start_frame`` (an input seek, so a resumed pass refetches
+    only what is missing) and decodes to ``layout``'s sample format.
+    ``on_data`` returns False once it wants no more audio; the pass then
+    stops early and counts as complete.
+
+    Returns ``ok=False`` with a reason when ffmpeg produces nothing within
+    DASH_FIRST_CHUNK_TIMEOUT, goes idle for DASH_STREAM_IDLE_TIMEOUT, or
+    exits non-zero. ffmpeg's warnings are logged as they arrive.
+    """
+    seek: tuple[str, ...] = ()
+    if start_frame:
+        seek = ("-ss", f"{start_frame / layout.sample_rate:.6f}")
+    proc = await asyncio.create_subprocess_exec(
+        ffmpeg_tool("ffmpeg"),
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "warning",
+        *input_opts,
+        *seek,
+        "-i",
+        source_url,
+        "-map",
+        f"0:a:{stream_index}",
+        "-ac",
+        str(layout.channels),
+        "-ar",
+        str(layout.sample_rate),
+        "-c:a",
+        layout.ffmpeg_codec,
+        "-f",
+        layout.ffmpeg_format,
+        "pipe:1",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert proc.stdout is not None and proc.stderr is not None
+    stderr_task = asyncio.create_task(_log_ffmpeg_stderr(proc.stderr, label))
+
+    got_data = False
+    try:
+        while True:
+            timeout = DASH_STREAM_IDLE_TIMEOUT if got_data else DASH_FIRST_CHUNK_TIMEOUT
+            try:
+                chunk = await asyncio.wait_for(
+                    proc.stdout.read(FFMPEG_READ_CHUNK), timeout=timeout
+                )
+            except TimeoutError:
+                return PcmPassResult(False, f"no data for {timeout}s")
+            if not chunk:
+                break
+            got_data = True
+            if not await on_data(chunk):
+                return PcmPassResult(True)
+        rc = await proc.wait()
+        if rc != 0:
+            return PcmPassResult(False, f"exit code {rc}")
+        return PcmPassResult(True)
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            try:
+                await asyncio.shield(proc.wait())
+            except (asyncio.CancelledError, Exception):
+                pass
+        try:
+            await asyncio.wait_for(asyncio.shield(stderr_task), timeout=1)
+        except (TimeoutError, asyncio.CancelledError, Exception):
+            stderr_task.cancel()

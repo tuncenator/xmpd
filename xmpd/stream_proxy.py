@@ -3,13 +3,13 @@
 Server serves GET /proxy/{provider}/{track_id} and picks a delivery mode
 from the resolved URL:
 
-  - Tidal DASH manifests (.mpd): MPD cannot consume these directly, so we
-    spawn ``ffmpeg`` to stitch the segments into a single FLAC stream that
-    we proxy back to the client.
-  - YouTube progressive audio: byte-proxied through ``ffmpeg`` with HTTP
-    reconnect flags. Redirecting MPD straight at the googlevideo CDN lets a
-    mid-song connection reset cut the track off; proxying keeps MPD on one
-    stable localhost connection while ffmpeg reconnects transparently.
+  - Tidal DASH manifests (.mpd) and YouTube progressive audio: ``ffmpeg``
+    decodes the track into a WAV file on disk whose size is fixed up front,
+    and the proxy serves it with Content-Length and byte ranges, so MPD can
+    seek. MPD cannot read DASH itself, and redirecting it straight at the
+    googlevideo CDN lets a mid-song connection reset cut the track off.
+    When the probe cannot tell the format or length, the track falls back
+    to an unbuffered, unseekable FLAC stream.
   - Everything else: HTTP 307 redirect to the freshly-resolved direct URL.
 
 Per-provider regex validates the track_id segment; per-provider TTL
@@ -31,10 +31,16 @@ import time
 import uuid
 from typing import Any
 
-from aiohttp import web
+from aiohttp import hdrs, web
 
 from xmpd import stream_transport
 from xmpd.exceptions import DashStreamError, URLRefreshError
+from xmpd.stream_buffer import (
+    StreamBufferCache,
+    TrackBuffer,
+    as_seconds,
+    layout_from_probe,
+)
 from xmpd.track_store import TrackStore
 
 logger = logging.getLogger(__name__)
@@ -43,6 +49,12 @@ DEFAULT_TTL_HOURS = 5
 MAX_CONCURRENT_STREAMS = 10
 DASH_MAX_RETRIES = 3
 DASH_RETRY_DELAYS = (2, 4, 8)
+# Resumes allowed per buffered track when ffmpeg keeps failing after making
+# progress (DASH_MAX_RETRIES bounds the failures in a row without progress).
+BUFFER_MAX_RESUMES = 10
+# Shortfall beyond this at a clean ffmpeg exit means audio went missing.
+BUFFER_SHORT_WARN_SECONDS = 0.5
+BUFFER_READ_CHUNK = 256 * 1024
 # Source-info probe cache: how long a failed probe result is served before a
 # /info request triggers a re-probe, and how many entries are kept.
 SOURCE_INFO_ERROR_RETRY_SECONDS = 60
@@ -180,6 +192,14 @@ class StreamRedirectProxy:
             tuple[str, str], tuple[asyncio.Task[None], str]
         ] = {}
 
+        # Seekable WAV buffers for DASH/YT tracks, and the in-flight task
+        # that opens each one, so concurrent requests for a track (MPD's
+        # prefetch, its album-art scan, a seek) share one ffmpeg.
+        self._buffers = StreamBufferCache()
+        self._buffer_tasks: dict[
+            tuple[str, str], asyncio.Task[TrackBuffer | None]
+        ] = {}
+
         # Setup routes
         self.app.router.add_get("/proxy/{provider}/{track_id}", self._handle_proxy_request)
         self.app.router.add_get(
@@ -207,6 +227,11 @@ class StreamRedirectProxy:
 
     async def stop(self) -> None:
         """Stop the aiohttp server gracefully."""
+        for task in self._buffer_tasks.values():
+            task.cancel()
+        self._buffer_tasks.clear()
+        self._buffers.close()
+
         if self._source_info_tasks:
             for task, _url in self._source_info_tasks.values():
                 task.cancel()
@@ -307,6 +332,7 @@ class StreamRedirectProxy:
             "service": "stream-proxy",
             "active_resolutions": self._active_resolutions,
             "active_streams": self._active_streams,
+            "buffered_tracks": len(self._buffers),
             "max_concurrent_resolutions": self.max_concurrent_streams,
             "resolution_semaphore_free": self._resolution_semaphore._value,
         })
@@ -363,12 +389,18 @@ class StreamRedirectProxy:
                 }
         except Exception as e:  # never let a probe task die silently
             entry = {"status": "error", "error": str(e)}
-        entry["stream_url"] = stream_url
-        entry["ts"] = time.time()
-        self._source_info[key] = entry
         current = self._source_info_tasks.get(key)
         if current is not None and current[0] is asyncio.current_task():
             self._source_info_tasks.pop(key)
+        self._store_source_info(key, stream_url, entry)
+
+    def _store_source_info(
+        self, key: tuple[str, str], stream_url: str, entry: dict[str, Any]
+    ) -> None:
+        """Cache a source-info entry, evicting the oldest past the cap."""
+        entry["stream_url"] = stream_url
+        entry["ts"] = time.time()
+        self._source_info[key] = entry
         if len(self._source_info) > SOURCE_INFO_CACHE_MAX:
             oldest = min(self._source_info, key=lambda k: self._source_info[k]["ts"])
             del self._source_info[oldest]
@@ -444,7 +476,8 @@ class StreamRedirectProxy:
             request: aiohttp request object
 
         Returns:
-            HTTP 307 Temporary Redirect or 200 streamed FLAC for DASH/YouTube
+            HTTP 307 Temporary Redirect, or for DASH/YouTube 200/206 seekable
+            WAV (200 streamed FLAC when the source can't be sized)
 
         Raises:
             HTTPNotFound: Unknown provider or track not in store
@@ -470,6 +503,13 @@ class StreamRedirectProxy:
             logger.warning(f"[PROXY:{req_id}] Invalid {provider} track_id: {track_id}")
             raise web.HTTPBadRequest(text=f"Invalid {provider} track_id: {track_id}")
 
+        # A buffer that is open or opening serves without touching the
+        # provider: MPD reopens the track to seek or to scan album art.
+        key = (provider, track_id)
+        buf = await self._existing_buffer(key)
+        if buf is not None:
+            return await self._serve_buffer(request, buf, req_id)
+
         # Try to acquire a resolution slot (non-blocking check first)
         if self._resolution_semaphore.locked():
             logger.warning(
@@ -487,32 +527,276 @@ class StreamRedirectProxy:
             provider, track_id, req_id
         )
 
+        # Streaming phase: runs outside the semaphore. YouTube progressive
+        # audio goes through ffmpeg with reconnect flags instead of a redirect
+        # to the googlevideo CDN: a direct redirect lets a mid-song connection
+        # reset cut the track off.
+        dash = _is_dash_manifest(stream_url)
+        if dash or provider == "yt":
+            input_opts = () if dash else stream_transport.FFMPEG_HTTP_RECONNECT_OPTS
+            buf = await self._open_buffer(
+                key, req_id, stream_url, duration_seconds, input_opts
+            )
+            if buf is not None:
+                return await self._serve_buffer(request, buf, req_id)
+            # Format or length unknown: stream unbuffered FLAC instead.
+            self._spawn_source_probe(provider, track_id, stream_url)
+            return await self._stream_with_retry(
+                request, stream_url, provider, track_id, req_id, duration_seconds,
+                input_opts=input_opts, probe=dash,
+            )
+
         # Populate the source-info cache in the background so /info answers
         # by the time a status widget polls it.
         self._spawn_source_probe(provider, track_id, stream_url)
-
-        # Streaming phase: runs outside the semaphore.
-        if _is_dash_manifest(stream_url):
-            return await self._stream_with_retry(
-                request, stream_url, provider, track_id, req_id, duration_seconds,
-                probe=True,
-            )
-
-        # YouTube progressive audio: byte-proxy through ffmpeg with reconnect
-        # flags instead of redirecting MPD at the googlevideo CDN. A direct
-        # redirect lets a mid-song connection reset cut the track off; proxying
-        # keeps MPD on one stable localhost connection while ffmpeg reconnects.
-        if provider == "yt":
-            return await self._stream_with_retry(
-                request, stream_url, provider, track_id, req_id, duration_seconds,
-                input_opts=stream_transport.FFMPEG_HTTP_RECONNECT_OPTS,
-            )
-
         logger.debug(
             f"[PROXY:{req_id}] Redirecting {provider}/{track_id} "
             f"-> {stream_url[:60]}..."
         )
         raise web.HTTPTemporaryRedirect(stream_url)
+
+    async def _existing_buffer(self, key: tuple[str, str]) -> TrackBuffer | None:
+        """Return the open buffer for ``key``, waiting for one being opened."""
+        task = self._buffer_tasks.get(key)
+        if task is not None:
+            try:
+                await asyncio.shield(task)
+            except Exception:
+                return None
+        return self._buffers.get(key)
+
+    async def _open_buffer(
+        self,
+        key: tuple[str, str],
+        req_id: str,
+        stream_url: str,
+        duration_seconds: float | int | None,
+        input_opts: tuple[str, ...],
+    ) -> TrackBuffer | None:
+        """Open a buffer for ``key``, sharing the work with concurrent callers.
+
+        Returns None when the probe cannot tell the format or length.
+        Raises HTTPBadGateway when ffmpeg produces no audio after retries.
+        """
+        task = self._buffer_tasks.get(key)
+        if task is None:
+            task = asyncio.create_task(
+                self._start_buffer(key, req_id, stream_url, duration_seconds, input_opts)
+            )
+            self._buffer_tasks[key] = task
+
+            def _forget(t: asyncio.Task[TrackBuffer | None]) -> None:
+                if self._buffer_tasks.get(key) is t:
+                    del self._buffer_tasks[key]
+
+            task.add_done_callback(_forget)
+        return await asyncio.shield(task)
+
+    async def _start_buffer(
+        self,
+        key: tuple[str, str],
+        req_id: str,
+        stream_url: str,
+        duration_seconds: float | int | None,
+        input_opts: tuple[str, ...],
+    ) -> TrackBuffer | None:
+        """Probe the source, create its buffer and wait for the first audio."""
+        provider, track_id = key
+        streams, format_duration = await stream_transport._ffprobe_media(stream_url)
+        if not streams:
+            logger.warning(
+                f"[PROXY:{req_id}] ffprobe found no audio in {provider}/{track_id}, "
+                f"streaming unbuffered"
+            )
+            return None
+        # The probe answers /info too, so no second ffprobe is needed.
+        self._store_source_info(
+            key, stream_url, stream_transport._source_info_from_streams(streams)
+        )
+        stream_index = stream_transport._best_stream_index(streams)
+        if _is_dash_manifest(stream_url):
+            # ffprobe rounds a manifest's duration down to whole seconds, which
+            # would cut the end off; without the manifest's own value, take the
+            # longer guess (any excess plays as silence).
+            exact = await stream_transport._dash_duration(stream_url)
+            if exact:
+                format_duration = exact
+            else:
+                guesses = [as_seconds(format_duration), as_seconds(duration_seconds)]
+                format_duration = max((g for g in guesses if g), default=None)
+        layout = layout_from_probe(
+            streams[stream_index], format_duration, duration_seconds
+        )
+        if layout is None:
+            logger.warning(
+                f"[PROXY:{req_id}] Unknown format or length for {provider}/{track_id}, "
+                f"streaming unbuffered"
+            )
+            return None
+
+        buf = self._buffers.create(key, layout)
+        logger.info(
+            f"[PROXY:{req_id}] Buffering {provider}/{track_id}: audio stream "
+            f"{stream_index}, {layout.sample_rate} Hz {layout.bits}-bit "
+            f"{layout.channels}ch, {layout.total_frames / layout.sample_rate:.1f}s "
+            f"({buf.total_size / 1e6:.1f} MB)"
+        )
+        buf.fill_task = asyncio.create_task(
+            self._fill_buffer(buf, req_id, stream_url, stream_index, input_opts)
+        )
+        await buf.wait_first_audio()
+        if buf.error is not None:
+            self._buffers.discard(buf)
+            raise web.HTTPBadGateway(text=f"Stream failed for {provider}/{track_id}")
+        self._buffers.watch_abandoned(buf)
+        return buf
+
+    async def _fill_buffer(
+        self,
+        buf: TrackBuffer,
+        req_id: str,
+        stream_url: str,
+        stream_index: int,
+        input_opts: tuple[str, ...],
+    ) -> None:
+        """Run ffmpeg passes until ``buf`` holds the whole track.
+
+        Each pass starts at ``buf.next_target()``: a reader's seek target, or
+        the next missing frame. A pass that fails (no data, stalled,
+        non-zero exit) is resumed where it stopped with a freshly resolved
+        URL, so a CDN hiccup costs a pause in the download rather than the
+        rest of the song. Gives up after DASH_MAX_RETRIES failures in a row
+        without progress or BUFFER_MAX_RESUMES in total; readers then stop
+        at what was written. Audio missing at a clean ffmpeg exit stays
+        silent and is logged.
+        """
+        provider, track_id = buf.key
+        label = f"{provider}/{track_id}"
+        rate = buf.layout.sample_rate
+        stalled = 0
+        failures = 0
+        try:
+            while (target := buf.next_target()) is not None:
+                buf.begin_pass(target)
+                buf.pass_task = asyncio.create_task(
+                    stream_transport._render_pcm(
+                        stream_url, stream_index, buf.layout, target, buf.append,
+                        label, input_opts=input_opts,
+                    )
+                )
+                try:
+                    result = await buf.pass_task
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        raise
+                    # A reader seeked far away: restart there.
+                    buf.stop_pass()
+                    result = stream_transport.PcmPassResult(True)
+                finally:
+                    buf.pass_task = None
+                reached = buf.cursor if buf.cursor is not None else target
+                silent = buf.end_pass(source_ended=result.ok)
+                if silent / rate > BUFFER_SHORT_WARN_SECONDS:
+                    logger.warning(
+                        f"[PROXY:{req_id}] ffmpeg ended {label} at {reached / rate:.1f}s, "
+                        f"{silent / rate:.1f}s early; that part stays silent"
+                    )
+                if result.ok:
+                    stalled = 0
+                    continue
+                failures += 1
+                stalled = 0 if reached > target else stalled + 1
+                if stalled > DASH_MAX_RETRIES or failures > BUFFER_MAX_RESUMES:
+                    logger.error(
+                        f"[PROXY:{req_id}] Giving up on {label} at "
+                        f"{reached / rate:.1f}s: {result.reason}"
+                    )
+                    await buf.fail(result.reason)
+                    return
+                delay = DASH_RETRY_DELAYS[min(max(stalled, 1), len(DASH_RETRY_DELAYS)) - 1]
+                logger.warning(
+                    f"[PROXY:{req_id}] ffmpeg failed for {label} at "
+                    f"{reached / rate:.1f}s ({result.reason}), resuming in {delay}s"
+                )
+                await asyncio.sleep(delay)
+                try:
+                    stream_url = await self._force_refresh_url(provider, track_id, req_id)
+                except (web.HTTPException, URLRefreshError):
+                    pass  # retry the URL we have
+            await buf.finish()
+        except asyncio.CancelledError:
+            await buf.fail("cancelled")
+            raise
+        except Exception as e:
+            logger.exception(f"[PROXY:{req_id}] Buffering {label} failed")
+            await buf.fail(str(e))
+
+    async def _serve_buffer(
+        self, request: web.Request, buf: TrackBuffer, req_id: str
+    ) -> web.StreamResponse:
+        """Serve ``buf`` (or the requested byte range) as it fills.
+
+        Bytes not written yet are waited for, so a seek past the download
+        point stalls only until ffmpeg gets there. If ffmpeg gives up first,
+        the connection is closed short of Content-Length and MPD moves on.
+        """
+        total = buf.total_size
+        ranged = hdrs.RANGE in request.headers
+        try:
+            start, stop, _ = request.http_range.indices(total)
+        except ValueError:
+            start, stop = total, total
+        if ranged and start >= stop:
+            raise web.HTTPRequestRangeNotSatisfiable(
+                headers={"Content-Range": f"bytes */{total}"}
+            )
+
+        response = web.StreamResponse(
+            status=206 if ranged else 200,
+            headers={"Content-Type": "audio/x-wav", "Accept-Ranges": "bytes"},
+        )
+        response.content_length = stop - start
+        if ranged:
+            response.headers["Content-Range"] = f"bytes {start}-{stop - 1}/{total}"
+            header = len(buf.header)
+            if start > header:
+                layout = buf.layout
+                at = (start - header) / layout.frame_bytes / layout.sample_rate
+                logger.info(
+                    f"[PROXY:{req_id}] Seek in {buf.key[0]}/{buf.key[1]} to {at:.1f}s"
+                )
+        await response.prepare(request)
+        if request.method == "HEAD":
+            return response
+
+        self._buffers.acquire(buf)
+        await self._increment_counter("_active_streams")
+        pos = start
+        try:
+            while pos < stop:
+                end = await buf.wait_readable(pos)
+                if end <= pos:
+                    logger.warning(
+                        f"[PROXY:{req_id}] Buffer for {buf.key[0]}/{buf.key[1]} "
+                        f"failed ({buf.error}), closing the connection"
+                    )
+                    if request.transport is not None:
+                        request.transport.close()
+                    return response
+                data = buf.read(pos, min(end, stop, pos + BUFFER_READ_CHUNK) - pos)
+                await response.write(data)
+                pos += len(data)
+        except (ConnectionResetError, asyncio.CancelledError):
+            logger.debug(
+                f"[PROXY:{req_id}] Client left {buf.key[0]}/{buf.key[1]} at byte {pos}"
+            )
+            return response
+        finally:
+            self._buffers.release(buf)
+            await self._decrement_counter("_active_streams")
+        await response.write_eof()
+        return response
 
     async def _stream_with_retry(
         self,

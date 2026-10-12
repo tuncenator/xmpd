@@ -1425,7 +1425,7 @@ def format_default(report: FlowReport, color: Any) -> str:
     if src is not None and src.selected is not None and src.provider != "local":
         lines.append(color("=== Proxy ===", "bold"))
         lines.append(
-            "Path:         ffmpeg -c:a flac -compression_level 0 -f flac (lossless re-encode)"
+            "Path:         ffmpeg decode to PCM, served as seekable WAV (lossless)"
         )
         lines.append("")
 
