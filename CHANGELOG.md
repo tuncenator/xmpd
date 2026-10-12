@@ -2,7 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- Seeking in Tidal and YouTube tracks. The proxy decodes each track into a WAV
+  file on disk whose size is known up front and serves byte ranges from it, so
+  MPD treats the stream as seekable. A seek past the decoded part restarts
+  ffmpeg at the seek point and fills the skipped part afterwards. See
+  [the stream proxy docs](docs/STREAM_PROXY.md#seekable-buffer).
+
 ### Fixed
+
+- A Tidal or YouTube stream that fails mid-track resumes where it stopped
+  instead of ending the song early, and ffmpeg's warnings reach the log. A
+  DASH segment ffmpeg couldn't fetch used to vanish without a trace, cutting a
+  few seconds out of the song.
+- MPD's album-art scan at each song change (from Now Playing bridges such as
+  `mpd-now-playable`) reads the same buffer instead of starting a second
+  Tidal download, which held MPD's replies for up to 12 seconds.
 
 - Auto-auth finds Firefox on macOS: the profile folder in
   `~/Library/Application Support/Firefox` and the macOS install IDs of Firefox

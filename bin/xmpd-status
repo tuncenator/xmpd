@@ -268,7 +268,7 @@ def classify_audio_quality(
 
     ``source_info`` (from the proxy's /info endpoint) is authoritative when
     present: it reflects the actual source codec before the proxy's lossless
-    FLAC re-encode, which MPD's 'audio' field cannot see. Without it, falls
+    PCM decode, which MPD's 'audio' field cannot see. Without it, falls
     back to MPD's 'audio' field (samplerate:bits:channels): float bit format
     means a lossy decode, YouTube tracks are assumed lossy (all YT serves
     today), and local files are sniffed via their header.
@@ -311,8 +311,8 @@ def classify_audio_quality(
     elif bit_fmt == "f":
         is_lossy = True
     elif track_type == "youtube":
-        # Proxy re-encodes YT to 24-bit FLAC, so MPD's bit depth reflects
-        # the re-encode, not the lossy source. Provider hint until the
+        # Proxy decodes YT to 24-bit PCM, so MPD's bit depth reflects
+        # the decode, not the lossy source. Provider hint until the
         # source probe answers; source_info overrides once available.
         is_lossy = True
 

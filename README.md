@@ -290,12 +290,12 @@ configuration, and `xmpd-doctor` diagnostics.
 
 | Source | Delivery to MPD |
 |---|---|
-| YouTube | ffmpeg streams FLAC over localhost with HTTP reconnect options |
-| Tidal DASH | ffprobe selects the highest-bitrate audio stream; ffmpeg delivers FLAC |
+| YouTube | ffmpeg decodes to a seekable WAV over localhost, with HTTP reconnect options |
+| Tidal DASH | ffprobe selects the highest-bitrate audio stream; ffmpeg decodes it to a seekable WAV |
 | Other direct provider URLs | HTTP 307 redirect to the upstream audio URL |
 | Local files | MPD reads its own music library |
 
-FLAC transport does not turn a lossy source into lossless audio. Search badges
+The lossless WAV transport does not turn a lossy source into lossless audio. Search badges
 reflect catalog metadata; source probes and the actual output configuration
 provide a more useful picture of what reaches your speakers:
 

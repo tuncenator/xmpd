@@ -82,9 +82,11 @@ def _no_real_ffprobe(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     """Keep background source-info probes from spawning real ffprobe.
 
     Any test that drives StreamRedirectProxy spawns a background ffprobe of
-    the (fake) stream URL for the /info cache; without this, tests leak real
-    subprocesses making real network requests. Tests that need probe results
-    re-patch ``_ffprobe_audio_streams`` themselves (see ``_patch_probe`` in
+    the (fake) stream URL for the /info cache, and probes it again to size the
+    seekable buffer; without this, tests leak real subprocesses making real
+    network requests. With no probe result the proxy takes its unbuffered
+    FLAC path. Tests that need probe results re-patch
+    ``_ffprobe_audio_streams`` / ``_ffprobe_media`` themselves (see ``_patch_probe`` in
     test_stream_proxy.py); tests that exercise the real function opt out via
     ``@pytest.mark.real_ffprobe``.
     """
@@ -96,9 +98,16 @@ def _no_real_ffprobe(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     async def _no_streams(_url: str) -> list:
         return []
 
-    monkeypatch.setattr(
-        sys.modules["xmpd.stream_transport"], "_ffprobe_audio_streams", _no_streams
-    )
+    async def _no_media(_url: str) -> tuple[list, None]:
+        return [], None
+
+    async def _no_duration(_url: str) -> None:
+        return None
+
+    transport = sys.modules["xmpd.stream_transport"]
+    monkeypatch.setattr(transport, "_ffprobe_audio_streams", _no_streams)
+    monkeypatch.setattr(transport, "_ffprobe_media", _no_media)
+    monkeypatch.setattr(transport, "_dash_duration", _no_duration)
 
 
 @pytest.fixture(autouse=True)

@@ -8,23 +8,57 @@ resolved lazily when MPD requests a track.
 
 | Resolved source | Delivery to MPD |
 |---|---|
-| YouTube progressive audio | HTTP 200, FLAC streamed through ffmpeg with HTTP reconnect options |
-| DASH manifest (`.mpd`, including Tidal) | HTTP 200, ffmpeg selects the highest-bitrate audio stream and assembles it as FLAC |
+| YouTube progressive audio | Seekable WAV, decoded by ffmpeg with HTTP reconnect options |
+| DASH manifest (`.mpd`, including Tidal) | Seekable WAV of the highest-bitrate audio stream, decoded by ffmpeg |
 | Other direct audio URL | HTTP 307 redirect; MPD streams directly from the CDN |
 
-`xmpd/stream_transport.py` owns ffmpeg/ffprobe subprocesses, FLAC header handling,
-and stream read timeouts. The proxy owns HTTP routing, URL resolution, caches,
-and retry policy. Audio is piped in memory; there is no on-disk audio cache or
-ICY metadata injection.
+`xmpd/stream_buffer.py` holds the seekable buffers, `xmpd/stream_transport.py`
+owns ffmpeg/ffprobe subprocesses and read timeouts, and the proxy owns HTTP
+routing, URL resolution, caches, and retry policy. There is no ICY metadata
+injection.
 
-Encoding YouTube's lossy audio as FLAC does not restore lost information.
+Decoding YouTube's lossy audio to PCM does not restore lost information.
 Quality indicators use the original source codec and properties, rather than
-mistaking the FLAC transport for a lossless source.
+mistaking the lossless transport for a lossless source.
+
+## Seekable buffer
+
+MPD can only seek a stream whose size it knows and whose server answers byte
+ranges. A compressed stream's size is unknown until it is fully encoded, so the
+proxy decodes to PCM instead and serves it as a WAV file:
+
+1. ffprobe reads the source's sample rate, channels, bit depth and duration.
+   For DASH the duration comes from the manifest's `mediaPresentationDuration`
+   (ffprobe rounds it down to whole seconds).
+2. That fixes the WAV size before any audio is decoded, so the first response
+   carries `Content-Length` and `Accept-Ranges: bytes`.
+3. ffmpeg decodes into a file in the system temp directory
+   (`xmpd-streams-<uid>`), at about 10x real time. Requests read from the file
+   and wait for bytes not decoded yet.
+
+Lossless sources keep their bit depth (16 or 24 bit); lossy sources decode to
+24 bit. A 16-bit 44.1 kHz track takes about 10 MB per minute on disk.
+
+The file fills in ranges. A request more than 20 seconds of audio ahead of the
+running ffmpeg pass stops that pass and starts one at the requested position
+(`-ss` is sample-exact on these sources); the skipped part is decoded
+afterwards. MPD reads a seekable stream into memory as fast as it can and asks
+for the parts it is missing itself, so a seek into decoded audio needs no
+request at all.
+
+Concurrent requests for one track (MPD's read-ahead, its album-art scan, a
+seek) share one buffer and one ffmpeg. Up to three finished buffers with no
+reader stay for 30 minutes, for seeks back and re-reads. A buffer that is still
+decoding with no reader for 30 seconds was skipped and is deleted.
+
+If ffprobe can't tell the format or duration, the track falls back to the
+older unbuffered path: ffmpeg re-encodes to FLAC and pipes it out as it goes,
+with no seeking.
 
 ## Routes
 
 ```text
-GET /proxy/{provider}/{track_id}       -> 200 audio/flac or 307 redirect
+GET /proxy/{provider}/{track_id}       -> 200/206 audio/x-wav, 200 audio/flac (fallback), or 307 redirect
 GET /proxy/{provider}/{track_id}/info  -> 200 JSON source information
 GET /health                          -> 200 JSON health and counters
 ```
@@ -52,8 +86,10 @@ returns 502.
 | Status | Meaning |
 |---|---|
 | 200 | Audio stream, source-info response, or health response |
+| 206 | Byte range of a buffered track |
 | 307 | Direct non-YouTube, non-DASH audio URL |
 | 400 | Invalid track identifier |
+| 416 | Byte range past the end of a buffered track |
 | 404 | Unknown provider or unregistered track |
 | 502 | Resolution failed without fallback, or streaming failed before audio started |
 | 503 | All URL-resolution slots are occupied |
@@ -64,21 +100,25 @@ up another resolution. `/health` exposes resolution and active-stream counters.
 
 ## Streaming recovery
 
-ffmpeg must produce its first chunk within 15 seconds before the proxy commits
-HTTP 200. An empty/failed start permits up to three retries, with delays of
-2, 4, and 8 seconds and a fresh URL resolution before each retry. Failure to
-refresh ends the retry sequence early.
+ffmpeg must produce audio within 15 seconds and must not go quiet for 30
+seconds mid-track. A buffered pass that fails, stalls or exits with an error is
+resumed where it stopped, after 2, 4 or 8 seconds and with a freshly resolved
+URL. The proxy gives up after three failures in a row without progress, or ten
+in total; readers then get what was decoded and the connection closes early,
+so MPD moves on. If ffmpeg produces nothing at all, the request returns 502.
+
+ffmpeg runs at `-loglevel warning` and its warnings go to the xmpd log. ffmpeg's
+DASH reader skips a segment it can't fetch and still exits cleanly; the warning
+and a "ended ... early" line (the missing audio is left silent at the end) are
+the only trace.
 
 YouTube inputs use ffmpeg's HTTP reconnect options for interrupted connections.
 The options intentionally omit reconnect-at-EOF so a completed track ends
-normally. A 30-second mid-stream idle timeout terminates a stalled subprocess.
-After HTTP 200 has started, a failure ends the response; the proxy cannot replace
-it with an HTTP error or restart the song transparently. Client disconnection
-also cleans up the subprocess.
+normally.
 
-The first FLAC header is patched with the provider's track duration when known,
-using the sample rate in that header. This lets MPD display duration despite
-ffmpeg writing to a non-seekable pipe.
+The unbuffered FLAC fallback keeps its older behavior: three retries before
+HTTP 200 is sent, and after that a failure ends the response. Its first FLAC
+header is patched with the provider's track duration so MPD can show a length.
 
 ## Source information
 
