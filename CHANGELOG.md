@@ -24,6 +24,9 @@
   Retries also drop the rejected URL from the 5-hour stream cache instead of
   getting the same dead URL back, and a source ffprobe can't open gets one
   fresh URL before the proxy gives up on buffering it.
+- The test suite no longer reaches a running daemon. Tests that run
+  `xmpctl play`, `queue`, `radio`, `like-toggle` and `sync` used to clear the
+  live MPD queue, start playback and flip a real Tidal like on every run.
 
 - Auto-auth finds Firefox on macOS: the profile folder in
   `~/Library/Application Support/Firefox` and the macOS install IDs of Firefox
