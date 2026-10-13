@@ -77,6 +77,26 @@ def mock_ssh_bidir(monkeypatch: pytest.MonkeyPatch) -> Callable[..., MagicMock]:
     return _install
 
 
+@pytest.fixture(scope="session")
+def _isolated_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("home")
+
+
+@pytest.fixture(autouse=True)
+def _no_live_daemon(_isolated_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep tests away from the developer's running xmpd and MPD.
+
+    bin/xmpctl finds the daemon through ~/.config/xmpd/sync_socket and MPD
+    through ~/.config/xmpd/config.yaml. Tests that run it as a subprocess
+    (play, queue, radio, like-toggle, sync) used to reach the live daemon,
+    clearing the queue, starting playback and flipping real likes. With HOME
+    pointing at an empty directory they get "daemon is not running" instead.
+    Tests that need their own HOME still set it themselves.
+    """
+    monkeypatch.setenv("HOME", str(_isolated_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(_isolated_home / ".config"))
+
+
 @pytest.fixture(autouse=True)
 def _no_real_ffprobe(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep background source-info probes from spawning real ffprobe.
