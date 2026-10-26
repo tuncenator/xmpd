@@ -27,6 +27,11 @@
 - The test suite no longer reaches a running daemon. Tests that run
   `xmpctl play`, `queue`, `radio`, `like-toggle` and `sync` used to clear the
   live MPD queue, start playback and flip a real Tidal like on every run.
+- The YouTube stream cache saves to disk again. A save failed with
+  "dictionary changed size during iteration" whenever the cache held an
+  expired URL or another thread resolved a track mid-save. Saves now skip
+  expired entries without deleting them mid-loop, run under a lock, and
+  replace the file atomically.
 
 - Auto-auth finds Firefox on macOS: the profile folder in
   `~/Library/Application Support/Firefox` and the macOS install IDs of Firefox

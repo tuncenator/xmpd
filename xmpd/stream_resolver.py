@@ -9,6 +9,8 @@ after approximately 6 hours, so caching is limited to 5 hours by default.
 import concurrent.futures
 import json
 import logging
+import os
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -65,6 +67,9 @@ class StreamResolver:
             cache_file: Optional path to JSON file for persistent cache storage.
         """
         self._cache: dict[str, CachedURL] = {}
+        # Guards _cache and the cache file: the proxy and batch resolves run in
+        # worker threads.
+        self._lock = threading.RLock()
         self._cache_hours = cache_hours
         self._cache_file = Path(cache_file).expanduser() if cache_file else None
         self.should_stop = should_stop_callback or (lambda: False)
@@ -89,10 +94,10 @@ class StreamResolver:
             Stream URL string if successful, None if video unavailable or extraction fails
         """
         # Check cache first
-        if self._is_cache_valid(video_id):
-            cached = self._cache[video_id]
-            logger.debug(f"Cache hit for {video_id}")
-            return cached.url
+        with self._lock:
+            if self._is_cache_valid(video_id):
+                logger.debug(f"Cache hit for {video_id}")
+                return self._cache[video_id].url
 
         logger.debug(f"Cache miss for {video_id}, extracting URL")
 
@@ -101,11 +106,12 @@ class StreamResolver:
 
         if url:
             # Cache the result
-            self._cache[video_id] = CachedURL(
-                url=url,
-                cached_at=datetime.now(),
-                video_id=video_id
-            )
+            with self._lock:
+                self._cache[video_id] = CachedURL(
+                    url=url,
+                    cached_at=datetime.now(),
+                    video_id=video_id
+                )
             logger.debug(f"Cached URL for {video_id}")
 
             # Persist cache if enabled
@@ -299,20 +305,23 @@ class StreamResolver:
         Returns:
             True if cache hit and not expired, False otherwise
         """
-        if video_id not in self._cache:
-            return False
+        with self._lock:
+            cached = self._cache.get(video_id)
+            if cached is None:
+                return False
 
-        cached = self._cache[video_id]
-        age = datetime.now() - cached.cached_at
-        max_age = timedelta(hours=self._cache_hours)
+            if not self._is_fresh(cached):
+                age = datetime.now() - cached.cached_at
+                logger.debug(f"Cache expired for {video_id} (age: {age.total_seconds()/3600:.1f}h)")
+                # Remove expired entry
+                del self._cache[video_id]
+                return False
 
-        if age > max_age:
-            logger.debug(f"Cache expired for {video_id} (age: {age.total_seconds()/3600:.1f}h)")
-            # Remove expired entry
-            del self._cache[video_id]
-            return False
+            return True
 
-        return True
+    def _is_fresh(self, cached: CachedURL) -> bool:
+        """Return True if ``cached`` is younger than the cache TTL."""
+        return datetime.now() - cached.cached_at <= timedelta(hours=self._cache_hours)
 
     def invalidate(self, video_id: str) -> None:
         """Drop the cached URL for one video so the next resolve re-extracts.
@@ -320,8 +329,9 @@ class StreamResolver:
         Used when a cached URL was rejected (e.g. 403), which can happen well
         before the cache TTL runs out.
         """
-        if self._cache.pop(video_id, None) is None:
-            return
+        with self._lock:
+            if self._cache.pop(video_id, None) is None:
+                return
         logger.debug(f"Invalidated cached URL for {video_id}")
         if self._cache_file:
             self._save_cache()
@@ -331,8 +341,9 @@ class StreamResolver:
 
         This can be useful for testing or to force re-extraction of all URLs.
         """
-        count = len(self._cache)
-        self._cache.clear()
+        with self._lock:
+            count = len(self._cache)
+            self._cache.clear()
         logger.info(f"Cleared cache ({count} entries)")
 
     def get_cache_stats(self) -> dict[str, int]:
@@ -341,10 +352,11 @@ class StreamResolver:
         Returns:
             Dict with cache_size and expired_count
         """
-        total = len(self._cache)
-        expired = sum(
-            1 for video_id in list(self._cache.keys()) if not self._is_cache_valid(video_id)
-        )
+        with self._lock:
+            total = len(self._cache)
+            expired = sum(
+                1 for video_id in list(self._cache.keys()) if not self._is_cache_valid(video_id)
+            )
 
         return {
             'cache_size': total,
@@ -396,7 +408,8 @@ class StreamResolver:
         """Save cache to JSON file.
 
         Saves current cache state to disk for persistence across restarts.
-        Only saves valid (non-expired) entries.
+        Only saves valid (non-expired) entries. The file is replaced atomically
+        so a crash mid-write cannot leave it truncated.
         """
         if not self._cache_file:
             return
@@ -405,20 +418,25 @@ class StreamResolver:
             # Ensure directory exists
             self._cache_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # Convert cache to JSON-serializable format
-            cache_data = {}
-            for video_id, cached_url in self._cache.items():
-                # Only save non-expired entries
-                if self._is_cache_valid(video_id):
-                    cache_data[video_id] = {
+            # Hold the lock through the write so concurrent saves can't
+            # interleave on the temp file.
+            with self._lock:
+                # Convert cache to JSON-serializable format, skipping expired
+                # entries without deleting them mid-iteration
+                cache_data = {
+                    video_id: {
                         'url': cached_url.url,
                         'cached_at': cached_url.cached_at.isoformat(),
                         'video_id': cached_url.video_id
                     }
+                    for video_id, cached_url in self._cache.items()
+                    if self._is_fresh(cached_url)
+                }
 
-            # Write to file
-            with open(self._cache_file, 'w') as f:
-                json.dump(cache_data, f, indent=2)
+                tmp = self._cache_file.with_suffix(self._cache_file.suffix + '.tmp')
+                with open(tmp, 'w') as f:
+                    json.dump(cache_data, f, indent=2)
+                os.replace(tmp, self._cache_file)
 
             logger.debug(f"Saved {len(cache_data)} cached URLs to {self._cache_file}")
 
