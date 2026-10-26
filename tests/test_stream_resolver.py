@@ -2,14 +2,13 @@
 Tests for xmpd/stream_resolver.py - Stream URL resolver with yt-dlp integration.
 """
 
-import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-import pytest
 import yt_dlp
 
-from xmpd.stream_resolver import StreamResolver, CachedURL
+from xmpd.stream_resolver import CachedURL, StreamResolver
 
 
 class TestCachedURL:
@@ -107,6 +106,33 @@ class TestStreamResolverCaching:
         reloaded = StreamResolver(cache_file=str(cache_file))
         assert "vid1" not in reloaded._cache
         assert "vid2" in reloaded._cache
+
+    def test_save_cache_with_expired_entry(self, tmp_path):
+        """An expired entry is left out of the file instead of aborting the save."""
+        cache_file = tmp_path / "stream_cache.json"
+        resolver = StreamResolver(cache_hours=5, cache_file=str(cache_file))
+        resolver._cache["old"] = CachedURL("url-old", datetime.now() - timedelta(hours=6), "old")
+        resolver._cache["new"] = CachedURL("url-new", datetime.now(), "new")
+
+        resolver._save_cache()
+
+        reloaded = StreamResolver(cache_file=str(cache_file))
+        assert set(reloaded._cache) == {"new"}
+
+    def test_save_cache_during_concurrent_writes(self, tmp_path):
+        """Saves racing with cache writes in other threads neither fail nor corrupt the file."""
+        cache_file = tmp_path / "stream_cache.json"
+        resolver = StreamResolver(cache_file=str(cache_file))
+        ids = [f"vid{i}" for i in range(2000)]
+
+        with patch.object(resolver, '_extract_url', side_effect=lambda v: f"url-{v}"), \
+                patch('xmpd.stream_resolver.logger') as mock_logger, \
+                ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(resolver.resolve_video_id, ids))
+
+        mock_logger.warning.assert_not_called()
+        reloaded = StreamResolver(cache_file=str(cache_file))
+        assert set(reloaded._cache) == set(ids)
 
     def test_get_cache_stats(self):
         """Test getting cache statistics."""
