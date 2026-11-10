@@ -7,6 +7,7 @@ files compatible with ytmusicapi browser authentication.
 import hashlib
 import json
 import logging
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -65,6 +66,17 @@ _AUTH_COOKIE_NAMES = {
 }
 
 _ORIGIN = "https://music.youtube.com"
+
+# Netscape cookies.txt that the stream resolver hands to yt-dlp, written next
+# to browser.json on every auth refresh. yt-dlp reads this saved copy instead
+# of opening Firefox's profile for every song, so a moment where Firefox's
+# files can't be read (macOS privacy checks, a profile mid-update) no longer
+# fails each stream until the daemon restarts.
+YT_COOKIE_FILE = "yt_cookies.txt"
+
+# Firefox 142 moved the cookie database to schema 16 and started storing
+# expiry in milliseconds.
+_MS_EXPIRY_SCHEMA = 16
 
 
 class FirefoxCookieExtractor:
@@ -202,7 +214,8 @@ class FirefoxCookieExtractor:
             domain: Domain to filter cookies for.
 
         Returns:
-            List of cookie dicts with keys: name, value, host, expiry, isSecure.
+            List of cookie dicts with keys: name, value, host, path, expiry
+            (seconds, 0 for a session cookie), isSecure.
 
         Raises:
             CookieExtractionError: If extraction fails.
@@ -234,8 +247,14 @@ class FirefoxCookieExtractor:
 
             try:
                 cookies = self._query_cookies_with_retry(conn, domain, origin_filter)
+                schema = conn.execute("PRAGMA user_version").fetchone()[0]
+            except sqlite3.Error as e:
+                raise CookieExtractionError(f"Failed to query cookie database: {e}") from e
             finally:
                 conn.close()
+            if schema >= _MS_EXPIRY_SCHEMA:
+                for cookie in cookies:
+                    cookie["expiry"] //= 1000
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -274,7 +293,7 @@ class FirefoxCookieExtractor:
         for attempt in range(max_retries):
             try:
                 cursor = conn.execute(
-                    "SELECT name, value, host, expiry, isSecure "
+                    "SELECT name, value, host, path, expiry, isSecure "
                     "FROM moz_cookies "
                     "WHERE host LIKE ? AND originAttributes = ?",
                     (f"%{domain}", origin_filter),
@@ -339,11 +358,13 @@ class FirefoxCookieExtractor:
 
         return True
 
-    def build_browser_json(self, output_path: Path) -> Path:
+    def build_browser_json(self, output_path: Path, cookie_file: Path | None = None) -> Path:
         """Extract cookies and write a browser.json file for ytmusicapi.
 
         Args:
             output_path: Where to write the browser.json file.
+            cookie_file: If given, also write the same cookies there as a
+                Netscape cookies.txt for yt-dlp (see write_cookie_file).
 
         Returns:
             The output path.
@@ -414,4 +435,60 @@ class FirefoxCookieExtractor:
         output_path.write_text(json.dumps(headers, indent=4) + "\n")
 
         logger.info("Wrote browser.json to %s", output_path)
+
+        if cookie_file is not None:
+            write_cookie_file(cookies, cookie_file)
+
         return output_path
+
+
+def write_cookie_file(cookies: list[dict], path: Path) -> Path:
+    """Write cookies as a Netscape cookies.txt that yt-dlp can load.
+
+    The file is replaced atomically and readable only by its owner, since it
+    holds a signed-in session.
+
+    Args:
+        cookies: Cookie dicts from FirefoxCookieExtractor.extract_cookies().
+        path: Where to write the file.
+
+    Returns:
+        The path written.
+    """
+    lines = [
+        "# Netscape HTTP Cookie File",
+        "# Written by xmpd from Firefox; replaced on each auth refresh.",
+        "",
+    ]
+    written = 0
+    for c in cookies:
+        fields = (c["name"], c["value"], c["host"], c.get("path") or "/")
+        # A tab or newline would break the line-per-cookie format.
+        if any(ch in f for f in fields for ch in "\t\r\n"):
+            continue
+        host = c["host"]
+        lines.append(
+            "\t".join(
+                (
+                    host,
+                    "TRUE" if host.startswith(".") else "FALSE",
+                    c.get("path") or "/",
+                    "TRUE" if c["isSecure"] else "FALSE",
+                    str(max(int(c["expiry"]), 0)),
+                    c["name"],
+                    c["value"],
+                )
+            )
+        )
+        written += 1
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(tmp, path)
+
+    logger.info("Wrote %d cookies for yt-dlp to %s", written, path)
+    return path

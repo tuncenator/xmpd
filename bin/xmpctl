@@ -1077,7 +1077,7 @@ def cmd_auth(provider: str, manual: bool = False) -> None:
                 sys.exit(1)
         else:
             # Cookie extraction path (was --auto, now the default for yt)
-            from xmpd.auth.ytmusic_cookie import FirefoxCookieExtractor
+            from xmpd.auth.ytmusic_cookie import YT_COOKIE_FILE, FirefoxCookieExtractor
             from xmpd.config import get_config_dir, load_config
             from xmpd.exceptions import CookieExtractionError
 
@@ -1092,7 +1092,9 @@ def cmd_auth(provider: str, manual: bool = False) -> None:
                 )
 
                 output_path = get_config_dir() / "browser.json"
-                extractor.build_browser_json(output_path)
+                extractor.build_browser_json(
+                    output_path, cookie_file=get_config_dir() / YT_COOKIE_FILE
+                )
 
                 print(
                     colorize(

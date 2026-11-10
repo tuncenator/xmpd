@@ -78,6 +78,7 @@ def _create_cookie_db(
         "  name TEXT NOT NULL,"
         "  value TEXT NOT NULL,"
         "  host TEXT NOT NULL,"
+        "  path TEXT NOT NULL DEFAULT '/',"
         "  expiry INTEGER NOT NULL,"
         "  isSecure INTEGER NOT NULL,"
         "  originAttributes TEXT NOT NULL DEFAULT ''"
@@ -337,7 +338,7 @@ class TestCookieDatabaseEdgeCases:
         conn = sqlite3.connect(profile_dir / "cookies.sqlite")
         conn.execute(
             "CREATE TABLE moz_cookies ("
-            "  id INTEGER PRIMARY KEY, name TEXT, value TEXT, host TEXT,"
+            "  id INTEGER PRIMARY KEY, name TEXT, value TEXT, host TEXT, path TEXT DEFAULT '/',"
             "  expiry INTEGER, isSecure INTEGER, originAttributes TEXT DEFAULT '')"
         )
         conn.execute(
@@ -531,7 +532,7 @@ class TestValidationEdgeCases:
         conn = sqlite3.connect(profile_dir / "cookies.sqlite")
         conn.execute(
             "CREATE TABLE moz_cookies ("
-            "  id INTEGER PRIMARY KEY, name TEXT, value TEXT, host TEXT,"
+            "  id INTEGER PRIMARY KEY, name TEXT, value TEXT, host TEXT, path TEXT DEFAULT '/',"
             "  expiry INTEGER, isSecure INTEGER, originAttributes TEXT DEFAULT '')"
         )
         for name in ["SID", "HSID", "SSID", "SAPISID", "__Secure-3PAPISID"]:

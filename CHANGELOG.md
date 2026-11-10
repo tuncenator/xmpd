@@ -12,6 +12,16 @@
 
 ### Fixed
 
+- YouTube playback no longer stops when the daemon briefly can't read
+  Firefox's files. yt-dlp used to open the Firefox profile for every song; on
+  failure each track got a 502, MPD skipped through the whole queue in a
+  second and stopped. Auto-auth now saves the cookies to
+  `~/.config/xmpd/yt_cookies.txt` (owner-only) and yt-dlp reads that copy. It
+  also holds only the cookies of the configured browser and container.
+- A desktop notification says when five YouTube tracks in a row fail to
+  resolve, instead of playback stopping without a word.
+- Firefox 142+ cookie expiry (stored in milliseconds) is read correctly, so an
+  expired session cookie is caught before auth refresh trusts it.
 - A Tidal or YouTube stream that fails mid-track resumes where it stopped
   instead of ending the song early, and ffmpeg's warnings reach the log. A
   DASH segment ffmpeg couldn't fetch used to vanish without a trace, cutting a

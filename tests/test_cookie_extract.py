@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from xmpd.auth.ytmusic_cookie import _ORIGIN, FirefoxCookieExtractor
+from xmpd.auth.ytmusic_cookie import _ORIGIN, FirefoxCookieExtractor, write_cookie_file
 from xmpd.exceptions import CookieExtractionError
 
 # ---------------------------------------------------------------------------
@@ -53,6 +53,7 @@ def _create_cookie_db(db_path: Path, cookies: list[dict] | None = None) -> None:
         "  name TEXT NOT NULL,"
         "  value TEXT NOT NULL,"
         "  host TEXT NOT NULL,"
+        "  path TEXT NOT NULL DEFAULT '/',"
         "  expiry INTEGER NOT NULL,"
         "  isSecure INTEGER NOT NULL,"
         "  originAttributes TEXT NOT NULL DEFAULT ''"
@@ -406,6 +407,89 @@ class TestBuildBrowserJson:
         output = tmp_path / "deep" / "nested" / "browser.json"
         ext.build_browser_json(output)
         assert output.exists()
+
+
+# ---------------------------------------------------------------------------
+# Tests: yt-dlp cookie file
+# ---------------------------------------------------------------------------
+
+
+class TestCookieFile:
+    def test_build_browser_json_writes_cookie_file(
+        self, firefox_home: Path, tmp_path: Path
+    ) -> None:
+        from yt_dlp.cookies import YoutubeDLCookieJar
+
+        ext = _make_extractor(firefox_home)
+        cookie_file = tmp_path / "yt_cookies.txt"
+        ext.build_browser_json(tmp_path / "browser.json", cookie_file=cookie_file)
+
+        assert cookie_file.stat().st_mode & 0o777 == 0o600
+        jar = YoutubeDLCookieJar(str(cookie_file))
+        jar.load()
+        by_name = {c.name: c for c in jar}
+        assert by_name["SID"].value == "sid_val"  # not the container's SID
+        assert by_name["SID"].domain == ".youtube.com"
+        assert by_name["SSID"].secure
+        assert len(jar) == 7
+
+    def test_no_cookie_file_unless_asked(self, firefox_home: Path, tmp_path: Path) -> None:
+        ext = _make_extractor(firefox_home)
+        with patch("xmpd.auth.ytmusic_cookie.write_cookie_file") as write:
+            ext.build_browser_json(tmp_path / "browser.json")
+        write.assert_not_called()
+
+    def test_no_cookie_file_when_validation_fails(
+        self, firefox_home: Path, tmp_path: Path
+    ) -> None:
+        db_path = firefox_home / "4wkrywqj.dev-edition-default" / "cookies.sqlite"
+        db_path.unlink()
+        _create_cookie_db(db_path, cookies=[])
+        ext = _make_extractor(firefox_home)
+        with pytest.raises(CookieExtractionError):
+            ext.build_browser_json(tmp_path / "browser.json", cookie_file=tmp_path / "c.txt")
+        assert not (tmp_path / "c.txt").exists()
+
+    def test_millisecond_expiry_converted(self, firefox_home: Path) -> None:
+        """Firefox 142+ (schema 16) stores expiry in ms; expired cookies must show as expired."""
+        db_path = firefox_home / "4wkrywqj.dev-edition-default" / "cookies.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE moz_cookies SET expiry = expiry * 1000")
+        conn.execute("PRAGMA user_version = 17")
+        conn.commit()
+        conn.close()
+
+        ext = _make_extractor(firefox_home)
+        cookies = ext.extract_cookies()
+        now = int(time.time())
+        assert all(now < c["expiry"] < now + 86400 * 400 for c in cookies)
+
+    def test_seconds_expiry_untouched_on_old_schema(self, firefox_home: Path) -> None:
+        ext = _make_extractor(firefox_home)
+        cookies = ext.extract_cookies()
+        now = int(time.time())
+        assert all(now < c["expiry"] < now + 86400 * 400 for c in cookies)
+
+    def test_write_cookie_file_format(self, tmp_path: Path) -> None:
+        path = tmp_path / "c.txt"
+        write_cookie_file(
+            [
+                {"name": "A", "value": "1", "host": ".youtube.com", "path": "/",
+                 "expiry": 2000000000, "isSecure": 1},
+                {"name": "B", "value": "2", "host": "music.youtube.com", "path": "/x",
+                 "expiry": 0, "isSecure": 0},
+                {"name": "C", "value": "bad\tvalue", "host": ".youtube.com", "path": "/",
+                 "expiry": 0, "isSecure": 0},
+            ],
+            path,
+        )
+        lines = path.read_text().splitlines()
+        rows = [ln.split("\t") for ln in lines if ln and not ln.startswith("#")]
+        assert rows == [
+            [".youtube.com", "TRUE", "/", "TRUE", "2000000000", "A", "1"],
+            ["music.youtube.com", "FALSE", "/x", "FALSE", "0", "B", "2"],
+        ]
+        assert not (tmp_path / "c.txt.tmp").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -1285,7 +1285,7 @@ class TestAutoAuthRefresh:
             patch("xmpd.daemon.FirefoxCookieExtractor") as mock_ext_cls,
         ):
             mock_ext_cls.return_value.build_browser_json.side_effect = (
-                lambda p: Path(p).write_text("{}")
+                lambda p, **_: Path(p).write_text("{}")
             )
             assert daemon._attempt_auto_refresh() is True
 
@@ -1293,6 +1293,43 @@ class TestAutoAuthRefresh:
         assert daemon.state["auto_refresh_failures"] == 0
         assert daemon.state["last_auto_refresh"] is not None
         assert (config_dir / "browser.json").exists()
+
+    def test_attempt_refresh_writes_yt_dlp_cookie_file(self, tmp_path):
+        config_dir = tmp_path / "config"
+        yt = _make_yt_provider()
+        yt.refresh_auth.return_value = True
+        yt.has_live_session.return_value = True
+        daemon = self._enabled_daemon(tmp_path, yt)
+
+        with (
+            patch("xmpd.daemon.get_config_dir", return_value=config_dir),
+            patch("xmpd.daemon.FirefoxCookieExtractor") as mock_ext_cls,
+        ):
+            mock_ext_cls.return_value.build_browser_json.side_effect = (
+                lambda p, **_: Path(p).write_text("{}")
+            )
+            daemon._attempt_auto_refresh()
+
+        kwargs = mock_ext_cls.return_value.build_browser_json.call_args.kwargs
+        assert kwargs["cookie_file"] == config_dir / "yt_cookies.txt"
+
+    def test_resolver_gets_cookie_file_when_auto_auth_on(self, tmp_path):
+        config_dir = tmp_path / "config"
+        with patch("xmpd.daemon.get_config_dir", return_value=config_dir):
+            daemon = self._enabled_daemon(tmp_path, _make_yt_provider())
+            assert daemon._yt_cookie_file() == config_dir / "yt_cookies.txt"
+
+    def test_resolver_reads_firefox_when_auto_auth_off(self, tmp_path):
+        daemon = _make_daemon(tmp_path)
+        assert daemon._yt_cookie_file() is None
+
+    def test_stream_failure_notification(self, tmp_path):
+        daemon = self._enabled_daemon(tmp_path, _make_yt_provider())
+        with patch("xmpd.daemon.send_notification") as notify:
+            daemon._notify_streams_failing("ERROR: could not find firefox cookies database")
+        title, body = notify.call_args.args[:2]
+        assert "YouTube" in title
+        assert "could not find firefox cookies database" in body
 
     def test_attempt_refresh_extraction_failure(self, tmp_path):
         config_dir = tmp_path / "config"
@@ -1325,7 +1362,7 @@ class TestAutoAuthRefresh:
             patch("xmpd.daemon.FirefoxCookieExtractor") as mock_ext_cls,
         ):
             mock_ext_cls.return_value.build_browser_json.side_effect = (
-                lambda p: Path(p).write_text("{}")
+                lambda p, **_: Path(p).write_text("{}")
             )
             assert daemon._attempt_auto_refresh() is False
 
