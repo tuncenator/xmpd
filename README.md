@@ -183,8 +183,11 @@ yt:
 ```
 
 The daemon refreshes browser credentials at startup, periodically, and after an
-authentication failure before sync. YouTube stream resolution also uses Firefox
-cookies through yt-dlp, which can fetch its EJS challenge solver on demand.
+authentication failure before sync. Each refresh also saves the cookies to
+`~/.config/xmpd/yt_cookies.txt`, which yt-dlp uses to resolve YouTube streams,
+so a moment where Firefox's files can't be read does not stop playback. With
+auto-auth off, yt-dlp reads Firefox directly. yt-dlp can fetch its EJS
+challenge solver on demand.
 
 ## Everyday use
 

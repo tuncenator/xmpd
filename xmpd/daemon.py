@@ -22,7 +22,7 @@ from typing import Any
 from mpd import MPDClient as MPDClientBase
 
 from xmpd.audio_flow import set_ffmpeg_dir
-from xmpd.auth.ytmusic_cookie import FirefoxCookieExtractor
+from xmpd.auth.ytmusic_cookie import YT_COOKIE_FILE, FirefoxCookieExtractor
 from xmpd.commands import playback, queries, ratings
 from xmpd.config import get_config_dir, load_config
 from xmpd.config import get_playlist_prefixes as _build_playlist_prefix
@@ -98,6 +98,8 @@ class XMPDaemon:
                 cache_hours=self.config["stream_cache_hours"],
                 should_stop_callback=lambda: not self._running,
                 cache_file=str(cache_file),
+                cookie_file=self._yt_cookie_file(),
+                on_repeated_failure=self._notify_streams_failing,
             )
 
             # Initialize proxy components if enabled
@@ -596,9 +598,12 @@ class XMPDaemon:
                 profile=self.auto_auth_config.get("profile"),
                 container=self.auto_auth_config.get("container"),
             )
-            # Write to a temp file first, then rename for atomicity.
+            # Write to a temp file first, then rename for atomicity. The
+            # stream resolver's cookie file is written from the same read.
             tmp_path = browser_json.with_suffix(".json.tmp")
-            extractor.build_browser_json(tmp_path)
+            extractor.build_browser_json(
+                tmp_path, cookie_file=get_config_dir() / YT_COOKIE_FILE
+            )
             tmp_path.rename(browser_json)
         except CookieExtractionError as e:
             logger.error("Auto-auth: cookie extraction failed: %s", e)
@@ -635,6 +640,27 @@ class XMPDaemon:
         self.state["auto_refresh_failures"] = self.state.get("auto_refresh_failures", 0) + 1
         self._save_state()
         return False
+
+    def _yt_cookie_file(self) -> Path | None:
+        """Cookie file for yt-dlp, or None when auto-auth is off.
+
+        Only auto-auth keeps the file fresh. Without it a leftover file would
+        go stale, so yt-dlp reads Firefox directly instead.
+        """
+        yt_section = self.config.get("yt", {})
+        auto_auth = yt_section.get("auto_auth", {}) if isinstance(yt_section, dict) else {}
+        if not auto_auth.get("enabled", False):
+            return None
+        return get_config_dir() / YT_COOKIE_FILE
+
+    def _notify_streams_failing(self, error: str) -> None:
+        """Desktop-notify the user that YouTube tracks are failing to resolve."""
+        send_notification(
+            "xmpd: YouTube tracks won't play",
+            f"Stream resolution keeps failing, so MPD skips YouTube tracks. "
+            f"Last error: {error[:200]}",
+            urgency="normal",
+        )
 
     def _notify_refresh_failed(self) -> None:
         """Desktop-notify the user that auto cookie refresh failed."""

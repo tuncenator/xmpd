@@ -7,6 +7,7 @@ after approximately 6 hours, so caching is limited to 5 hours by default.
 """
 
 import concurrent.futures
+import io
 import json
 import logging
 import os
@@ -21,6 +22,12 @@ from pathlib import Path
 import yt_dlp
 
 logger = logging.getLogger(__name__)
+
+# Consecutive failed extractions (not counting per-video problems such as a
+# private or removed video) before on_repeated_failure fires. MPD skips a
+# track it can't open in under a second, so a broken resolver empties the
+# queue and stops playback without the user ever hearing why.
+FAILURE_STREAK_ALERT = 5
 
 
 @dataclass
@@ -58,6 +65,8 @@ class StreamResolver:
         cache_hours: int = 5,
         should_stop_callback: Callable[[], bool] | None = None,
         cache_file: str | None = None,
+        cookie_file: str | Path | None = None,
+        on_repeated_failure: Callable[[str], None] | None = None,
     ):
         """Initialize resolver with cache duration.
 
@@ -65,6 +74,12 @@ class StreamResolver:
             cache_hours: How long to cache URLs before re-extraction (default: 5 hours)
             should_stop_callback: Callback returning True when resolution should be cancelled.
             cache_file: Optional path to JSON file for persistent cache storage.
+            cookie_file: Netscape cookies.txt to give yt-dlp, written by auto-auth.
+                While it is missing or unreadable, yt-dlp reads Firefox's
+                profile directly instead.
+            on_repeated_failure: Called once, with the last error, when
+                FAILURE_STREAK_ALERT extractions fail in a row. Re-armed by
+                the next success.
         """
         self._cache: dict[str, CachedURL] = {}
         # Guards _cache and the cache file: the proxy and batch resolves run in
@@ -73,6 +88,10 @@ class StreamResolver:
         self._cache_hours = cache_hours
         self._cache_file = Path(cache_file).expanduser() if cache_file else None
         self.should_stop = should_stop_callback or (lambda: False)
+        self._cookie_file = Path(cookie_file).expanduser() if cookie_file else None
+        self._using_cookie_file: bool | None = None  # last source used, for logging changes
+        self._on_repeated_failure = on_repeated_failure
+        self._failure_streak = 0
 
         # Load persistent cache if enabled
         if self._cache_file:
@@ -196,19 +215,42 @@ class StreamResolver:
 
         return results
 
-    def _extract_url(self, video_id: str) -> str | None:
-        """Extract stream URL using yt-dlp.
+    def _cookie_options(self) -> dict:
+        """Return the yt-dlp cookie option for one extraction.
 
-        This method uses yt-dlp to fetch video information and extract the direct
-        audio stream URL. It handles various failure modes gracefully.
-
-        Args:
-            video_id: YouTube video ID
-
-        Returns:
-            Stream URL if successful, None if extraction fails
+        Prefers the saved cookie file. Its text goes in as a fresh StringIO so
+        that yt-dlp, which writes cookies back to its cookie file on close,
+        writes into a throwaway buffer: the shared file stays as auto-auth
+        wrote it, and parallel extractions can't clobber each other.
         """
-        ydl_opts = {
+        text = None
+        if self._cookie_file is not None:
+            try:
+                text = self._cookie_file.read_text(encoding="utf-8")
+            except OSError as e:
+                logger.debug(f"Cookie file {self._cookie_file} not readable: {e}")
+
+        using_file = bool(text and text.strip())
+        if using_file != self._using_cookie_file and self._cookie_file is not None:
+            if using_file:
+                logger.info(f"yt-dlp uses cookies from {self._cookie_file}")
+            else:
+                logger.warning(
+                    f"Cookie file {self._cookie_file} missing or empty; "
+                    "yt-dlp reads Firefox's profile directly"
+                )
+        self._using_cookie_file = using_file
+
+        if using_file:
+            return {'cookiefile': io.StringIO(text)}
+        # Firefox cookies bypass YouTube's "not a bot" wall. yt-dlp's
+        # 'firefox' covers Developer Edition too: it takes the most recently
+        # used profile.
+        return {'cookiesfrombrowser': ('firefox',)}
+
+    def _ydl_opts(self) -> dict:
+        """Build yt-dlp options. Called per YoutubeDL instance (see _cookie_options)."""
+        return {
             # Prefer direct HTTPS URLs over HLS/DASH for proxy compatibility
             # Format priority: opus in webm (251) > m4a audio (140) > any audio
             # Explicitly exclude HLS/DASH manifests (m3u8_native, dash protocols)
@@ -227,17 +269,48 @@ class StreamResolver:
             'skip_download': True,
             # Prefer non-HLS formats for direct streaming
             'prefer_free_formats': True,
-            # Firefox cookies bypass YouTube's "not a bot" wall.
-            'cookiesfrombrowser': ('firefox',),
+            **self._cookie_options(),
             # Allow yt-dlp to fetch the EJS JS-challenge solver on demand;
             # without it YouTube returns only image storyboards.
             'remote_components': ['ejs:github'],
         }
 
+    def _record_outcome(self, ok: bool, error: str = "") -> None:
+        """Track the failure streak and fire on_repeated_failure once per streak."""
+        with self._lock:
+            if ok:
+                self._failure_streak = 0
+                return
+            self._failure_streak += 1
+            fire = self._failure_streak == FAILURE_STREAK_ALERT
+        if not fire:
+            return
+        logger.error(
+            f"YouTube stream resolution failed {FAILURE_STREAK_ALERT} times in a row; "
+            f"last error: {error}"
+        )
+        if self._on_repeated_failure is not None:
+            try:
+                self._on_repeated_failure(error)
+            except Exception as e:
+                logger.warning(f"on_repeated_failure callback failed: {e}")
+
+    def _extract_url(self, video_id: str) -> str | None:
+        """Extract stream URL using yt-dlp.
+
+        This method uses yt-dlp to fetch video information and extract the direct
+        audio stream URL. It handles various failure modes gracefully.
+
+        Args:
+            video_id: YouTube video ID
+
+        Returns:
+            Stream URL if successful, None if extraction fails
+        """
         video_url = f'https://youtube.com/watch?v={video_id}'
 
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(self._ydl_opts()) as ydl:
                 info = ydl.extract_info(video_url, download=False)
 
                 if not info:
@@ -251,6 +324,7 @@ class StreamResolver:
                     return None
 
                 logger.debug(f"Extracted URL for {video_id}")
+                self._record_outcome(True)
                 return url
 
         except yt_dlp.utils.DownloadError as e:
@@ -268,11 +342,13 @@ class StreamResolver:
             else:
                 # Unknown download error
                 logger.warning(f"Download error for {video_id}: {e}")
+                self._record_outcome(False, str(e))
 
             return None
 
         except yt_dlp.utils.ExtractorError as e:
             logger.warning(f"Extractor error for {video_id}: {e}")
+            self._record_outcome(False, str(e))
             return None
 
         except Exception as e:
@@ -283,17 +359,20 @@ class StreamResolver:
                 time.sleep(1)
 
                 try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    with yt_dlp.YoutubeDL(self._ydl_opts()) as ydl:
                         info = ydl.extract_info(video_url, download=False)
                         retry_url = info.get('url') if info else None
                         if isinstance(retry_url, str) and retry_url:
                             logger.debug(f"Retry successful for {video_id}")
+                            self._record_outcome(True)
                             return retry_url
                 except Exception as retry_error:
                     logger.warning(f"Retry failed for {video_id}: {retry_error}")
+                    self._record_outcome(False, str(retry_error))
                     return None
 
             logger.error(f"Unexpected error extracting {video_id}: {e}")
+            self._record_outcome(False, str(e))
             return None
 
     def _is_cache_valid(self, video_id: str) -> bool:

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import yt_dlp
 
-from xmpd.stream_resolver import CachedURL, StreamResolver
+from xmpd.stream_resolver import FAILURE_STREAK_ALERT, CachedURL, StreamResolver
 
 
 class TestCachedURL:
@@ -516,3 +516,98 @@ class TestStreamResolverBatchResolution:
 
         assert len(results) == 15
         assert mock_ydl.extract_info.call_count == 15
+
+
+class TestCookieSource:
+    """yt-dlp gets the saved cookie file when there is one, Firefox otherwise."""
+
+    COOKIES = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t2000000000\tSID\tabc\n"
+
+    def test_uses_cookie_file(self, tmp_path):
+        cookie_file = tmp_path / "yt_cookies.txt"
+        cookie_file.write_text(self.COOKIES)
+        opts = StreamResolver(cookie_file=cookie_file)._ydl_opts()
+        assert "cookiesfrombrowser" not in opts
+        assert opts["cookiefile"].getvalue() == self.COOKIES
+
+    def test_falls_back_to_firefox_when_file_missing(self, tmp_path):
+        opts = StreamResolver(cookie_file=tmp_path / "missing.txt")._ydl_opts()
+        assert opts["cookiesfrombrowser"] == ("firefox",)
+        assert "cookiefile" not in opts
+
+    def test_falls_back_to_firefox_when_file_empty(self, tmp_path):
+        cookie_file = tmp_path / "yt_cookies.txt"
+        cookie_file.write_text("")
+        opts = StreamResolver(cookie_file=cookie_file)._ydl_opts()
+        assert opts["cookiesfrombrowser"] == ("firefox",)
+
+    def test_no_cookie_file_configured(self):
+        assert StreamResolver()._ydl_opts()["cookiesfrombrowser"] == ("firefox",)
+
+    def test_fresh_buffer_per_extraction(self, tmp_path):
+        cookie_file = tmp_path / "yt_cookies.txt"
+        cookie_file.write_text(self.COOKIES)
+        resolver = StreamResolver(cookie_file=cookie_file)
+        assert resolver._ydl_opts()["cookiefile"] is not resolver._ydl_opts()["cookiefile"]
+
+    def test_yt_dlp_loads_cookies_and_leaves_file_alone(self, tmp_path):
+        """A real YoutubeDL loads the cookies and, on close, saves into the
+        throwaway buffer rather than the shared file."""
+        cookie_file = tmp_path / "yt_cookies.txt"
+        cookie_file.write_text(self.COOKIES)
+        resolver = StreamResolver(cookie_file=cookie_file)
+        with yt_dlp.YoutubeDL(resolver._ydl_opts()) as ydl:
+            assert {c.name: c.value for c in ydl.cookiejar} == {"SID": "abc"}
+            ydl.cookiejar.set_cookie(
+                next(iter(ydl.cookiejar)).__class__(
+                    0, "NEW", "x", None, False, ".youtube.com", True, True,
+                    "/", True, True, 2000000000, False, None, None, {},
+                )
+            )
+        assert cookie_file.read_text() == self.COOKIES
+
+
+class TestFailureStreak:
+    def _resolver_with_error(self, mock_ydl_class, message, callback):
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.side_effect = yt_dlp.utils.DownloadError(message)
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+        return StreamResolver(on_repeated_failure=callback), mock_ydl
+
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
+    def test_alerts_once_per_streak(self, mock_ydl_class):
+        callback = MagicMock()
+        resolver, mock_ydl = self._resolver_with_error(
+            mock_ydl_class, "ERROR: could not find firefox cookies database", callback
+        )
+        for i in range(FAILURE_STREAK_ALERT * 2):
+            assert resolver._extract_url(f"vid{i}") is None
+        callback.assert_called_once()
+        assert "could not find firefox cookies database" in callback.call_args.args[0]
+
+        # A success re-arms the alert.
+        mock_ydl.extract_info.side_effect = None
+        mock_ydl.extract_info.return_value = {"url": "https://example.com/a"}
+        assert resolver._extract_url("ok") == "https://example.com/a"
+        mock_ydl.extract_info.side_effect = yt_dlp.utils.DownloadError("ERROR: boom")
+        for i in range(FAILURE_STREAK_ALERT):
+            resolver._extract_url(f"again{i}")
+        assert callback.call_count == 2
+
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
+    def test_per_video_errors_do_not_count(self, mock_ydl_class):
+        callback = MagicMock()
+        resolver, _ = self._resolver_with_error(
+            mock_ydl_class, "ERROR: Private video", callback
+        )
+        for i in range(FAILURE_STREAK_ALERT * 2):
+            resolver._extract_url(f"vid{i}")
+        callback.assert_not_called()
+
+    @patch('xmpd.stream_resolver.yt_dlp.YoutubeDL')
+    def test_callback_error_is_contained(self, mock_ydl_class):
+        resolver, _ = self._resolver_with_error(
+            mock_ydl_class, "ERROR: boom", MagicMock(side_effect=RuntimeError("no notify"))
+        )
+        for i in range(FAILURE_STREAK_ALERT):
+            assert resolver._extract_url(f"vid{i}") is None
